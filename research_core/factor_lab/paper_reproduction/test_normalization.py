@@ -33,12 +33,6 @@ class PaperNormalizationTest(unittest.TestCase):
                     frequency="day",
                     sample_period="2020-01-01 to 2020-12-31",
                     universe="liquid common stocks",
-                    preprocessing_required_fields=["adjusted_open", "adjusted_close"],
-                    neutralization_required_fields=["industry", "market_cap"],
-                    evaluation_required_fields=["forward_return_20d", "vwap"],
-                    preprocessing_rules=["adjust prices", "sort by date and code"],
-                    evaluation_method="daily rank IC and long-short quintile spread",
-                    portfolio_construction_rules="long top quintile, short bottom quintile",
                     description="Daily close-to-open return.",
                     truth_sources=[
                         ExtractedTruthSource(
@@ -47,6 +41,14 @@ class PaperNormalizationTest(unittest.TestCase):
                             description="Table 3 reports rank IC and IR.",
                             source_location="Table 3",
                             evaluation_method="daily rank IC and long-short quintile spread",
+                            evaluation_family="ic_analysis",
+                            evaluation_spec={"return_horizon": 20, "ic_type": "spearman_rank_ic"},
+                            transform_spec={"steps": [{"name": "adjust_prices", "source": "fixture"}]},
+                            required_data={
+                                "formula": ["open", "close"],
+                                "evaluation": ["forward_return_20d", "vwap"],
+                                "controls": ["industry", "market_cap"],
+                            },
                             metrics={"rank_ic_mean": 0.042, "rank_ic_ir": 0.31},
                         ),
                     ],
@@ -58,8 +60,6 @@ class PaperNormalizationTest(unittest.TestCase):
                     frequency="day",
                     sample_period="2020-01-01 to 2020-12-31",
                     universe="liquid common stocks",
-                    preprocessing_rules=["sort by date and code"],
-                    evaluation_method="daily rank IC and long-short quintile spread",
                     description="Volume relative to its 5-day moving average.",
                     parameters={"window": 5},
                     truth_sources=[
@@ -69,6 +69,10 @@ class PaperNormalizationTest(unittest.TestCase):
                             description="Table 3 reports evaluation metrics.",
                             source_location="Table 3",
                             evaluation_method="daily rank IC and long-short quintile spread",
+                            evaluation_family="ic_analysis",
+                            evaluation_spec={"return_horizon": 20, "ic_type": "spearman_rank_ic"},
+                            transform_spec={"steps": [{"name": "sort_panel", "source": "fixture"}]},
+                            required_data={"formula": ["volume"], "evaluation": ["forward_return_20d"]},
                             metrics={"rank_ic_mean": 0.018, "rank_ic_ir": 0.12},
                         ),
                     ],
@@ -90,7 +94,7 @@ class PaperNormalizationTest(unittest.TestCase):
         self.assertEqual(first.frequency, "day")
         self.assertEqual(first.sample_scope, "2020-01-01 to 2020-12-31; universe: liquid common stocks")
         self.assertEqual(first.required_fields, ["open", "close"])
-        self.assertEqual(first.preprocessing, ["adjust prices", "sort by date and code"])
+        self.assertEqual(first.preprocessing, [])
         threshold_metrics = {threshold.metric for threshold in first.validation_targets}
         self.assertIn("formula_match_ratio", threshold_metrics)
         self.assertIn("field_mapping_match_ratio", threshold_metrics)
@@ -102,9 +106,9 @@ class PaperNormalizationTest(unittest.TestCase):
         self.assertEqual(first.metadata["truth_sources"][0]["truth_type"], "evaluation_results")
         self.assertEqual(first.metadata["selected_truth_sources"][0]["truth_type"], "evaluation_results")
         self.assertEqual(first.metadata["data_requirements"]["formula_required_fields"], ["open", "close"])
-        self.assertEqual(first.metadata["data_requirements"]["preprocessing_required_fields"], ["adjusted_open", "adjusted_close"])
-        self.assertEqual(first.metadata["data_requirements"]["neutralization_required_fields"], ["industry", "market_cap"])
-        self.assertEqual(first.metadata["data_requirements"]["evaluation_required_fields"], ["forward_return_20d", "vwap"])
+        self.assertEqual(first.metadata["evaluation_cases"][0]["evaluation_family"], "ic_analysis")
+        self.assertEqual(first.metadata["evaluation_cases"][0]["evaluation_spec"]["return_horizon"], 20)
+        self.assertEqual(first.metadata["evaluation_cases"][0]["required_data"]["evaluation"], ["forward_return_20d", "vwap"])
         self.assertEqual(first.metadata["truth_source_summary"]["available_truth_count"], 1)
         self.assertIn("paper-evaluation-truth", first.tags)
 

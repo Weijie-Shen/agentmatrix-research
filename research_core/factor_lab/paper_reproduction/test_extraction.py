@@ -34,8 +34,6 @@ class PaperExtractionTest(unittest.TestCase):
                     frequency="day",
                     universe="liquid common stocks",
                     sample_period="2020-01-01 to 2020-12-31",
-                    preprocessing_rules=["adjust prices", "sort by date and code"],
-                    evaluation_method="daily rank IC and long-short quintile spread",
                     description="Daily close-to-open return.",
                     truth_sources=[
                         ExtractedTruthSource(
@@ -47,6 +45,10 @@ class PaperExtractionTest(unittest.TestCase):
                             universe="liquid common stocks",
                             frequency="day",
                             evaluation_method="daily rank IC and long-short quintile spread",
+                            evaluation_family="ic_analysis",
+                            evaluation_spec={"return_horizon": 1, "ic_type": "spearman_rank_ic"},
+                            transform_spec={"steps": [{"name": "adjust_prices", "source": "fixture"}]},
+                            required_data={"formula": ["open", "close"], "evaluation": ["forward_return_1d"]},
                             metrics={"rank_ic_mean": 0.042, "rank_ic_ir": 0.31},
                         ),
                     ],
@@ -58,8 +60,6 @@ class PaperExtractionTest(unittest.TestCase):
                     frequency="day",
                     universe="liquid common stocks",
                     sample_period="2020-01-01 to 2020-12-31",
-                    preprocessing_rules=["sort by date and code"],
-                    evaluation_method="daily rank IC and long-short quintile spread",
                     description="Volume relative to its 5-day moving average.",
                     parameters={"window": 5},
                     truth_sources=[
@@ -72,6 +72,10 @@ class PaperExtractionTest(unittest.TestCase):
                             universe="liquid common stocks",
                             frequency="day",
                             evaluation_method="daily rank IC and long-short quintile spread",
+                            evaluation_family="ic_analysis",
+                            evaluation_spec={"return_horizon": 1, "ic_type": "spearman_rank_ic"},
+                            transform_spec={"steps": [{"name": "sort_panel", "source": "fixture"}]},
+                            required_data={"formula": ["volume"], "evaluation": ["forward_return_1d"]},
                             metrics={"rank_ic_mean": 0.018, "rank_ic_ir": 0.12},
                         ),
                     ],
@@ -292,19 +296,22 @@ class PaperExtractionTest(unittest.TestCase):
             ],
         )
 
-    def test_factor_can_separate_formula_and_evaluation_required_fields(self) -> None:
+    def test_factor_keeps_formula_fields_separate_from_evaluation_case_required_data(self) -> None:
         extraction = self._valid_extraction()
         factor = extraction.target_factors[0]
         factor.required_fields = ["open", "volume"]
-        factor.evaluation_required_fields = ["forward_return_20d", "industry", "market_cap", "vwap"]
-        factor.neutralization_required_fields = ["industry", "market_cap"]
+        factor.truth_sources[0].required_data = {
+            "formula": ["open", "volume"],
+            "evaluation": ["forward_return_20d", "vwap"],
+            "controls": ["industry", "market_cap"],
+        }
 
         validation = validate_paper_extraction(extraction)
 
         self.assertTrue(validation.valid, validation.errors)
         self.assertEqual(factor.required_fields, ["open", "volume"])
-        self.assertEqual(factor.evaluation_required_fields, ["forward_return_20d", "industry", "market_cap", "vwap"])
-        self.assertEqual(factor.neutralization_required_fields, ["industry", "market_cap"])
+        self.assertEqual(factor.truth_sources[0].required_data["evaluation"], ["forward_return_20d", "vwap"])
+        self.assertEqual(factor.truth_sources[0].required_data["controls"], ["industry", "market_cap"])
 
     def test_broad_truth_source_location_warns_without_invalidating_extraction(self) -> None:
         extraction = self._valid_extraction()

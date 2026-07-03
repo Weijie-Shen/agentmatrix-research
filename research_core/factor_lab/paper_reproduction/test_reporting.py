@@ -32,13 +32,15 @@ class PaperReproductionReportingTest(unittest.TestCase):
                     formula="close / open - 1",
                     required_fields=["open", "close"],
                     frequency="day",
-                    evaluation_method="daily rank IC using 1-day forward returns",
                     truth_sources=[
                         ExtractedTruthSource(
                             truth_id="table_3_eval",
                             truth_type="evaluation_results",
                             source_location="Table 3",
                             evaluation_method="daily rank IC using 1-day forward returns",
+                            evaluation_family="ic_analysis",
+                            evaluation_spec={"return_horizon": 1, "ic_type": "spearman_rank_ic"},
+                            required_data={"formula": ["open", "close"], "evaluation": ["forward_return_1d"]},
                             metrics={"rank_ic_mean": 0.04},
                         )
                     ],
@@ -112,6 +114,7 @@ class PaperReproductionReportingTest(unittest.TestCase):
         self.assertEqual(report["summary"]["factor_count"], 1)
         self.assertEqual(report["factors"][0]["truth_results"][0]["status"], "acceptable")
         self.assertEqual(report["factors"][0]["data_requirements"]["evaluation_required_fields"], ["forward_return_1d"])
+        self.assertEqual(report["factors"][0]["evaluation_cases"][0]["evaluation_family"], "ic_analysis")
         self.assertEqual(report["factors"][0]["known_limitations"], ["Paper reports aggregate evaluation metrics only."])
         self.assertIn("input_panel", report["artifacts"])
 

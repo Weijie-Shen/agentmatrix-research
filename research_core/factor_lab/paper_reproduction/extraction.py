@@ -39,13 +39,6 @@ class ExtractedFactor:
     description: str = ""
     sample_period: str = ""
     universe: str = ""
-    preprocessing_required_fields: list[str] = field(default_factory=list)
-    neutralization_required_fields: list[str] = field(default_factory=list)
-    evaluation_required_fields: list[str] = field(default_factory=list)
-    preprocessing_rules: list[str] = field(default_factory=list)
-    neutralization_rules: list[str] = field(default_factory=list)
-    evaluation_method: str = ""
-    portfolio_construction_rules: str = ""
     parameters: dict[str, Any] = field(default_factory=dict)
     truth_sources: list[ExtractedTruthSource] = field(default_factory=list)
     selected_truth_source_ids: list[str] = field(default_factory=list)
@@ -171,6 +164,19 @@ def summarize_factor_truth_sources(factor: ExtractedFactor) -> dict[str, object]
 def _factor_from_payload(payload: dict[str, Any]) -> ExtractedFactor:
     truth_payloads = payload.pop("truth_sources", [])
     truth_sources = [ExtractedTruthSource(**item) for item in truth_payloads]
+    # Backward-compatibility for older extraction artifacts produced before
+    # evaluation-case-level transform specs. These fields are no longer factor
+    # properties; evaluation/preprocessing/neutralization belong on truth sources.
+    for legacy_key in (
+        "preprocessing_required_fields",
+        "neutralization_required_fields",
+        "evaluation_required_fields",
+        "preprocessing_rules",
+        "neutralization_rules",
+        "evaluation_method",
+        "portfolio_construction_rules",
+    ):
+        payload.pop(legacy_key, None)
     return ExtractedFactor(truth_sources=truth_sources, **payload)
 
 
@@ -270,7 +276,7 @@ def _validate_truth_source(
     elif not _has_recognized_evaluation_metric(truth_source.metrics):
         needs_human_review = True
         warnings.append(f"{prefix}.metrics has no recognized evaluation metric names")
-    if not (truth_source.evaluation_method.strip() or factor.evaluation_method.strip()):
+    if not truth_source.evaluation_method.strip():
         errors.append(f"{prefix}.evaluation_method is required for evaluation_results truth")
     return needs_human_review
 
