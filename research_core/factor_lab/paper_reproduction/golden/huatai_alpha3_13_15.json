@@ -1,0 +1,692 @@
+{
+  "schema_version": "paper_reproduction_golden_v0.2",
+  "artifact_type": "golden_reproduction_method",
+  "paper": {
+    "paper_id": "huatai_mass_technical_factors_20190521",
+    "title": "华泰单因子测试之海量技术因子",
+    "source": "华泰证券研究报告 / 华泰多因子系列之十一",
+    "date": "2019-05-21",
+    "authors": [
+      "林晓明",
+      "陈烨",
+      "李子钰",
+      "何康"
+    ],
+    "language": "zh-CN"
+  },
+  "scope": {
+    "selected_factors": [
+      "Alpha3",
+      "Alpha13",
+      "Alpha15"
+    ],
+    "purpose": "Golden extraction benchmark for paper reproduction method, not a final numeric reproduction proof.",
+    "notes": [
+      "Use this artifact to compare a fresh agent's extracted reproduction method against manually curated expectations."
+    ]
+  },
+  "global_method": {
+    "sample_period": "2010/1/4-2019/4/30",
+    "universe": "All A-shares; exclude ST/PT stocks and stocks suspended on the next trading day.",
+    "frequency": "day",
+    "formula_evidence": [
+      {
+        "source_location": "Table 1",
+        "description": "Variable/function/operator definitions."
+      },
+      {
+        "source_location": "Table 2",
+        "description": "Formulas for Alpha1-Alpha50."
+      },
+      {
+        "source_location": "Table 50",
+        "description": "Restated selected effective-factor formulas."
+      }
+    ],
+    "known_limitations": [
+      "Aggregate evaluation metrics are available; daily factor values/per-date IC/NAV series are not machine readable."
+    ]
+  },
+  "transform_definitions": {
+    "raw_or_unprocessed": {
+      "description": "No explicit factor neutralization. Huatai labels this as 因子不中性化; winsorization/standardization may still be inferred from the global method and should be reviewed before numeric reproduction.",
+      "steps": [
+        {
+          "name": "winsorization",
+          "method": "median_mad",
+          "threshold": 5,
+          "source": "inferred_from_global_method",
+          "source_location": "Page 11 b"
+        },
+        {
+          "name": "neutralization",
+          "method": "none",
+          "source": "explicit",
+          "source_location": "table treatment label 因子不中性化"
+        },
+        {
+          "name": "standardization",
+          "method": "cross_section_zscore",
+          "source": "inferred_from_global_method",
+          "source_location": "Page 11 d"
+        },
+        {
+          "name": "missing_value_policy",
+          "method": "do_not_fill",
+          "source": "explicit",
+          "source_location": "Page 11 e"
+        }
+      ]
+    },
+    "industry_market_cap_neutralized": {
+      "description": "Median-MAD winsorization, cross-sectional regression residualization against industry dummies and log market-cap, then cross-sectional z-score standardization.",
+      "steps": [
+        {
+          "name": "winsorization",
+          "method": "median_mad",
+          "threshold": 5,
+          "source": "explicit",
+          "source_location": "Page 11 b"
+        },
+        {
+          "name": "neutralization",
+          "method": "cross_sectional_regression_residual",
+          "controls": [
+            "industry",
+            "log_market_cap"
+          ],
+          "source": "explicit",
+          "source_location": "Page 11 c; Table 52 selected rows"
+        },
+        {
+          "name": "standardization",
+          "method": "cross_section_zscore",
+          "source": "explicit",
+          "source_location": "Page 11 d"
+        },
+        {
+          "name": "missing_value_policy",
+          "method": "do_not_fill",
+          "source": "explicit",
+          "source_location": "Page 11 e"
+        }
+      ]
+    },
+    "ordered_orthogonalized": {
+      "description": "Sequential orthogonalization of selected Alpha factors according to Table 9 ranking before IC/regression evaluation.",
+      "steps": [
+        {
+          "name": "winsorization",
+          "method": "median_mad",
+          "threshold": 5,
+          "source": "inferred_from_global_method"
+        },
+        {
+          "name": "neutralization",
+          "method": "sequential_regression_residual",
+          "controls": [
+            "industry",
+            "log_market_cap",
+            "previous_selected_alpha_factors"
+          ],
+          "source": "explicit",
+          "source_location": "Page 33 before Table 52"
+        },
+        {
+          "name": "standardization",
+          "method": "cross_section_zscore",
+          "source": "inferred_from_global_method"
+        }
+      ]
+    }
+  },
+  "evaluation_method_definitions": {
+    "ic_regression": {
+      "description": "Daily cross-sectional regression and Rank IC analysis. Horizons 5, 10, 20 trading days are studied; this golden file uses T=20 cases.",
+      "metrics": [
+        "t_abs_mean",
+        "t_abs_gt_2_ratio",
+        "t_mean",
+        "factor_return_mean",
+        "rank_ic_mean",
+        "rank_ic_std",
+        "ic_ir",
+        "ic_positive_ratio"
+      ],
+      "default_spec": {
+        "return_horizon": 20,
+        "return_horizon_unit": "trading_day",
+        "ic_type": "spearman_rank_ic"
+      }
+    },
+    "ic_decay": {
+      "description": "Rank IC decay/half-life analysis over lagged forward-return windows for selected factors.",
+      "metrics": [
+        "half_life_exp_fit_days",
+        "half_life_observed_days"
+      ],
+      "default_spec": {
+        "base_return_horizon": 20,
+        "lag_range": [
+          0,
+          240
+        ],
+        "ic_type": "spearman_rank_ic"
+      }
+    },
+    "layered_portfolio_backtest": {
+      "description": "20 equal-count layer backtest and selected TOP layer portfolio metrics.",
+      "metrics": [
+        "top_layer_annual_return",
+        "top_layer_sharpe",
+        "top_layer_max_drawdown",
+        "top_layer_excess_return",
+        "top_layer_information_ratio",
+        "annual_two_way_turnover"
+      ],
+      "default_spec": {
+        "n_groups": 20,
+        "sort_order": "descending",
+        "top_group": 1,
+        "rebalance_horizon": 20,
+        "one_way_fee": 0.0015,
+        "weighting": "equal_weight"
+      }
+    }
+  },
+  "comparison_policy": {
+    "strict_fields": [
+      "factor_name",
+      "formula_definition.formula",
+      "formula_definition.formula_required_fields",
+      "formula_definition.parameters",
+      "evaluation_cases.paper_truth.metrics"
+    ],
+    "semantic_fields": [
+      "universe",
+      "sample_period",
+      "evaluation_cases.evaluation_spec",
+      "evaluation_cases.transform_spec_id",
+      "evaluation_cases.required_data"
+    ],
+    "truth_source_rules": [
+      "Each evaluation case should correspond to one source table/figure and one evaluation setting.",
+      "Do not combine Table 52 IC/regression, Table 14 decay, and TOP portfolio metrics into one case."
+    ]
+  },
+  "factors": {
+    "Alpha3": {
+      "factor_name": "Alpha3",
+      "description": "Selected effective Huatai 101 technical price-volume factor; logic selects price-volume divergence names.",
+      "formula_definition": {
+        "formula": "(-1 * correlation(rank(OPEN), rank(VOLUME), 10))",
+        "formula_source_locations": [
+          "Table 2",
+          "Table 50"
+        ],
+        "formula_required_fields": [
+          "open",
+          "volume"
+        ],
+        "parameters": {
+          "correlation_window": 10
+        },
+        "frequency": "day"
+      },
+      "evaluation_cases": [
+        {
+          "case_id": "alpha3_table52_industry_size_t20_ic_regression",
+          "truth_type": "evaluation_results",
+          "source_location": "Table 52",
+          "evaluation_family": "ic_regression",
+          "evaluation_spec": {
+            "return_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "ic_type": "spearman_rank_ic",
+            "regression_controls": [
+              "industry",
+              "log_market_cap"
+            ],
+            "regression_type": "wls",
+            "regression_weight": "sqrt_free_float_market_cap"
+          },
+          "transform_spec_id": "industry_market_cap_neutralized",
+          "required_data": {
+            "formula": [
+              "open",
+              "volume"
+            ],
+            "evaluation": [
+              "forward_return_20d"
+            ],
+            "controls": [
+              "industry",
+              "market_cap_or_log_market_cap"
+            ],
+            "filters": [
+              "st_or_pt_status",
+              "next_day_suspension_status"
+            ]
+          },
+          "paper_truth": {
+            "metrics": {
+              "t_abs_mean": 2.65,
+              "t_abs_gt_2_ratio": 0.5703,
+              "t_mean": 2.31,
+              "factor_return_mean": 0.0045,
+              "rank_ic_mean": 0.0629,
+              "rank_ic_std": 0.0473,
+              "ic_ir": 1.33,
+              "ic_positive_ratio": 0.9118
+            }
+          }
+        },
+        {
+          "case_id": "alpha3_table14_unneutralized_t20_ic_decay",
+          "truth_type": "evaluation_results",
+          "source_location": "Table 14",
+          "evaluation_family": "ic_decay",
+          "evaluation_spec": {
+            "base_return_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "lag_range": [
+              0,
+              240
+            ],
+            "ic_type": "spearman_rank_ic"
+          },
+          "transform_spec_id": "raw_or_unprocessed",
+          "required_data": {
+            "formula": [
+              "open",
+              "volume"
+            ],
+            "evaluation": [
+              "forward_return_20d"
+            ],
+            "filters": [
+              "st_or_pt_status",
+              "next_day_suspension_status"
+            ]
+          },
+          "paper_truth": {
+            "metrics": {
+              "half_life_exp_fit_days": 24.3,
+              "half_life_observed_days": 14
+            }
+          }
+        },
+        {
+          "case_id": "alpha3_table36_industry_size_t20_top_layer",
+          "truth_type": "evaluation_results",
+          "source_location": "Table36, row: one-way fee 0.15%, T=20",
+          "evaluation_family": "layered_portfolio_backtest",
+          "evaluation_spec": {
+            "n_groups": 20,
+            "sort_order": "descending",
+            "top_group": 1,
+            "rebalance_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "execution_price": "next_day_vwap",
+            "one_way_fee": 0.0015,
+            "weighting": "equal_weight",
+            "benchmark": "CSI500",
+            "selected_stock_count_j": 400
+          },
+          "transform_spec_id": "industry_market_cap_neutralized",
+          "required_data": {
+            "formula": [
+              "open",
+              "volume"
+            ],
+            "evaluation": [
+              "vwap_or_amount_and_volume_for_portfolio_execution",
+              "benchmark_csi500_returns"
+            ],
+            "controls": [
+              "industry",
+              "market_cap_or_log_market_cap"
+            ],
+            "filters": [
+              "st_or_pt_status",
+              "next_day_suspension_status"
+            ]
+          },
+          "paper_truth": {
+            "metrics": {
+              "top_layer_annual_return": 0.0847,
+              "top_layer_sharpe": 0.32,
+              "top_layer_max_drawdown": 0.6475,
+              "top_layer_excess_return": 0.068,
+              "top_layer_information_ratio": 0.69,
+              "top_layer_excess_max_drawdown": 0.2992,
+              "top_layer_excess_calmar": 0.23,
+              "annual_two_way_turnover": 20.22,
+              "optimal_j": 400
+            }
+          }
+        }
+      ],
+      "known_limitations": [
+        "Paper does not provide machine-readable daily factor values, per-date IC series, or digitized portfolio curves."
+      ]
+    },
+    "Alpha13": {
+      "factor_name": "Alpha13",
+      "description": "Selected effective Huatai 101 technical price-volume factor; logic selects price-volume divergence names.",
+      "formula_definition": {
+        "formula": "(-1 * rank(covariance(rank(CLOSE), rank(VOLUME), 5)))",
+        "formula_source_locations": [
+          "Table 2",
+          "Table 50"
+        ],
+        "formula_required_fields": [
+          "close",
+          "volume"
+        ],
+        "parameters": {
+          "covariance_window": 5
+        },
+        "frequency": "day"
+      },
+      "evaluation_cases": [
+        {
+          "case_id": "alpha13_table52_industry_size_t20_ic_regression",
+          "truth_type": "evaluation_results",
+          "source_location": "Table 52",
+          "evaluation_family": "ic_regression",
+          "evaluation_spec": {
+            "return_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "ic_type": "spearman_rank_ic",
+            "regression_controls": [
+              "industry",
+              "log_market_cap"
+            ],
+            "regression_type": "wls",
+            "regression_weight": "sqrt_free_float_market_cap"
+          },
+          "transform_spec_id": "industry_market_cap_neutralized",
+          "required_data": {
+            "formula": [
+              "close",
+              "volume"
+            ],
+            "evaluation": [
+              "forward_return_20d"
+            ],
+            "controls": [
+              "industry",
+              "market_cap_or_log_market_cap"
+            ],
+            "filters": [
+              "st_or_pt_status",
+              "next_day_suspension_status"
+            ]
+          },
+          "paper_truth": {
+            "metrics": {
+              "t_abs_mean": 2.7,
+              "t_abs_gt_2_ratio": 0.5877,
+              "t_mean": 2.37,
+              "factor_return_mean": 0.0046,
+              "rank_ic_mean": 0.0639,
+              "rank_ic_std": 0.0472,
+              "ic_ir": 1.35,
+              "ic_positive_ratio": 0.9132
+            }
+          }
+        },
+        {
+          "case_id": "alpha13_table14_unneutralized_t20_ic_decay",
+          "truth_type": "evaluation_results",
+          "source_location": "Table 14",
+          "evaluation_family": "ic_decay",
+          "evaluation_spec": {
+            "base_return_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "lag_range": [
+              0,
+              240
+            ],
+            "ic_type": "spearman_rank_ic"
+          },
+          "transform_spec_id": "raw_or_unprocessed",
+          "required_data": {
+            "formula": [
+              "close",
+              "volume"
+            ],
+            "evaluation": [
+              "forward_return_20d"
+            ],
+            "filters": [
+              "st_or_pt_status",
+              "next_day_suspension_status"
+            ]
+          },
+          "paper_truth": {
+            "metrics": {
+              "half_life_exp_fit_days": 21.0,
+              "half_life_observed_days": 14
+            }
+          }
+        },
+        {
+          "case_id": "alpha13_table16_industry_size_t20_top_layer",
+          "truth_type": "evaluation_results",
+          "source_location": "Table16, row: one-way fee 0.15%, T=20",
+          "evaluation_family": "layered_portfolio_backtest",
+          "evaluation_spec": {
+            "n_groups": 20,
+            "sort_order": "descending",
+            "top_group": 1,
+            "rebalance_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "execution_price": "next_day_vwap",
+            "one_way_fee": 0.0015,
+            "weighting": "equal_weight",
+            "benchmark": "CSI500",
+            "selected_stock_count_j": 80
+          },
+          "transform_spec_id": "industry_market_cap_neutralized",
+          "required_data": {
+            "formula": [
+              "close",
+              "volume"
+            ],
+            "evaluation": [
+              "vwap_or_amount_and_volume_for_portfolio_execution",
+              "benchmark_csi500_returns"
+            ],
+            "controls": [
+              "industry",
+              "market_cap_or_log_market_cap"
+            ],
+            "filters": [
+              "st_or_pt_status",
+              "next_day_suspension_status"
+            ]
+          },
+          "paper_truth": {
+            "metrics": {
+              "top_layer_annual_return": 0.1079,
+              "top_layer_sharpe": 0.39,
+              "top_layer_max_drawdown": 0.6341,
+              "top_layer_excess_return": 0.0865,
+              "top_layer_information_ratio": 1.24,
+              "top_layer_excess_max_drawdown": 0.2252,
+              "top_layer_excess_calmar": 0.4,
+              "annual_two_way_turnover": 19.69,
+              "optimal_j": 80
+            }
+          }
+        }
+      ],
+      "known_limitations": [
+        "Paper does not provide machine-readable daily factor values, per-date IC series, or digitized portfolio curves."
+      ]
+    },
+    "Alpha15": {
+      "factor_name": "Alpha15",
+      "description": "Selected effective Huatai 101 technical price-volume factor; logic selects price-volume divergence names.",
+      "formula_definition": {
+        "formula": "(-1 * sum(rank(correlation(rank(HIGH), rank(VOLUME), 3)), 3))",
+        "formula_source_locations": [
+          "Table 2",
+          "Table 50"
+        ],
+        "formula_required_fields": [
+          "high",
+          "volume"
+        ],
+        "parameters": {
+          "correlation_window": 3,
+          "sum_window": 3
+        },
+        "frequency": "day"
+      },
+      "evaluation_cases": [
+        {
+          "case_id": "alpha15_table52_industry_size_t20_ic_regression",
+          "truth_type": "evaluation_results",
+          "source_location": "Table 52",
+          "evaluation_family": "ic_regression",
+          "evaluation_spec": {
+            "return_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "ic_type": "spearman_rank_ic",
+            "regression_controls": [
+              "industry",
+              "log_market_cap"
+            ],
+            "regression_type": "wls",
+            "regression_weight": "sqrt_free_float_market_cap"
+          },
+          "transform_spec_id": "industry_market_cap_neutralized",
+          "required_data": {
+            "formula": [
+              "high",
+              "volume"
+            ],
+            "evaluation": [
+              "forward_return_20d"
+            ],
+            "controls": [
+              "industry",
+              "market_cap_or_log_market_cap"
+            ],
+            "filters": [
+              "st_or_pt_status",
+              "next_day_suspension_status"
+            ]
+          },
+          "paper_truth": {
+            "metrics": {
+              "t_abs_mean": 2.02,
+              "t_abs_gt_2_ratio": 0.4332,
+              "t_mean": 1.62,
+              "factor_return_mean": 0.0031,
+              "rank_ic_mean": 0.0446,
+              "rank_ic_std": 0.0393,
+              "ic_ir": 1.14,
+              "ic_positive_ratio": 0.8816
+            }
+          }
+        },
+        {
+          "case_id": "alpha15_table14_unneutralized_t20_ic_decay",
+          "truth_type": "evaluation_results",
+          "source_location": "Table 14",
+          "evaluation_family": "ic_decay",
+          "evaluation_spec": {
+            "base_return_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "lag_range": [
+              0,
+              240
+            ],
+            "ic_type": "spearman_rank_ic"
+          },
+          "transform_spec_id": "raw_or_unprocessed",
+          "required_data": {
+            "formula": [
+              "high",
+              "volume"
+            ],
+            "evaluation": [
+              "forward_return_20d"
+            ],
+            "filters": [
+              "st_or_pt_status",
+              "next_day_suspension_status"
+            ]
+          },
+          "paper_truth": {
+            "metrics": {
+              "half_life_exp_fit_days": 35.8,
+              "half_life_observed_days": 15
+            }
+          }
+        },
+        {
+          "case_id": "alpha15_table41_industry_size_t20_top_layer",
+          "truth_type": "evaluation_results",
+          "source_location": "Table41, row: one-way fee 0.15%, T=20",
+          "evaluation_family": "layered_portfolio_backtest",
+          "evaluation_spec": {
+            "n_groups": 20,
+            "sort_order": "descending",
+            "top_group": 1,
+            "rebalance_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "execution_price": "next_day_vwap",
+            "one_way_fee": 0.0015,
+            "weighting": "equal_weight",
+            "benchmark": "CSI500",
+            "selected_stock_count_j": 80
+          },
+          "transform_spec_id": "industry_market_cap_neutralized",
+          "required_data": {
+            "formula": [
+              "high",
+              "volume"
+            ],
+            "evaluation": [
+              "vwap_or_amount_and_volume_for_portfolio_execution",
+              "benchmark_csi500_returns"
+            ],
+            "controls": [
+              "industry",
+              "market_cap_or_log_market_cap"
+            ],
+            "filters": [
+              "st_or_pt_status",
+              "next_day_suspension_status"
+            ]
+          },
+          "paper_truth": {
+            "metrics": {
+              "top_layer_annual_return": 0.1048,
+              "top_layer_sharpe": 0.4,
+              "top_layer_max_drawdown": 0.599,
+              "top_layer_excess_return": 0.0811,
+              "top_layer_information_ratio": 1.35,
+              "top_layer_excess_max_drawdown": 0.1806,
+              "top_layer_excess_calmar": 0.46,
+              "annual_two_way_turnover": 20.45,
+              "optimal_j": 80
+            }
+          }
+        }
+      ],
+      "known_limitations": [
+        "Paper does not provide machine-readable daily factor values, per-date IC series, or digitized portfolio curves."
+      ]
+    }
+  },
+  "manual_review_notes": [
+    "Review portfolio rows from Tables 16, 36, and 41 before treating them as stable benchmark data.",
+    "This v0.2 schema intentionally attaches transform/preprocessing/neutralization to evaluation cases, not factor definitions."
+  ]
+}

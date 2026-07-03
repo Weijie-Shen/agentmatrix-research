@@ -16,6 +16,12 @@ from research_core.factor_lab.paper_reproduction.extraction import (
     summarize_factor_truth_sources,
     validate_paper_extraction,
 )
+from research_core.factor_lab.paper_reproduction.evaluators import (
+    apply_transform_spec,
+    compute_cross_sectional_regression,
+    compute_ic_analysis,
+    evaluate_paper_case,
+)
 from research_core.factor_lab.paper_reproduction.implementation import (
     FactorImplementationPlan,
     FamilyImplementationManifest,
@@ -68,10 +74,14 @@ __all__ = [
     "PaperReproductionStageState",
     "PaperTruthMatchResult",
     "QuantApiConfig",
+    "apply_transform_spec",
     "build_implementation_manifest",
     "build_paper_evaluation_plan",
     "build_paper_reproduction_report",
     "compare_evaluation_metrics_to_paper_truth",
+    "compute_cross_sectional_regression",
+    "compute_ic_analysis",
+    "evaluate_paper_case",
     "export_implementation_manifest",
     "export_pipeline_state",
     "export_paper_extraction",

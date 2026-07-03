@@ -338,5 +338,36 @@ class PaperExtractionTest(unittest.TestCase):
         self.assertEqual(validation.diagnostics["ambiguities_by_category"]["field_mapping"], [])
 
 
+    def test_truth_source_carries_evaluation_case_specs(self) -> None:
+        extraction = self._valid_extraction()
+        truth = extraction.target_factors[0].truth_sources[0]
+        truth.evaluation_family = "ic_analysis"
+        truth.evaluation_spec = {
+            "return_horizon": 20,
+            "return_horizon_unit": "trading_day",
+            "ic_type": "spearman_rank_ic",
+        }
+        truth.transform_spec = {
+            "steps": [
+                {"name": "median_mad_winsorization", "source": "explicit"},
+                {"name": "industry_market_cap_neutralization", "source": "explicit"},
+                {"name": "zscore_standardization", "source": "explicit"},
+            ]
+        }
+        truth.required_data = {
+            "formula": ["open", "close"],
+            "evaluation": ["forward_return_20d"],
+            "controls": ["industry", "market_cap"],
+        }
+
+        validation = validate_paper_extraction(extraction)
+
+        self.assertTrue(validation.valid, validation.errors)
+        self.assertEqual(truth.evaluation_family, "ic_analysis")
+        self.assertEqual(truth.evaluation_spec["return_horizon"], 20)
+        self.assertEqual(truth.transform_spec["steps"][1]["name"], "industry_market_cap_neutralization")
+        self.assertEqual(truth.required_data["controls"], ["industry", "market_cap"])
+
+
 if __name__ == "__main__":
     unittest.main()

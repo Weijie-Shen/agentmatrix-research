@@ -16,6 +16,7 @@ class PaperFactorEvaluationPlan:
     evaluation_features: list[str] = field(default_factory=list)
     forward_return_periods: list[int] = field(default_factory=list)
     truth_source_ids: list[str] = field(default_factory=list)
+    evaluation_cases: list[dict[str, Any]] = field(default_factory=list)
     blocked_reasons: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -80,8 +81,40 @@ def _build_factor_evaluation_plan(spec: FactorResearchSpec) -> PaperFactorEvalua
         evaluation_features=_evaluation_features(evaluation_method, metrics),
         forward_return_periods=_forward_return_periods(evaluation_method),
         truth_source_ids=[truth_id for truth_id in truth_ids if truth_id],
+        evaluation_cases=[_evaluation_case_from_truth_source(source) for source in evaluation_truth_sources],
         blocked_reasons=blocked_reasons,
     )
+
+
+def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "truth_id": str(source.get("truth_id", "")),
+        "evaluation_family": str(source.get("evaluation_family", "") or _infer_evaluation_family(source)),
+        "evaluation_method": str(source.get("evaluation_method", "")),
+        "evaluation_spec": dict(source.get("evaluation_spec", {}) if isinstance(source.get("evaluation_spec", {}), dict) else {}),
+        "transform_spec": dict(source.get("transform_spec", {}) if isinstance(source.get("transform_spec", {}), dict) else {}),
+        "required_data": dict(source.get("required_data", {}) if isinstance(source.get("required_data", {}), dict) else {}),
+        "metrics": dict(source.get("metrics", {}) if isinstance(source.get("metrics", {}), dict) else {}),
+        "source_location": str(source.get("source_location", "")),
+    }
+
+
+def _infer_evaluation_family(source: dict[str, Any]) -> str:
+    text = " ".join(
+        [
+            str(source.get("evaluation_method", "")),
+            " ".join(str(metric) for metric in (source.get("metrics", {}) or {})),
+        ]
+    ).lower().replace("-", "_")
+    if "half_life" in text or "decay" in text:
+        return "ic_decay"
+    if "top_layer" in text or "long_short" in text or "portfolio" in text or "layer" in text:
+        return "layered_portfolio_backtest"
+    if "t_abs" in text or "factor_return" in text or "regression" in text:
+        return "regression_t_test"
+    if "rank_ic" in text or "ic" in text:
+        return "ic_analysis"
+    return "custom"
 
 
 def _evaluation_features(evaluation_method: str, metrics: list[str]) -> list[str]:

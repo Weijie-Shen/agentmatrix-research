@@ -22,6 +22,10 @@ class ExtractedTruthSource:
     universe: str = ""
     frequency: str = ""
     evaluation_method: str = ""
+    evaluation_family: str = ""
+    evaluation_spec: dict[str, Any] = field(default_factory=dict)
+    transform_spec: dict[str, Any] = field(default_factory=dict)
+    required_data: dict[str, list[str]] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
@@ -272,7 +276,7 @@ def _validate_truth_source(
 
 
 def _has_recognized_evaluation_metric(metrics: dict[str, Any]) -> bool:
-    recognized_tokens = ("rank_ic", "long_short", "t_stat", "tstat", "ic", "ir", "return", "sharpe")
+    recognized_tokens = ("rank_ic", "long_short", "t_stat", "tstat", "ic", "ir", "return", "sharpe", "half_life")
     return any(_contains_token(str(metric_name).lower(), token) for metric_name in metrics for token in recognized_tokens)
 
 
