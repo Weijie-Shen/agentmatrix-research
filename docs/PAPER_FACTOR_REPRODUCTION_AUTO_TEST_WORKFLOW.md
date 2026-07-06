@@ -55,12 +55,47 @@ test -d research_core/factor_lab/paper_reproduction && echo paper_reproduction p
 
 In a new Hermes chat, use `/tmp/agentmatrix-paper-test` as the working directory and provide the paper and selected factors.
 
+Before starting the chat, create a harness packet that bundles the exact
+`paper-factor-reproduction` skill with the fresh-agent prompt:
+
+```python
+from research_core.factor_lab.paper_reproduction.agent_harness import (
+    PaperReproductionAgentHarnessRequest,
+    prepare_agent_harness_bundle,
+)
+
+bundle = prepare_agent_harness_bundle(
+    PaperReproductionAgentHarnessRequest(
+        harness_id="<paper_id>_<factor_scope>",
+        working_directory="/tmp/agentmatrix-paper-test",
+        paper_path="<paper path or attachment note>",
+        paper_id="<paper_id>",
+        golden_json_path="research_core/factor_lab/paper_reproduction/golden/<paper_id>_<factor_scope>.json",
+        selected_factors=["<factor_1>", "<factor_2>"],
+        skill_path="/Users/mac/.hermes/skills/research/paper-factor-reproduction/SKILL.md",
+    )
+)
+print(bundle.prompt_path)
+```
+
+The harness writes:
+
+```text
+runtime/factor_lab/agent_harness/<harness_id>/
+  fresh_agent_prompt.md
+  harness_metadata.json
+  skills/paper-factor-reproduction/SKILL.md
+```
+
+Use `fresh_agent_prompt.md` as the starting prompt. The metadata records the
+source skill path and SHA-256 hash so each AI test is auditable.
+
 Recommended prompt:
 
 ```text
 Use /tmp/agentmatrix-paper-test as the working directory.
 
-Load and follow the paper-factor-reproduction skill.
+Load and follow the bundled paper-factor-reproduction skill from the harness packet.
 
 I am attaching a paper. Run the paper reproduction workflow for selected factors only:
 - <factor list>

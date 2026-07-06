@@ -1,76 +1,239 @@
 # Paper Factor Reproduction Project
 
-## Project Goal
+## Current Purpose
 
-Build an AI-driven pipeline inside `agentmatrix-research` that takes a research paper describing factors and produces an integrated, reproducible factor implementation under the existing Factor Lab framework.
+Build a skill-driven AI workflow inside `agentmatrix-research` that can read a research paper, extract the factor reproduction method, map it into Factor Lab artifacts, validate each gate, and report what has or has not been reproduced.
 
-The pipeline should follow the Alpha101 reproduction pattern already present in the repo:
+The project has two outputs:
 
-- extract factor definitions and research assumptions from a paper
-- normalize them into Factor Lab specs
-- build the required input dataframe from the connected dataset
-- implement factor calculation functions
-- validate implementation quality
-- evaluate predictive power
-- optionally compare factor values against third-party truth data
-- export reproducible artifacts and a final report
+- reusable Factor Lab infrastructure under `research_core/factor_lab/paper_reproduction/`
+- a reusable AI skill, `paper-factor-reproduction`, that directs fresh agents to run the workflow correctly
 
-The first MVP should focus on daily price-volume factors. More complex factors, such as accounting, analyst, ownership, macro, or alternative-data factors, should be handled after the core workflow is stable.
+This is not a parallel research framework. The workflow must use existing Factor Lab contracts, registries, operators, evaluation utilities, runtime paths, and report conventions whenever possible.
 
-## Guiding Principles
+## Current Status
 
-1. Use `research_core/factor_lab/` as the mainline integration point.
-2. Reuse existing Factor Lab contracts, operators, validation, truth comparison, evaluation, and reporting where possible.
-3. Do not create a parallel research framework.
-4. Treat the workflow as gated: each stage produces artifacts and must pass checks before the next stage.
-5. Never claim a factor is fully reproduced unless external truth comparison passes.
-6. If paper details are ambiguous, the agent must record the ambiguity instead of inventing missing formulas, fields, or preprocessing rules.
+Implemented package:
 
-## Intended AI Workflow
+```text
+research_core/factor_lab/paper_reproduction/
+```
 
-### 1. Paper Extraction
+Current test status:
 
-The agent reads the paper or a normalized paper text/Markdown file and extracts all information needed for reproduction.
+```text
+python -m pytest research_core/factor_lab/paper_reproduction
+54 passed
+```
 
-Required extraction fields:
+Implemented capabilities:
 
-- paper title
-- authors
-- source or publication venue
-- year
-- factor family name
-- target factors to reproduce
-- factor formulas
-- required raw data fields
-- data frequency
-- sample period
-- universe
-- preprocessing rules
-- neutralization rules, if any
-- evaluation method
-- portfolio construction rules, if any
-- sample factor values, if available
-- third-party truth or reference source, if available
-- ambiguous or missing information
+- paper extraction dataclasses and validation
+- evaluation-result truth-source schema
+- extraction artifact export/load
+- normalization into `FactorResearchSpec`
+- specs/catalog export through existing Factor Lab registry
+- input dataframe validation
+- implementation readiness manifests
+- safe unimplemented factor-family scaffolds
+- paper evaluation planning
+- generic evaluator support for transform specs, IC analysis, and IC regression
+- paper-reported evaluation metric matching
+- final paper reproduction report generation
+- pipeline-stage state tracking
+- Quant API daily kline normalization helper
+- fresh-agent harness packet generation with bundled skill copy and skill hash
 
-Suggested artifact:
+Current serious benchmark:
+
+```text
+research_core/factor_lab/paper_reproduction/golden/huatai_alpha3_13_15.json
+```
+
+This golden artifact covers Huatai Alpha3, Alpha13, and Alpha15 using the current evaluation-case schema.
+
+## Core Design Decisions
+
+### 1. Paper Truth Means Evaluation Results
+
+The current durable project decision is:
+
+```text
+truth_type = evaluation_results
+```
+
+For this workflow, paper truth is paper-reported evaluation evidence, such as:
+
+- Rank IC
+- IC / ICIR / IR
+- long-short return or spread
+- factor return
+- t-statistics
+- Sharpe
+- portfolio return metrics
+- IC decay / half-life metrics
+
+Do not add or maintain paper-reported factor-value truth matching unless that design is explicitly reopened.
+
+Do not use these in the current paper-truth workflow:
+
+- `factor_values` truth sources
+- point-in-time factor-value row schemas
+- `paper_factor_value_match_ratio`
+- `compare_factor_values_to_paper_truth`
+
+External third-party truth data is a separate evidence type and is not the current paper-reproduction proof target.
+
+### 2. Evaluation Cases Are First-Class
+
+Raw factor definitions must stay minimal. Evaluation-specific details belong to each paper-reported evaluation case / truth source.
+
+Raw factor definition:
+
+- factor name
+- formula
+- formula-required fields
+- parameters / windows
+- frequency
+- formula source notes
+
+Evaluation case / truth source:
+
+- `truth_id`
+- `truth_type = evaluation_results`
+- `evaluation_family`
+- `evaluation_method`
+- `evaluation_spec`
+- `transform_spec`
+- `required_data`
+- paper-reported `metrics`
+- narrow `source_location`
+- sample period / universe when case-specific
+
+Do not put preprocessing, neutralization, portfolio construction, return horizon, execution price, benchmark, or evaluation-required fields at raw-factor level when they vary by paper result.
+
+### 3. Truth Granularity Must Be Tight
+
+Split truth sources when any of these differ:
+
+- table / figure / appendix source
+- metric family
+- return horizon
+- preprocessing or neutralization
+- regression controls or weights
+- sample window
+- portfolio construction
+- transaction cost
+- execution price
+- benchmark
+
+Do not merge IC/regression metrics, IC decay metrics, and portfolio TOP-layer metrics into one broad truth source.
+
+### 4. Known Limitations Are Not Automatically Blockers
+
+Missing daily factor values, per-date IC series, or machine-readable portfolio curves is usually a known limitation, not a blocker, when aggregate paper evaluation metrics and methods are available.
+
+Use `needs_human_review` when a required paper method is missing or ambiguous.
+
+Use `blocked_by_data` when required data is unavailable after checking the available data path, including Quant API v2 when applicable.
+
+### 5. Stage 4 Starts With Readiness, Not Code
+
+For arbitrary papers, do not jump straight to factor implementation.
+
+Stage 4A produces an implementation manifest and safe scaffold:
+
+- per-factor status
+- blocked reasons
+- suggested function name
+- known operator hints
+- AI-designed helper candidates
+- required implementation tests
+- importable factor-family scaffold that raises `NotImplementedError`
+
+Stage 4B may implement paper-specific factor logic only after extraction, normalization, and data-validation gates are clear.
+
+### 6. Generic Evaluators Stay Limited
+
+The project should not become a universal paper evaluator or formula compiler.
+
+Currently supported generic evaluator pieces:
+
+- ordered transform specs
+- median-MAD winsorization
+- cross-sectional regression residual neutralization
+- cross-sectional z-score standardization
+- Rank/Pearson IC analysis
+- cross-sectional OLS/WLS regression summaries
+- `ic_analysis`
+- `ic_regression`
+
+Unsupported families should stop cleanly or use paper-local evaluator code:
+
+- `layered_portfolio_backtest`
+- `ic_decay`
+- custom paper-specific methods
+
+## Current Workflow
+
+### Stage 1: Paper Extraction
+
+Module:
+
+```text
+research_core/factor_lab/paper_reproduction/extraction.py
+```
+
+Main types:
+
+- `PaperExtraction`
+- `ExtractedFactor`
+- `ExtractedTruthSource`
+- `ExtractionValidationResult`
+
+Expected artifact:
 
 ```text
 runtime/factor_lab/paper_specs/<paper_id>_extracted.json
 ```
 
-Gate checks:
+Extraction should preserve:
 
-- every target factor has a factor name
-- every target factor has a formula
-- every target factor has required fields
-- frequency is specified or explicitly marked as missing
-- ambiguous formula notation is listed in an ambiguity section
-- missing paper details are recorded explicitly
+- paper id, title, authors, source, year
+- factor family name
+- explicit selected factor scope
+- raw formulas
+- formula-required fields
+- factor frequency
+- factor parameters
+- factor sample period / universe when applicable
+- paper-reported evaluation cases
+- selected truth source ids or truth selection rule
+- classified ambiguity notes
+- known limitations
 
-### 2. Spec Normalization
+Validation checks:
 
-The agent converts the extracted information into `FactorResearchSpec` records.
+- paper id, title, authors, and family name exist
+- every target factor has name, formula, required fields
+- frequency exists or its absence is explicitly recorded
+- every truth source is `evaluation_results`
+- every truth source has non-empty metrics
+- evaluation method exists
+- selected truth ids exist and are not duplicated
+- duplicate truth ids fail
+- multiple truth sources without a selection rule or selected ids require human review
+- broad or missing source locations require human review
+- unrecognized metric names require human review
+- ambiguities are classified as formula, field mapping, evaluation, or other
+
+### Stage 2: Spec Normalization
+
+Module:
+
+```text
+research_core/factor_lab/paper_reproduction/normalization.py
+```
 
 Relevant contract:
 
@@ -78,663 +241,531 @@ Relevant contract:
 contracts/factor_research.py
 ```
 
-Expected generated files:
-
-```text
-research_core/factor_lab/libraries/<family>/
-  __init__.py
-  specs.py
-```
-
-Expected runtime artifacts:
+Expected artifacts:
 
 ```text
 runtime/factor_lab/specs/<family>_specs.json
 runtime/factor_lab/catalogs/<family>_catalog.json
+research_core/factor_lab/libraries/<family>/specs.py
 ```
 
-Gate checks:
+Normalization is a preservation step. It should not invent missing assumptions or overclaim proof.
 
-- `specs.py` imports cleanly
-- generated specs are valid `FactorResearchSpec` objects
-- catalog export succeeds
-- source document and paper provenance are preserved
-- validation thresholds exist
-- missing or custom fields are explicitly marked
+Validation targets:
 
-### 3. Input DataFrame Construction
+- `formula_match_ratio >= 1.0`
+- `field_mapping_match_ratio >= 1.0`
+- `paper_evaluation_metric_match_ratio >= 1.0` when selected evaluation truth exists
 
-The agent uses the connected dataset to build the normalized panel required by the factor family.
+Preserve in spec metadata:
 
-Expected normalized shape:
+- paper provenance
+- extraction validation status and warnings
+- all truth sources
+- selected truth sources
+- truth source summary
+- evaluation cases
+- known limitations
+- classified ambiguities
+- truth selection rule
+- proof status ceiling
+- implementation stage
+
+If extraction needs human review, spec metadata should also indicate `needs_human_review`.
+
+### Stage 3: Input DataFrame Validation
+
+Module:
 
 ```text
-date, code, open, high, low, close, volume, amount, ...
+research_core/factor_lab/paper_reproduction/data_validation.py
 ```
 
-Additional columns may be required depending on the paper, such as:
+Main API:
 
-- market capitalization
-- industry classification
-- sector classification
-- returns
-- adjusted prices
-- financial statement fields
-
-Suggested artifact:
-
-```text
-runtime/factor_lab/frames/<family>_<job_id>_input_panel.csv
+```python
+DataFrameValidationRequest.from_factor(factor)
+validate_input_frame(panel, request)
 ```
 
-Gate checks:
+Formula-stage validation checks:
 
-- required columns exist
-- `date` is parseable
-- `code` is present
+- `date` exists and parses
+- `code` exists
+- formula-required fields exist
 - no duplicate `date` x `code` rows
-- data is sorted by `code` and `date`
-- frequency matches the spec
-- preprocessing rules are applied or explicitly skipped
-- enough history exists for rolling windows
-- coverage is sufficient for the requested factors
+- frame is sorted by `code,date`, or the status records review
+- enough per-code history exists for window parameters
 
-Suggested future module:
+Keep formula-required fields separate from evaluation-required fields.
+
+Example: for Huatai Alpha3/13/15, VWAP is not a formula field. It is an evaluation/backtest execution requirement.
+
+### Stage 4A: Implementation Readiness Manifest and Scaffold
+
+Module:
 
 ```text
-research_core/factor_lab/data_validation.py
+research_core/factor_lab/paper_reproduction/implementation.py
 ```
 
-### 4. Factor Implementation
+Main API:
 
-The agent writes factor calculation functions under the Factor Lab library structure.
+```python
+build_implementation_manifest(...)
+export_implementation_manifest(...)
+write_factor_family_scaffold(...)
+```
 
-Expected files:
+Expected artifact:
+
+```text
+runtime/factor_lab/implementation_plans/<family>_implementation_manifest.json
+```
+
+Expected scaffold:
 
 ```text
 research_core/factor_lab/libraries/<family>/
   __init__.py
-  specs.py
   factors.py
   test_factors.py
 ```
+
+The generated scaffold should be importable but intentionally unimplemented until reviewed.
+
+Per-factor statuses:
+
+- `ready_for_code`
+- `needs_human_review`
+- `blocked_by_data`
+
+Unknown formula identifiers should be recorded as AI-designed helper candidates, not silently promoted into shared Factor Lab operators.
+
+### Stage 4B: Paper-Specific Factor Implementation
+
+This stage is not generic code generation. It is paper-specific engineering guided by the extraction/spec/manifest.
 
 Implementation rules:
 
-- use `research_core.factor_lab.operators` where possible
-- keep factor code deterministic
 - keep data loading outside factor functions
-- factor functions should receive an aligned panel
-- factor output should include `date`, `code`, and one column per factor
-- replace infinite values with nulls
-- preserve paper formula details in specs and notes
+- accept normalized panels
+- return `date`, `code`, and requested factor columns
+- preserve row count unless the paper explicitly filters rows
+- replace infinities with nulls
+- keep paper-specific helpers local until reused across papers
+- add tests before marking a factor usable
 
-Gate checks:
-
-- implementation imports cleanly
-- compute function returns expected columns
-- output row count matches input panel row count
-- factor columns are numeric
-- no unexpected infinite values
-- non-null coverage is above threshold
-- deterministic demo tests pass
-- paper-provided sample values match when available
-
-### 5. Validation
-
-The agent writes or reuses tests to validate each stage of the workflow.
-
-Validation layers:
-
-- extraction schema validation
-- spec import/export validation
-- input dataframe validation
-- factor output shape validation
-- non-null coverage validation
-- sample point reconciliation
-- optional truth comparison
-
-Relevant existing modules:
+For WorldQuant/Huatai-style formulas that mix cross-sectional rank and rolling operations, wide-format implementation may be appropriate:
 
 ```text
-research_core/factor_lab/validation.py
-research_core/factor_lab/truth.py
-research_core/factor_lab/test_service.py
-research_core/factor_lab/test_registry.py
+long panel
+-> cross-sectional rank by date
+-> pivot to date x code
+-> rolling corr/cov/sum by code
+-> cross-sectional transform by date
+-> unstack back to long panel
 ```
 
-Proof status rule:
+### Stage 5: Implementation Tests
 
-- without external truth comparison, the maximum status should be `partial proof`
-- with passing external truth comparison, status may become `passed`
-- with failed checks, status should be `failed`
-- with missing critical paper information, status should be `needs_human_review`
-- with unavailable required data, status should be `blocked_by_data`
+Tests should cover:
 
-### 6. Evaluation
+- importability
+- requested factor dispatch
+- required input columns
+- output shape
+- row-count preservation
+- numeric-or-null factor columns
+- no infinite outputs
+- hand-computable toy panels for formula semantics
+- transform order when applicable
+- evaluation alignment when applicable
 
-The agent evaluates predictive power using existing Factor Lab evaluation tools, and extends them only when the paper requires additional methods.
-
-Baseline metrics:
-
-- coverage
-- rank IC
-- Pearson IC
-- rank IC IR
-- long-short spread
-
-Relevant existing module:
+Current package tests live beside the implementation:
 
 ```text
-research_core/factor_lab/evaluation.py
+research_core/factor_lab/paper_reproduction/test_*.py
 ```
 
-Expected artifacts:
+### Stage 6: Paper-Aware Evaluation Planning and Execution
+
+Planning module:
 
 ```text
-runtime/factor_lab/reports/<job_id>_evaluation.json
-runtime/factor_lab/reports/<job_id>_evaluation.md
+research_core/factor_lab/paper_reproduction/paper_evaluation.py
 ```
 
-Gate checks:
-
-- forward returns are computed without lookahead
-- IC metrics exist for enough cross sections
-- long-short metrics exist where applicable
-- paper evaluation deviations are documented
-
-### 7. Truth Validation
-
-The agent should use third-party truth data when available.
-
-Expected truth CSV format:
+Generic evaluator module:
 
 ```text
-date,code,<factor_1>,<factor_2>,...
+research_core/factor_lab/paper_reproduction/evaluators.py
 ```
 
-Relevant existing module:
+Main APIs:
 
-```text
-research_core/factor_lab/truth.py
+```python
+build_paper_evaluation_plan(specs)
+apply_transform_spec(...)
+compute_ic_analysis(...)
+compute_cross_sectional_regression(...)
+evaluate_paper_case(...)
 ```
 
-Expected artifacts:
+Evaluation must follow the selected paper truth source. Before computing metrics, apply the evaluation-case `transform_spec` in order.
 
-```text
-runtime/factor_lab/truth/<family>_<factor>_truth_compare.json
-runtime/factor_lab/proofs/<family>_<factor>_proof.json
+Do not assume:
+
+- all papers use daily frequency
+- `t+1` means one trading day
+- all IC is Rank IC
+- all factors use the same neutralization
+- all portfolio tests use the same execution price
+
+Forward returns must look forward:
+
+```python
+future_price = panel.groupby("code")["close"].shift(-periods)
+forward_return = future_price / panel["close"] - 1
 ```
 
-Gate checks:
+Using `shift(+periods)` computes past returns and corrupts IC results.
 
-- truth CSV has required columns
-- dates are parseable
-- no duplicate `date` x `code` keys
-- comparison count is nonzero
-- exact match ratio, max absolute error, or cross-sectional correlation meets thresholds
+### Stage 7: Paper Truth Matching
 
-### 8. Report Generation
-
-The agent generates a final reproduction report.
-
-Relevant existing module:
+Module:
 
 ```text
-research_core/factor_lab/reporting.py
+research_core/factor_lab/paper_reproduction/truth_matching.py
+```
+
+Main API:
+
+```python
+compare_evaluation_metrics_to_paper_truth(...)
+interpret_truth_match_quality(...)
+```
+
+Truth matching compares computed evaluation metrics to paper-reported evaluation metrics.
+
+Statuses:
+
+- `passed`: all metrics match within absolute tolerance
+- `acceptable`: not exact, but present, same sign, and within relative tolerance policy
+- `failed`: missing metrics, non-numeric metrics, sign mismatch, or excessive error
+
+Use exact matching as a strong signal, but do not require perfect equality for useful implementation confidence. Data vendor, sample period, adjustment, universe, and rounding differences may make approximate consistency the correct outcome.
+
+### Stage 8: Final Report
+
+Module:
+
+```text
+research_core/factor_lab/paper_reproduction/reporting.py
 ```
 
 Expected artifacts:
 
 ```text
-runtime/factor_lab/reports/<job_id>_proof_report.json
-runtime/factor_lab/reports/<job_id>_proof_report.md
-runtime/factor_lab/jobs/<job_id>.json
+runtime/factor_lab/reports/<job_id>_paper_reproduction_report.json
+runtime/factor_lab/reports/<job_id>_paper_reproduction_report.md
 ```
 
-The report should include:
+Report contents:
 
+- job id
 - paper metadata
-- extracted factor definitions
-- normalized specs
-- data fields used
-- preprocessing rules
-- implementation notes
+- factor definitions
+- formulas and required fields
+- evaluation truth sources
+- evaluation cases
+- truth match results
+- pipeline stage state
+- artifacts
 - tests run
-- validation status
-- evaluation results
-- truth comparison status
 - known gaps
-- reproducibility commands
+- no-overclaiming note
 
-## Proposed Skill
+Never claim:
 
-Suggested skill name:
+- fully reproduced
+- zero bias
+- passed proof
 
-```text
-paper-factor-reproduction
-```
+unless the relevant paper-truth comparison has actually run and passed under the agreed policy.
 
-The skill should instruct the agent to:
+## Pipeline State
 
-1. read existing Factor Lab contracts and examples before editing
-2. extract paper information into a structured artifact
-3. normalize extracted factors into `FactorResearchSpec`
-4. validate specs before implementing code
-5. validate input data before calculating factors
-6. implement factors under `research_core/factor_lab/libraries/<family>/`
-7. use shared Factor Lab operators
-8. add tests for extraction, specs, data framing, and factor outputs
-9. run evaluation and proof export
-10. use `truth.py` for third-party comparison when available
-11. generate a final report
-12. never claim full reproduction without passing external truth comparison
-
-## Experiment Stages
-
-### Stage 1: Paper Extraction Skill MVP
-
-Goal:
-
-Teach the agent to extract the correct information before touching code.
-
-Input:
-
-- one simple paper or Markdown excerpt with clear daily price-volume formulas
-
-Output:
+Module:
 
 ```text
-runtime/factor_lab/paper_specs/<paper_id>_extracted.json
+research_core/factor_lab/paper_reproduction/pipeline.py
 ```
 
-Checks:
-
-- extraction JSON follows schema
-- every factor has `factor_name`, `formula`, `required_fields`, and `frequency`
-- ambiguities are explicit
-- no invented formulas or fields
-
-Exit criteria:
-
-- the agent can extract 1-3 factors reliably
-
-### Stage 2: Spec Normalization Experiment
-
-Goal:
-
-Convert extraction artifacts into Factor Lab specs.
-
-Output:
+Expected artifact:
 
 ```text
-research_core/factor_lab/libraries/<family>/specs.py
-runtime/factor_lab/specs/<family>_specs.json
-runtime/factor_lab/catalogs/<family>_catalog.json
+runtime/factor_lab/paper_jobs/<job_id>.json
 ```
 
-Checks:
-
-- `specs.py` imports cleanly
-- `FactorResearchSpec` objects are valid
-- catalog export works
-- paper provenance is preserved
-- validation thresholds exist
-
-Exit criteria:
-
-- the agent can create valid specs without implementing factors
-
-### Stage 3: DataFrame Contract Experiment
-
-Goal:
-
-Validate the input data layer independently from factor calculation.
-
-Output:
-
-- data requirement manifest
-- input panel diagnostics report
-
-Checks:
-
-- required columns exist
-- no duplicate `date` x `code`
-- date sorting is correct
-- frequency is consistent
-- enough lookback history exists
-- preprocessing is applied or explicitly skipped
-
-Exit criteria:
-
-- the agent can prove the input panel is suitable before factor calculation
-
-### Stage 4: Factor Implementation Experiment
-
-Goal:
-
-Generate one small factor family implementation.
-
-Output:
+Stages:
 
 ```text
-research_core/factor_lab/libraries/<family>/
-  __init__.py
-  specs.py
-  factors.py
-  test_factors.py
+paper_extraction
+spec_normalization
+input_dataframe_validation
+factor_implementation
+implementation_tests
+evaluation
+paper_truth_validation
+final_report
 ```
 
-Checks:
+Gating statuses:
 
-- factor functions import
-- compute function returns `date`, `code`, and factor columns
-- output row count matches input panel
-- factor columns are numeric
-- no infinite values
-- non-null coverage passes threshold
-- deterministic demo test passes
+- `pending`
+- `needs_human_review`
+- `failed`
+- `blocked_by_data`
 
-Exit criteria:
+Do not skip later stages when an earlier gate is blocked.
 
-- one or two factors run end-to-end on demo data
+## Skill and Fresh-Agent Testing
 
-### Stage 5: Evaluation Experiment
-
-Goal:
-
-Connect generated factors to existing Factor Lab evaluation.
-
-Output:
+Skill path used during current development:
 
 ```text
-runtime/factor_lab/reports/<job_id>_evaluation.json
-runtime/factor_lab/reports/<job_id>_evaluation.md
+/Users/mac/.hermes/skills/research/paper-factor-reproduction/SKILL.md
 ```
 
-Checks:
+The skill is a primary project output. Testing the project means testing whether a fresh AI agent can follow this skill and reproduce the methodology extraction.
 
-- forward returns are aligned correctly
-- rank IC exists
-- long-short spread exists
-- enough cross sections exist
-- paper evaluation deviations are documented
-
-Exit criteria:
-
-- the factor family produces a reproducible evaluation report
-
-### Stage 6: Truth Validation Experiment
-
-Goal:
-
-Validate factor values against third-party or reference output.
-
-Input:
-
-- truth CSV with `date`, `code`, and factor columns
-
-Output:
+Harness module:
 
 ```text
-runtime/factor_lab/truth/<family>_<factor>_truth_compare.json
-runtime/factor_lab/proofs/<family>_<factor>_proof.json
+research_core/factor_lab/paper_reproduction/agent_harness.py
 ```
 
-Checks:
+Main API:
 
-- truth schema validation
-- nonzero comparison count
-- exact match ratio, max error, or rank correlation meets thresholds
-- proof status logic works
+```python
+prepare_agent_harness_bundle(...)
+```
 
-Exit criteria:
-
-- matching truth data can produce `passed`
-- missing truth data remains `partial proof`
-
-### Stage 7: Report Generation Experiment
-
-Goal:
-
-Produce the full reproduction bundle.
-
-Output:
+Harness output:
 
 ```text
-runtime/factor_lab/reports/<job_id>_proof_report.json
-runtime/factor_lab/reports/<job_id>_proof_report.md
-runtime/factor_lab/jobs/<job_id>.json
+runtime/factor_lab/agent_harness/<harness_id>/
+  fresh_agent_prompt.md
+  harness_metadata.json
+  skills/paper-factor-reproduction/SKILL.md
 ```
 
-Checks:
+The harness copies the exact skill into the test packet and records its SHA-256 hash. This makes each fresh-agent test auditable.
 
-- report includes paper metadata
-- report includes formulas and data assumptions
-- report includes preprocessing and implementation notes
-- report includes tests, evaluation, truth validation, and limitations
-
-Exit criteria:
-
-- a reviewer can reproduce the agent's work from the report
-
-### Stage 8: Full Skill Integration
-
-Goal:
-
-Combine the prior experiments into one reusable skill.
-
-Output:
+Fresh-agent test goal:
 
 ```text
-.hermes/skills/paper-factor-reproduction/SKILL.md
+Can a new AI agent, given the repo and bundled skill, extract and operationalize
+the paper reproduction method correctly?
 ```
 
-or another project-approved skill location.
+The first comparison target is the golden JSON, not final numeric paper reproduction.
 
-Checks:
+Current missing automation:
 
-- skill enforces mandatory stage order
-- skill lists stop conditions
-- skill lists required artifacts
-- skill lists test commands
-- skill enforces proof language rules
-- skill integrates with Factor Lab rather than creating a parallel framework
+```text
+fresh agent artifacts -> golden JSON comparison report
+```
 
-Exit criteria:
+At present, comparison against golden JSON is still mostly manual/semantic.
 
-- a new agent can follow the skill and reproduce the demo workflow
+## Golden JSON Artifacts
 
-### Stage 9: Harder Paper Experiments
+Golden JSON is a manually curated benchmark for whether an AI agent extracted the reproduction method correctly.
 
-Goal:
+It is not proof that computed factor values or evaluation metrics match the paper.
 
-Test the skill on more realistic and ambiguous papers.
+Current schema version:
 
-Cases:
+```text
+paper_reproduction_golden_v0.2
+```
 
-- ambiguous formula notation
-- missing sample values
-- non-daily frequency
-- accounting or fundamental fields
-- evaluation rules not supported by current Factor Lab
-- required data unavailable in the connected dataset
+Current benchmark:
 
-Exit criteria:
+```text
+research_core/factor_lab/paper_reproduction/golden/huatai_alpha3_13_15.json
+```
 
-- the agent knows when to proceed
-- the agent knows when to mark `needs_human_review`
-- the agent knows when to mark `blocked_by_data`
+Golden artifacts should capture:
 
-## Five-Week Schedule
+- selected factor scope
+- formula definitions
+- formula-required fields
+- parameters
+- frequency
+- transform definitions
+- evaluation method definitions
+- per-factor evaluation cases
+- required data by stage
+- paper metrics
+- source locations
+- known limitations
+- comparison policy
 
-### Week 1: Extraction and Spec Foundation
+## Representative Papers
 
-Goal:
+### Huatai Technical Factors
 
-Make the AI reliably read paper content and produce valid structured specs.
+Paper:
 
-Deliverables:
+```text
+Huatai Securities, 2019-05-21, mass technical factors
+```
 
-- draft `paper-factor-reproduction` skill, extraction-only version
-- extracted paper JSON schema
-- mapping from extracted fields to `FactorResearchSpec`
-- first test paper fixture in Markdown or text
-- extracted paper artifact
-- generated `specs.py` for one small factor family
+Current selected benchmark:
 
-Tests:
+```text
+Alpha3, Alpha13, Alpha15
+```
 
-- extraction JSON has required fields
-- ambiguities are explicit
-- generated specs import cleanly
-- catalog/spec export works
+Canonical formulas:
 
-Exit criteria:
+```text
+Alpha3  = (-1 * correlation(rank(OPEN), rank(VOLUME), 10))
+Alpha13 = (-1 * rank(covariance(rank(CLOSE), rank(VOLUME), 5)))
+Alpha15 = (-1 * sum(rank(correlation(rank(HIGH), rank(VOLUME), 3)), 3))
+```
 
-- agent can extract and normalize 1-3 factors without writing factor code
+Important paper method:
 
-### Week 2: DataFrame Contract and Validation Gates
+- all A-shares
+- exclude ST/PT and next-day suspended stocks
+- sample period `2010/1/4-2019/4/30`
+- daily frequency
+- T=5/10/20 forward returns
+- selected truth generally uses T=20
+- median-MAD winsorization
+- neutralization variant
+- z-score standardization
+- no missing-value fill
+- portfolio tests use 20 equal-count layers and default one-way fee 0.15%
 
-Goal:
+Important extraction pitfalls:
 
-Make sure input data is validated before factor calculation.
+- VWAP is evaluation/backtest data, not a formula field for Alpha3/13/15
+- Table 52, Table 14, and portfolio tables are separate evaluation cases
+- missing daily factor values are known limitations, not blockers
+- Quant API v2 does not cover the original 2010-2019 sample
 
-Deliverables:
+### GTJA191
 
-- data requirement manifest format
-- `data_validation.py` or equivalent
-- normalized panel contract
-- checks for columns, duplicates, sortedness, coverage, frequency, and lookback sufficiency
-- demo-data validation tests
+Paper:
 
-Tests:
+```text
+Guotai Junan 191 short-cycle price-volume factors
+```
 
-- valid demo panel passes
-- missing required field fails
-- duplicate `date` x `code` fails
-- insufficient rolling history is flagged
+Use case:
 
-Exit criteria:
+- large-scale formula extraction from PDF text
+- state-machine parsing of formulas
+- required-field extraction with derived-indicator fallback
+- aggregate-only evaluation truth
 
-- agent can prove the input panel is usable before implementing factors
+Important distinction:
 
-### Week 3: Factor Implementation Scaffold
+The paper does not provide per-factor evaluation tables. Aggregate evaluation metrics can be attached, but factors may remain `needs_human_review` because per-factor paper truth is unavailable.
 
-Goal:
+## Quant API v2 Data Notes
 
-Have the agent create a runnable factor family using the Factor Lab structure.
+Quant API v2 should be tried before declaring `blocked_by_data` when no local suitable panel exists.
 
-Deliverables:
+Base URL:
 
-- scaffold pattern under `research_core/factor_lab/libraries/<family>/`
-- `specs.py`, `factors.py`, `test_factors.py`, and `__init__.py`
-- generic or semi-generic service/CLI path for paper factor families
-- implementation of 1-3 simple price-volume factors from the test spec
+```text
+http://115.159.73.134:8765
+```
 
-Tests:
+Security rule:
 
-- imports pass
-- output shape matches input panel
-- factor columns are numeric
-- no infinite values
-- non-null coverage passes
-- deterministic sample anchors pass if available
+- do not commit tokens
+- do not write tokens into source, docs, runtime artifacts, reports, generated specs, or logs
+- prefer `QUANT_API_TOKEN`
 
-Exit criteria:
+Useful table:
 
-- one small paper-derived factor family computes values on demo data
+```text
+ods_kline_1d
+```
 
-### Week 4: Evaluation, Truth, and Reports
+Relevant columns:
 
-Goal:
+```text
+symbol, trade_date, open, high, low, close, volume, amount
+```
 
-Connect the generated family to evaluation, proof, truth, and report artifacts.
+Normalized panel:
 
-Deliverables:
+```text
+date, code, open, high, low, close, volume, amount
+```
 
-- evaluation JSON and Markdown export
-- proof JSON export
-- truth CSV schema and comparison
-- final reproduction report Markdown and JSON
-- job manifest with artifact paths
-- status semantics
+Known limits:
 
-Tests:
+- `ods_kline_1d` coverage starts around 2020
+- Huatai's 2010-2019 full sample cannot be fully reproduced from this API instance
+- recent windows can validate implementation/data flow but not full sample reproduction
 
-- evaluation artifacts are created
-- proof files are created
-- truth comparison passes with matching generated truth
-- proof remains partial without external truth
-- report contains formulas, data assumptions, tests, evaluation, and limitations
+Date encoding pitfall:
 
-Exit criteria:
+```python
+pd.to_datetime(raw["trade_date"].astype(int), unit="D", origin="1970-01-01")
+```
 
-- end-to-end run produces a full artifact bundle
+Do not parse Quant API parquet `trade_date` with plain `pd.to_datetime(raw["trade_date"])`; it can produce 1970 dates.
 
-### Week 5: Skill Hardening and End-to-End Demo
+## Current Known Gaps
 
-Goal:
+High-priority gaps:
 
-Turn the experimental workflow into a reliable reusable skill.
+- automated golden JSON comparator for fresh-agent outputs
+- clearer command/script for creating harness packets from CLI
+- documentation cleanup across the remaining `docs/PAPER_FACTOR_REPRODUCTION_*.md` files
+- richer current-state examples for Huatai and GTJA191
 
-Deliverables:
+Evaluation gaps:
 
-- final `paper-factor-reproduction` skill
-- workflow docs
-- reproducible command sequence
-- one clean end-to-end demo from paper text to report
-- CI-friendly tests that do not require private datasets
-- documented unsupported cases and human-review triggers
+- generic `layered_portfolio_backtest`
+- generic `ic_decay`
+- exact paper-specific portfolio execution support
+- neutralization details requiring industry and market-cap data
 
-Tests:
+Data gaps:
 
-- full unit test suite for changed scope
-- one scripted end-to-end smoke run
-- generated report manually reviewed
-- skill tested on one slightly different paper/spec excerpt
+- pre-2020 A-share history for papers like Huatai
+- industry classification panel
+- market-cap / free-float market-cap panel
+- ST/PT and suspension filters
+- benchmark return series for paper portfolio metrics
 
-Exit criteria:
+Implementation gaps:
 
-- a new agent can follow the skill and reproduce the demo workflow
-- the repo has stable scaffolding for future paper-derived factor families
+- reviewed Stage 4B factor-library implementations are paper-specific and not yet the generic project core
+- unknown formula functions should remain local helper candidates until repeated need justifies shared operators
 
-## Suggested Weekly Rhythm
+## Near-Term Direction
 
-- Monday-Tuesday: implement the week's core feature
-- Wednesday: write tests and fixtures
-- Thursday: run the agent experiment and record failures
-- Friday: harden the skill instructions and update docs
+The next project step should be testing and hardening the fresh-agent loop:
 
-## MVP Scope
+1. Generate a harness packet with the bundled skill.
+2. Run a fresh AI agent in an isolated worktree.
+3. Collect extraction/spec/report artifacts.
+4. Compare those artifacts to golden JSON.
+5. Classify failures as skill, schema, validation, normalization, data, evaluator, or reporting gaps.
+6. Update the general workflow, not paper-specific hacks.
+7. Retest the same paper.
+8. Test a different paper to reduce overfitting.
 
-The MVP should include:
-
-- text or Markdown paper input
-- 1-3 daily price-volume factors
-- Factor Lab spec generation
-- demo panel validation
-- factor implementation under `research_core/factor_lab/libraries/<family>/`
-- evaluation report
-- proof report
-- optional truth comparison
-- reusable skill instructions
-
-The MVP should not include:
-
-- raw PDF parsing as a requirement
-- accounting factors
-- alternative data
-- fully generic formula-to-code translation
-- final proof claims without external truth data
-
-## Future Extensions
-
-- PDF/document normalization
-- richer formula parser
-- generic factor family scaffold command
-- A-share dataset adapter integration
-- paper-specific evaluator plugins
-- no-lookahead audit module
-- human review UI integration
-- external truth-source collectors
+The most important missing tool is an automated or semi-automated golden comparator. It should report strict mismatches for formulas, fields, metrics, and source locations, and semantic review items for universe, sample period, transform specs, evaluation specs, and known limitations.

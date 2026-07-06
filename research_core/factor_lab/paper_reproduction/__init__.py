@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from research_core.factor_lab.paper_reproduction.agent_harness import (
+    PaperReproductionAgentHarnessBundle,
+    PaperReproductionAgentHarnessRequest,
+    default_skill_path,
+    prepare_agent_harness_bundle,
+)
 from research_core.factor_lab.paper_reproduction.data_validation import (
     DataFrameValidationRequest,
     DataFrameValidationResult,
@@ -69,6 +75,8 @@ __all__ = [
     "PaperExtraction",
     "PaperEvaluationPlan",
     "PaperFactorEvaluationPlan",
+    "PaperReproductionAgentHarnessBundle",
+    "PaperReproductionAgentHarnessRequest",
     "PaperReproductionPipelineState",
     "PaperReproductionStage",
     "PaperReproductionStageState",
@@ -81,6 +89,7 @@ __all__ = [
     "compare_evaluation_metrics_to_paper_truth",
     "compute_cross_sectional_regression",
     "compute_ic_analysis",
+    "default_skill_path",
     "evaluate_paper_case",
     "export_implementation_manifest",
     "export_pipeline_state",
@@ -89,6 +98,7 @@ __all__ = [
     "load_paper_extraction",
     "normalize_extraction_to_specs",
     "normalize_quant_daily_kline_frame",
+    "prepare_agent_harness_bundle",
     "render_paper_reproduction_report_markdown",
     "selected_truth_sources",
     "summarize_factor_truth_sources",
