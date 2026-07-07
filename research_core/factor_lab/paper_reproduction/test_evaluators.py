@@ -95,6 +95,35 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["metrics"]["cross_section_count"], 2)
 
+    def test_evaluate_paper_case_treats_null_optional_specs_as_empty(self) -> None:
+        frame = self._base_frame()
+        case = {
+            "case_id": "demo_null_specs",
+            "evaluation_family": "ic_analysis",
+            "evaluation_spec": None,
+            "transform_spec": None,
+            "required_data": None,
+        }
+
+        result = evaluate_paper_case(case, frame, factor_col="factor")
+
+        self.assertEqual(result["case_id"], "demo_null_specs")
+        self.assertEqual(result["return_col"], "forward_return_1d")
+        self.assertFalse(result["transform_applied"])
+        self.assertEqual(result["metrics"]["cross_section_count"], 2)
+
+    def test_evaluate_paper_case_rejects_unknown_ic_type(self) -> None:
+        frame = self._base_frame()
+        case = {
+            "case_id": "demo_bad_ic",
+            "evaluation_family": "ic_analysis",
+            "evaluation_spec": {"ic_type": "kendall"},
+            "required_data": {"evaluation": ["forward_return_1d"]},
+        }
+
+        with self.assertRaisesRegex(ValueError, "Unsupported IC type: kendall"):
+            evaluate_paper_case(case, frame, factor_col="factor")
+
 
     def test_compute_cross_sectional_regression_reports_t_and_factor_return_metrics(self) -> None:
         frame = pd.DataFrame(

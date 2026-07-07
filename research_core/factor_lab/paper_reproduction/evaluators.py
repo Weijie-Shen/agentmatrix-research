@@ -153,13 +153,13 @@ def evaluate_paper_case(
     family = str(evaluation_case.get("evaluation_family", ""))
     if family not in {"ic_analysis", "ic_regression"}:
         raise NotImplementedError(f"Generic evaluator not implemented for evaluation_family={family!r}")
-    transform_spec = evaluation_case.get("transform_spec", {})
+    transform_spec = evaluation_case.get("transform_spec") or {}
     transformed = apply_transform_spec(frame, value_col=factor_col, transform_spec=transform_spec, date_col=date_col)
-    evaluation_spec = evaluation_case.get("evaluation_spec", {})
-    required_data = evaluation_case.get("required_data", {})
+    evaluation_spec = evaluation_case.get("evaluation_spec") or {}
+    required_data = evaluation_case.get("required_data") or {}
     return_col = str(evaluation_spec.get("return_col") or _first_required(required_data, "evaluation") or "forward_return_1d")
     ic_type = str(evaluation_spec.get("ic_type", "spearman_rank_ic")).lower()
-    method = "spearman" if "spearman" in ic_type or "rank" in ic_type else "pearson"
+    method = _ic_method_from_type(ic_type)
     ic_metrics = compute_ic_analysis(transformed, factor_col=PROCESSED_FACTOR_COL, return_col=return_col, method=method, date_col=date_col)
     if family == "ic_regression":
         controls = [str(control) for control in evaluation_spec.get("regression_controls", []) or required_data.get("controls", [])]
@@ -307,6 +307,14 @@ def _first_required(required_data: Any, key: str) -> str | None:
     if isinstance(values, list) and values:
         return str(values[0])
     return None
+
+
+def _ic_method_from_type(ic_type: str) -> str:
+    if ic_type in {"spearman", "rank_ic", "spearman_rank_ic"}:
+        return "spearman"
+    if ic_type in {"pearson", "ic", "pearson_ic"}:
+        return "pearson"
+    raise ValueError(f"Unsupported IC type: {ic_type}")
 
 
 def _require_columns(frame: pd.DataFrame, columns: list[str]) -> None:
