@@ -8,7 +8,9 @@ from pathlib import Path
 
 from contracts.factor_research import FactorResearchSpec
 from research_core.factor_lab.paper_reproduction.extraction import ExtractedFactor, ExtractedTruthSource, PaperExtraction
+from research_core.factor_lab.paper_reproduction.evaluators import apply_transform_spec
 from research_core.factor_lab.paper_reproduction.normalization import (
+    default_transform_spec,
     normalize_extraction_to_specs,
     write_specs_module,
 )
@@ -109,8 +111,68 @@ class PaperNormalizationTest(unittest.TestCase):
         self.assertEqual(first.metadata["evaluation_cases"][0]["evaluation_family"], "ic_analysis")
         self.assertEqual(first.metadata["evaluation_cases"][0]["evaluation_spec"]["return_horizon"], 20)
         self.assertEqual(first.metadata["evaluation_cases"][0]["required_data"]["evaluation"], ["forward_return_20d", "vwap"])
+        self.assertEqual(
+            first.metadata["evaluation_cases"][0]["defaulted_transform_steps"],
+            ["winsorization", "standardization", "missing_value_policy"],
+        )
         self.assertEqual(first.metadata["truth_source_summary"]["available_truth_count"], 1)
         self.assertIn("paper-evaluation-truth", first.tags)
+
+    def test_default_transform_spec_inserts_missing_common_steps(self) -> None:
+        transform = default_transform_spec({"steps": []})
+
+        steps = transform["steps"]
+        self.assertEqual([step["name"] for step in steps], ["winsorization", "standardization", "missing_value_policy"])
+        self.assertEqual(steps[0]["method"], "median_mad")
+        self.assertEqual(steps[0]["threshold"], 5)
+        self.assertEqual(steps[1]["method"], "cross_section_zscore")
+        self.assertEqual(steps[2]["method"], "do_not_fill")
+        self.assertEqual(transform["defaulted_transform_steps"], ["winsorization", "standardization", "missing_value_policy"])
+
+    def test_default_transform_spec_does_not_override_explicit_none(self) -> None:
+        transform = default_transform_spec(
+            {
+                "steps": [
+                    {"name": "winsorization", "method": "none", "source": "explicit"},
+                    {"name": "standardization", "method": "none", "source": "explicit"},
+                    {"name": "missing_value_policy", "method": "none", "source": "explicit"},
+                ]
+            }
+        )
+
+        self.assertEqual([step["method"] for step in transform["steps"]], ["none", "none", "none"])
+        self.assertEqual(transform["defaulted_transform_steps"], [])
+
+    def test_default_transform_spec_replaces_unknown_not_specified_common_steps(self) -> None:
+        transform = default_transform_spec(
+            {
+                "steps": [
+                    {"name": "winsorization", "method": "unknown", "source": "not_specified"},
+                    {"name": "standardization", "method": "unknown", "source": "not_specified"},
+                    {"name": "missing_value_policy", "method": "unknown", "source": "not_specified"},
+                ]
+            }
+        )
+
+        self.assertEqual([step["method"] for step in transform["steps"]], ["median_mad", "cross_section_zscore", "do_not_fill"])
+        self.assertTrue(all(step["source"] == "default_assumed" for step in transform["steps"]))
+        self.assertTrue(all(step["original_method"] == "unknown" for step in transform["steps"]))
+
+    def test_defaulted_transform_spec_is_executable(self) -> None:
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            {
+                "date": ["2026-01-01", "2026-01-01", "2026-01-01", "2026-01-02", "2026-01-02", "2026-01-02"],
+                "code": ["a", "b", "c", "a", "b", "c"],
+                "factor": [1.0, 2.0, 100.0, 4.0, 5.0, 6.0],
+            }
+        )
+
+        transformed = apply_transform_spec(frame, value_col="factor", transform_spec=default_transform_spec({}))
+
+        self.assertIn("processed_factor", transformed.columns)
+        self.assertEqual(len(transformed), len(frame))
 
     def test_normalization_preserves_human_review_status_and_factor_ambiguities(self) -> None:
         extraction = self._extraction()

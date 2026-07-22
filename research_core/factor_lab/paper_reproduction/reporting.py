@@ -26,12 +26,17 @@ def build_paper_reproduction_report(
 ) -> dict[str, Any]:
     truth_results = truth_results or {}
     spec_by_name = {spec.factor_name: spec for spec in specs}
+    evaluation_plan_by_name = {
+        plan.factor_name: plan
+        for plan in (evaluation_plan.factor_plans if evaluation_plan else [])
+    }
     factors = []
     status_counts: dict[str, int] = {}
     truth_status_counts: dict[str, int] = {}
     for factor in extraction.target_factors:
         spec = spec_by_name.get(factor.factor_name)
         spec_metadata = dict(spec.metadata) if spec else {}
+        factor_evaluation_plan = _as_plain_dict(evaluation_plan_by_name.get(factor.factor_name))
         factor_truth_results = truth_results.get(factor.factor_name, [])
         for item in factor_truth_results:
             status = str(item.get("status", "unknown"))
@@ -48,6 +53,15 @@ def build_paper_reproduction_report(
                 "universe": factor.universe,
                 "truth_sources": [_as_plain_dict(source) for source in factor.truth_sources],
                 "evaluation_cases": [_as_plain_dict(source) for source in factor.truth_sources],
+                "selected_evaluation_cases": factor_evaluation_plan.get("selected_evaluation_cases", []),
+                "skipped_evaluation_cases": factor_evaluation_plan.get("skipped_evaluation_cases", []),
+                "unsupported_evaluation_cases": factor_evaluation_plan.get("unsupported_evaluation_cases", []),
+                "requires_paper_local_evaluator": factor_evaluation_plan.get("requires_paper_local_evaluator", False),
+                "evaluator_implementation_targets": factor_evaluation_plan.get("evaluator_implementation_targets", []),
+                "defaulted_transform_assumptions": _factor_defaulted_transform_assumptions(
+                    spec_metadata,
+                    factor_evaluation_plan,
+                ),
                 "truth_results": factor_truth_results,
                 "spec_status": factor_status,
                 "data_requirements": spec_metadata.get("data_requirements", {}),
@@ -145,6 +159,38 @@ def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
                     f"({result.get('diagnostics', {}).get('quality', '-')})"
                 )
         lines.append("")
+    lines.extend(["## Selected Evaluation Methods", ""])
+    for factor in report["factors"]:
+        lines.append(f"### {factor['factor_name']}")
+        selected_cases = factor.get("selected_evaluation_cases", [])
+        if selected_cases:
+            for case in selected_cases:
+                lines.append(f"- Selected `{case.get('truth_id', '-')}`: {case.get('evaluation_family', '-')}")
+        else:
+            lines.append("- None selected for generic execution.")
+        skipped_cases = factor.get("skipped_evaluation_cases", [])
+        for case in skipped_cases:
+            lines.append(
+                f"- Skipped `{case.get('truth_id', '-')}`: {case.get('evaluation_family', '-')} "
+                f"({case.get('skip_reason', '-')})"
+            )
+        targets = factor.get("evaluator_implementation_targets", [])
+        for target in targets:
+            lines.append(
+                f"- Paper-local evaluator needed for `{target.get('evaluation_family', '-')}`: "
+                f"`{target.get('suggested_function_name', '-')}`"
+            )
+        lines.append("")
+    lines.extend(["## Defaulted Transform Assumptions", ""])
+    defaulted_any = False
+    for factor in report["factors"]:
+        assumptions = factor.get("defaulted_transform_assumptions", [])
+        if assumptions:
+            defaulted_any = True
+            lines.append(f"- {factor['factor_name']}: {', '.join(assumptions)}")
+    if not defaulted_any:
+        lines.append("- None recorded.")
+    lines.append("")
     lines.extend(["## Pipeline", ""])
     pipeline = report.get("pipeline", {})
     stages = pipeline.get("stages", []) if isinstance(pipeline, dict) else []
@@ -221,6 +267,17 @@ def _collect_known_gaps(factors: list[dict[str, Any]], pipeline_payload: dict[st
                     gaps.append(f"{factor['factor_name']} has {category} ambiguities: {len(items)} item(s)")
         if not factor.get("truth_sources"):
             gaps.append(f"{factor['factor_name']} has no paper evaluation truth source")
+        for case in factor.get("skipped_evaluation_cases", []):
+            if case.get("skip_reason") in {"known_method_available", "method_budget_exceeded", "unsupported_generic_evaluator"}:
+                gaps.append(
+                    f"{factor['factor_name']} deferred {case.get('evaluation_family', 'unknown')} "
+                    f"evaluation case {case.get('truth_id', '-')}: {case.get('skip_reason')}"
+                )
+        if factor.get("defaulted_transform_assumptions"):
+            gaps.append(
+                f"{factor['factor_name']} uses defaulted transform assumptions that may explain metric drift: "
+                f"{', '.join(factor['defaulted_transform_assumptions'])}"
+            )
     for stage in pipeline_payload.get("stages", []) if isinstance(pipeline_payload, dict) else []:
         if stage.get("status") in {"failed", "needs_human_review", "blocked_by_data"}:
             gaps.append(f"Stage {stage.get('name')} is {stage.get('status')}: {stage.get('summary') or '-'}")
@@ -235,6 +292,29 @@ def _as_plain_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     return dict(value)
+
+
+def _factor_defaulted_transform_assumptions(
+    spec_metadata: dict[str, Any],
+    factor_evaluation_plan: dict[str, Any],
+) -> list[str]:
+    result: list[str] = []
+    for step in spec_metadata.get("defaulted_transform_steps", []):
+        if isinstance(step, str) and step not in result:
+            result.append(step)
+    for case_key in ("selected_evaluation_cases", "evaluation_cases"):
+        for case in factor_evaluation_plan.get(case_key, []):
+            if not isinstance(case, dict):
+                continue
+            transform_spec = case.get("transform_spec", {})
+            if isinstance(transform_spec, dict):
+                for step in transform_spec.get("defaulted_transform_steps", []):
+                    if isinstance(step, str) and step not in result:
+                        result.append(step)
+            for step in case.get("defaulted_transform_steps", []):
+                if isinstance(step, str) and step not in result:
+                    result.append(step)
+    return result
 
 
 def _format_metrics(metrics: dict[str, Any]) -> str:

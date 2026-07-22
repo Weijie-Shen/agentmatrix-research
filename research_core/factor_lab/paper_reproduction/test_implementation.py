@@ -30,6 +30,13 @@ class PaperImplementationScaffoldTest(unittest.TestCase):
             metadata={
                 "paper_id": "paper_demo",
                 "status": "needs_human_review" if ambiguous else "planned",
+                "evaluator_implementation_targets": [
+                    {
+                        "evaluation_family": "layered_portfolio_backtest",
+                        "suggested_function_name": "evaluate_paperdemo_layered_portfolio_backtest",
+                        "reason": "No generic evaluator exists and no IC/regression truth source was available.",
+                    }
+                ],
                 "factor_ambiguities_by_category": {
                     "formula": ["target_factors[0]: custom_signal is not defined"] if ambiguous else [],
                     "field_mapping": [],
@@ -67,6 +74,7 @@ class PaperImplementationScaffoldTest(unittest.TestCase):
             ["forward_return_20d", "vwap"],
         )
         self.assertEqual(manifest.factors[0].metadata["known_limitations"], ["Only aggregate paper evaluation metrics are available."])
+        self.assertEqual(manifest.paper_local_evaluators[0]["evaluation_family"], "layered_portfolio_backtest")
 
     def test_manifest_blocks_ambiguous_factor_for_human_review(self) -> None:
         manifest = build_implementation_manifest(
@@ -103,6 +111,7 @@ class PaperImplementationScaffoldTest(unittest.TestCase):
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(payload["family_name"], "PaperDemo")
             self.assertEqual(payload["factors"][0]["factor_name"], "paper_alpha_1")
+            self.assertEqual(payload["paper_local_evaluators"][0]["suggested_function_name"], "evaluate_paperdemo_layered_portfolio_backtest")
 
     def test_scaffold_writer_creates_importable_unimplemented_dispatcher(self) -> None:
         manifest = build_implementation_manifest([self._spec()])
@@ -119,6 +128,10 @@ class PaperImplementationScaffoldTest(unittest.TestCase):
             spec.loader.exec_module(module)
 
             self.assertEqual(module.IMPLEMENTED_PAPERDEMO_FACTORS, ())
+            self.assertEqual(
+                module.IMPLEMENTATION_MANIFEST["paper_local_evaluators"][0]["evaluation_family"],
+                "layered_portfolio_backtest",
+            )
             with self.assertRaises(NotImplementedError):
                 module.compute_paperdemo_factors(None)
 

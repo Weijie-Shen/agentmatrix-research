@@ -57,6 +57,7 @@ class FamilyImplementationManifest:
     library_slug: str
     factors: list[FactorImplementationPlan]
     status: str
+    paper_local_evaluators: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
 
@@ -72,7 +73,13 @@ def build_implementation_manifest(
     data_validation_results = data_validation_results or {}
     plans = [_build_factor_plan(spec, data_validation_results.get(spec.factor_name)) for spec in specs]
     status = _manifest_status(plans)
-    return FamilyImplementationManifest(family_name=family_name, library_slug=library_slug, factors=plans, status=status)
+    return FamilyImplementationManifest(
+        family_name=family_name,
+        library_slug=library_slug,
+        factors=plans,
+        status=status,
+        paper_local_evaluators=_paper_local_evaluators(specs, library_slug=library_slug),
+    )
 
 
 def export_implementation_manifest(
@@ -155,8 +162,35 @@ def _build_factor_plan(
             "data_requirements": spec.metadata.get("data_requirements", {}),
             "known_limitations": spec.metadata.get("known_limitations", []),
             "data_validation_status": data_validation.status if data_validation else "not_provided",
+            "evaluator_implementation_targets": spec.metadata.get("evaluator_implementation_targets", []),
         },
     )
+
+
+def _paper_local_evaluators(specs: list[FactorResearchSpec], *, library_slug: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for spec in specs:
+        targets = spec.metadata.get("evaluator_implementation_targets", [])
+        if not isinstance(targets, list):
+            continue
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            family = str(target.get("evaluation_family", "") or "custom")
+            function_name = str(target.get("suggested_function_name", "") or f"evaluate_{library_slug}_{family}")
+            key = (family, function_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(
+                {
+                    "evaluation_family": family,
+                    "suggested_function_name": function_name,
+                    "reason": str(target.get("reason", "No generic evaluator exists for this paper evaluation method.")),
+                }
+            )
+    return result
 
 
 def _operator_and_ai_function_hints(spec: FactorResearchSpec) -> tuple[list[str], list[str]]:

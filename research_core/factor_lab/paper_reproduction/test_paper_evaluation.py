@@ -3,7 +3,10 @@ from __future__ import annotations
 import unittest
 
 from contracts.factor_research import FactorResearchSpec
-from research_core.factor_lab.paper_reproduction.paper_evaluation import build_paper_evaluation_plan
+from research_core.factor_lab.paper_reproduction.paper_evaluation import (
+    MAX_EVALUATION_METHODS_PER_RUN,
+    build_paper_evaluation_plan,
+)
 
 
 class PaperEvaluationPlanningTest(unittest.TestCase):
@@ -99,6 +102,90 @@ class PaperEvaluationPlanningTest(unittest.TestCase):
             "industry_market_cap_neutralization",
         )
         self.assertEqual(plan.factor_plans[0].evaluation_cases[0]["required_data"]["controls"], ["industry", "market_cap"])
+
+    def test_plan_selects_ic_analysis_before_portfolio_backtest(self) -> None:
+        spec = self._spec_with_cases(
+            [
+                self._case("portfolio", "layered_portfolio_backtest", {"long_short_mean": 0.01}),
+                self._case("ic", "ic_analysis", {"rank_ic_mean": 0.04}),
+            ]
+        )
+
+        plan = build_paper_evaluation_plan([spec])
+
+        factor_plan = plan.factor_plans[0]
+        self.assertEqual([case["truth_id"] for case in factor_plan.selected_evaluation_cases], ["ic"])
+        self.assertEqual(factor_plan.skipped_evaluation_cases[0]["truth_id"], "portfolio")
+        self.assertEqual(factor_plan.skipped_evaluation_cases[0]["skip_reason"], "known_method_available")
+        self.assertFalse(factor_plan.requires_paper_local_evaluator)
+
+    def test_plan_selects_ic_regression_before_ic_decay(self) -> None:
+        spec = self._spec_with_cases(
+            [
+                self._case("decay", "ic_decay", {"half_life": 12}),
+                self._case("regression", "ic_regression", {"t_abs_mean": 2.1}),
+            ]
+        )
+
+        plan = build_paper_evaluation_plan([spec])
+
+        factor_plan = plan.factor_plans[0]
+        self.assertEqual([case["truth_id"] for case in factor_plan.selected_evaluation_cases], ["regression"])
+        self.assertEqual(factor_plan.skipped_evaluation_cases[0]["truth_id"], "decay")
+
+    def test_plan_selects_no_more_than_two_methods(self) -> None:
+        spec = self._spec_with_cases(
+            [
+                self._case("ic_a", "ic_analysis", {"rank_ic_mean": 0.04}),
+                self._case("ic_b", "ic_analysis", {"rank_ic_ir": 0.31}),
+                self._case("regression", "ic_regression", {"t_abs_mean": 2.1}),
+            ]
+        )
+
+        plan = build_paper_evaluation_plan([spec])
+
+        factor_plan = plan.factor_plans[0]
+        self.assertLessEqual(len(factor_plan.selected_evaluation_cases), MAX_EVALUATION_METHODS_PER_RUN)
+        self.assertEqual([case["truth_id"] for case in factor_plan.selected_evaluation_cases], ["ic_a", "ic_b"])
+        self.assertEqual(factor_plan.skipped_evaluation_cases[0]["skip_reason"], "method_budget_exceeded")
+
+    def test_unsupported_method_becomes_implementation_target_when_no_known_method_exists(self) -> None:
+        spec = self._spec_with_cases(
+            [
+                self._case("portfolio", "layered_portfolio_backtest", {"long_short_mean": 0.01}),
+                self._case("decay", "ic_decay", {"half_life": 12}),
+            ]
+        )
+
+        plan = build_paper_evaluation_plan([spec])
+
+        factor_plan = plan.factor_plans[0]
+        self.assertEqual(plan.status, "needs_human_review")
+        self.assertTrue(factor_plan.requires_paper_local_evaluator)
+        self.assertEqual(
+            [target["evaluation_family"] for target in factor_plan.evaluator_implementation_targets],
+            ["ic_decay", "layered_portfolio_backtest"],
+        )
+        self.assertEqual(factor_plan.selected_evaluation_cases, [])
+
+    def _spec_with_cases(self, cases: list[dict[str, object]]) -> FactorResearchSpec:
+        return FactorResearchSpec(
+            factor_name="alpha_from_paper",
+            library="PaperDemo",
+            version="v0.1",
+            formula="rank(close)",
+            required_fields=["close"],
+            metadata={"selected_truth_sources": cases},
+        )
+
+    def _case(self, truth_id: str, family: str, metrics: dict[str, object]) -> dict[str, object]:
+        return {
+            "truth_id": truth_id,
+            "truth_type": "evaluation_results",
+            "evaluation_family": family,
+            "evaluation_method": f"{family} method",
+            "metrics": metrics,
+        }
 
 
 if __name__ == "__main__":

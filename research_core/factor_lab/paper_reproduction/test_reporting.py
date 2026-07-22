@@ -86,6 +86,20 @@ class PaperReproductionReportingTest(unittest.TestCase):
                     evaluation_features=["rank_ic"],
                     forward_return_periods=[1],
                     truth_source_ids=["table_3_eval"],
+                    selected_evaluation_cases=[
+                        {
+                            "truth_id": "table_3_eval",
+                            "evaluation_family": "ic_analysis",
+                            "defaulted_transform_steps": ["winsorization"],
+                        }
+                    ],
+                    skipped_evaluation_cases=[
+                        {
+                            "truth_id": "table_4_portfolio",
+                            "evaluation_family": "layered_portfolio_backtest",
+                            "skip_reason": "known_method_available",
+                        }
+                    ],
                 )
             ],
         )
@@ -115,6 +129,9 @@ class PaperReproductionReportingTest(unittest.TestCase):
         self.assertEqual(report["factors"][0]["truth_results"][0]["status"], "acceptable")
         self.assertEqual(report["factors"][0]["data_requirements"]["evaluation_required_fields"], ["forward_return_1d"])
         self.assertEqual(report["factors"][0]["evaluation_cases"][0]["evaluation_family"], "ic_analysis")
+        self.assertEqual(report["factors"][0]["selected_evaluation_cases"][0]["truth_id"], "table_3_eval")
+        self.assertEqual(report["factors"][0]["skipped_evaluation_cases"][0]["skip_reason"], "known_method_available")
+        self.assertEqual(report["factors"][0]["defaulted_transform_assumptions"], ["winsorization"])
         self.assertEqual(report["factors"][0]["known_limitations"], ["Paper reports aggregate evaluation metrics only."])
         self.assertIn("input_panel", report["artifacts"])
 
@@ -131,6 +148,8 @@ class PaperReproductionReportingTest(unittest.TestCase):
         self.assertIn("paper_alpha_1", markdown)
         self.assertIn("Do not claim full reproduction", markdown)
         self.assertIn("Evaluation Truth", markdown)
+        self.assertIn("Selected Evaluation Methods", markdown)
+        self.assertIn("Defaulted Transform Assumptions", markdown)
 
     def test_export_report_writes_json_and_markdown(self) -> None:
         report = build_paper_reproduction_report(
