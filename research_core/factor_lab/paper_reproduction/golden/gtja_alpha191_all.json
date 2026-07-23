@@ -2064,22 +2064,18 @@
       "factor_name": "Alpha48",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "(-1*((RANK(((SIGN((CLOSE - DELAY(CLOSE, 1))) + SIGN((DELAY(CLOSE, 1) - DELAY(CLOSE, 2)))) + SIGN((DELAY(CLOSE, 2) - DELAY(CLOSE, 3)))))) * SUM(VOLUME, 5)) / SUM(VOLUME, 20)) SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(L",
+        "formula": "(-1*((RANK(((SIGN((CLOSE - DELAY(CLOSE, 1))) + SIGN((DELAY(CLOSE, 1) - DELAY(CLOSE, 2)))) + SIGN((DELAY(CLOSE, 2) - DELAY(CLOSE, 3)))))) * SUM(VOLUME, 5)) / SUM(VOLUME, 20))",
         "formula_source_locations": [
           "Table 6"
         ],
         "formula_required_fields": [
-          "HIGH",
-          "LOW",
           "CLOSE",
           "VOLUME"
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -2089,7 +2085,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "(-1*((RANK(((SIGN((CLOSE - DELAY(CLOSE, 1))) + SIGN((DELAY(CLOSE, 1) - DELAY(CLOSE, 2)))) + SIGN((DELAY(CLOSE, 2) - DELAY(CLOSE, 3)))))) * SUM(VOLUME, 5)) / SUM(VOLUME, 20)) SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(L"
+            "formula": "(-1*((RANK(((SIGN((CLOSE - DELAY(CLOSE, 1))) + SIGN((DELAY(CLOSE, 1) - DELAY(CLOSE, 2)))) + SIGN((DELAY(CLOSE, 2) - DELAY(CLOSE, 3)))))) * SUM(VOLUME, 5)) / SUM(VOLUME, 20))"
           }
         }
       ]
@@ -2098,7 +2094,7 @@
       "factor_name": "Alpha49",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "OW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HI GH,1)),ABS(LOW-DELAY(LOW,1)))),12)) SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(L",
+        "formula": "SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12))",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -2108,10 +2104,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -2121,7 +2115,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "OW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HI GH,1)),ABS(LOW-DELAY(LOW,1)))),12)) SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(L"
+            "formula": "SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12))"
           }
         }
       ]
@@ -2130,7 +2124,7 @@
       "factor_name": "Alpha50",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "OW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HI GH,1)),ABS(LOW-DELAY(LOW,1)))),12))-SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HI GH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0: MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELA Y(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)) SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(L",
+        "formula": "SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12))-SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12))",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -2140,10 +2134,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -2153,7 +2145,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "OW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HI GH,1)),ABS(LOW-DELAY(LOW,1)))),12))-SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HI GH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0: MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELA Y(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)) SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(L"
+            "formula": "SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12))-SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12))"
           }
         }
       ]
@@ -2162,7 +2154,7 @@
       "factor_name": "Alpha51",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "OW,1)))),12)/(SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HI GH,1)),ABS(LOW-DELAY(LOW,1)))),12))",
+        "formula": "SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12))",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -2172,10 +2164,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -2185,7 +2175,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "OW,1)))),12)/(SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HI GH,1)),ABS(LOW-DELAY(LOW,1)))),12))"
+            "formula": "SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)/(SUM(((HIGH+LOW)<=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12)+SUM(((HIGH+LOW)>=(DELAY(HIGH,1)+DELAY(LOW,1))?0:MAX(ABS(HIGH-DELAY(HIGH,1)),ABS(LOW-DELAY(LOW,1)))),12))"
           }
         }
       ]
@@ -2194,7 +2184,7 @@
       "factor_name": "Alpha52",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "SUM(MAX(0,HIGH-DELAY((HIGH+LOW+CLOSE)/3,1)),26)/SUM(MAX(0,DELAY((HIGH+LOW+CLOSE)/3,1)-L),26)*",
+        "formula": "SUM(MAX(0,HIGH-DELAY((HIGH+LOW+CLOSE)/3,1)),26)/SUM(MAX(0,DELAY((HIGH+LOW+CLOSE)/3,1)-L),26)*100",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -2205,9 +2195,9 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
+        "formula_audit_status": "text_extracted",
         "formula_audit_notes": [
-          "requires_visual_formula_audit"
+          "paper_or_ocr_spelling_preserved"
         ]
       },
       "evaluation_cases": [
@@ -2218,7 +2208,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "SUM(MAX(0,HIGH-DELAY((HIGH+LOW+CLOSE)/3,1)),26)/SUM(MAX(0,DELAY((HIGH+LOW+CLOSE)/3,1)-L),26)*"
+            "formula": "SUM(MAX(0,HIGH-DELAY((HIGH+LOW+CLOSE)/3,1)),26)/SUM(MAX(0,DELAY((HIGH+LOW+CLOSE)/3,1)-L),26)*100"
           }
         }
       ]
@@ -2227,7 +2217,7 @@
       "factor_name": "Alpha53",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "100 COUNT(CLOSE>DELAY(CLOSE,1),12)/12*100",
+        "formula": "COUNT(CLOSE>DELAY(CLOSE,1),12)/12*100",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -2247,7 +2237,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "100 COUNT(CLOSE>DELAY(CLOSE,1),12)/12*100"
+            "formula": "COUNT(CLOSE>DELAY(CLOSE,1),12)/12*100"
           }
         }
       ]
@@ -2256,22 +2246,18 @@
       "factor_name": "Alpha54",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "(-1 * RANK((STD(ABS(CLOSE - OPEN)) + (CLOSE - OPEN)) + CORR(CLOSE, OPEN,10))) SUM(16*(CLOSE-DELAY(CLOSE,1)+(CLOSE-OPEN)/2+DELAY(CLOSE,1)-DELAY(OPEN,1))/((ABS(HIGH-DELAY(CLOSE,1))>ABS(LOW-DELAY(CLOSE,1)) & ABS(HIGH-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1))?ABS(HIGH-DELAY(CLOSE,1))+ABS(LOW-DELAY(CLOS",
+        "formula": "(-1 * RANK((STD(ABS(CLOSE - OPEN)) + (CLOSE - OPEN)) + CORR(CLOSE, OPEN,10)))",
         "formula_source_locations": [
           "Table 6"
         ],
         "formula_required_fields": [
           "OPEN",
-          "HIGH",
-          "LOW",
           "CLOSE"
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -2281,7 +2267,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "(-1 * RANK((STD(ABS(CLOSE - OPEN)) + (CLOSE - OPEN)) + CORR(CLOSE, OPEN,10))) SUM(16*(CLOSE-DELAY(CLOSE,1)+(CLOSE-OPEN)/2+DELAY(CLOSE,1)-DELAY(OPEN,1))/((ABS(HIGH-DELAY(CLOSE,1))>ABS(LOW-DELAY(CLOSE,1)) & ABS(HIGH-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1))?ABS(HIGH-DELAY(CLOSE,1))+ABS(LOW-DELAY(CLOS"
+            "formula": "(-1 * RANK((STD(ABS(CLOSE - OPEN)) + (CLOSE - OPEN)) + CORR(CLOSE, OPEN,10)))"
           }
         }
       ]
@@ -2290,7 +2276,7 @@
       "factor_name": "Alpha55",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "E,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:(ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1)) & ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(CLOSE,1))?ABS(LOW-DELAY(CLOSE,1))+ABS(HIGH-DELAY(CLO SE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:ABS(HIGH-DELAY(LOW,1))+ABS(DELAY(CLOSE,1)-DELAY(OP EN,1))/4)))*MAX(ABS(HIGH-DELAY(CLOSE,1)),ABS(LOW-DELAY(CLOSE,1))),20)",
+        "formula": "SUM(16*(CLOSE-DELAY(CLOSE,1)+(CLOSE-OPEN)/2+DELAY(CLOSE,1)-DELAY(OPEN,1))/((ABS(HIGH-DELAY(CLOSE,1))>ABS(LOW-DELAY(CLOSE,1)) & ABS(HIGH-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1))?ABS(HIGH-DELAY(CLOSE,1))+ABS(LOW-DELAY(CLOSE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:(ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1)) & ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(CLOSE,1))?ABS(LOW-DELAY(CLOSE,1))+ABS(HIGH-DELAY(CLOSE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:ABS(HIGH-DELAY(LOW,1))+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4)))*MAX(ABS(HIGH-DELAY(CLOSE,1)),ABS(LOW-DELAY(CLOSE,1))),20)",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -2302,10 +2288,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -2315,7 +2299,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "E,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:(ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1)) & ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(CLOSE,1))?ABS(LOW-DELAY(CLOSE,1))+ABS(HIGH-DELAY(CLO SE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:ABS(HIGH-DELAY(LOW,1))+ABS(DELAY(CLOSE,1)-DELAY(OP EN,1))/4)))*MAX(ABS(HIGH-DELAY(CLOSE,1)),ABS(LOW-DELAY(CLOSE,1))),20)"
+            "formula": "SUM(16*(CLOSE-DELAY(CLOSE,1)+(CLOSE-OPEN)/2+DELAY(CLOSE,1)-DELAY(OPEN,1))/((ABS(HIGH-DELAY(CLOSE,1))>ABS(LOW-DELAY(CLOSE,1)) & ABS(HIGH-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1))?ABS(HIGH-DELAY(CLOSE,1))+ABS(LOW-DELAY(CLOSE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:(ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1)) & ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(CLOSE,1))?ABS(LOW-DELAY(CLOSE,1))+ABS(HIGH-DELAY(CLOSE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:ABS(HIGH-DELAY(LOW,1))+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4)))*MAX(ABS(HIGH-DELAY(CLOSE,1)),ABS(LOW-DELAY(CLOSE,1))),20)"
           }
         }
       ]
@@ -4837,24 +4821,19 @@
       "factor_name": "Alpha136",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "((-1 * RANK(DELTA(RET, 3))) * CORR(OPEN, VOLUME, 10)) 16*(CLOSE-DELAY(CLOSE,1)+(CLOSE-OPEN)/2+DELAY(CLOSE,1)-DELAY(OPEN,1))/((ABS(HIGH-DELAY(CLOSE, 1))>ABS(LOW-DELAY(CLOSE,1)) & ABS(HIGH-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1))?ABS(HIGH-DELAY(CLOSE,1))+ABS(LOW-DELAY(CLOS",
+        "formula": "((-1 * RANK(DELTA(RET, 3))) * CORR(OPEN, VOLUME, 10))",
         "formula_source_locations": [
           "Table 6"
         ],
         "formula_required_fields": [
           "OPEN",
-          "HIGH",
-          "LOW",
-          "CLOSE",
           "VOLUME",
           "RET"
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -4864,7 +4843,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "((-1 * RANK(DELTA(RET, 3))) * CORR(OPEN, VOLUME, 10)) 16*(CLOSE-DELAY(CLOSE,1)+(CLOSE-OPEN)/2+DELAY(CLOSE,1)-DELAY(OPEN,1))/((ABS(HIGH-DELAY(CLOSE, 1))>ABS(LOW-DELAY(CLOSE,1)) & ABS(HIGH-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1))?ABS(HIGH-DELAY(CLOSE,1))+ABS(LOW-DELAY(CLOS"
+            "formula": "((-1 * RANK(DELTA(RET, 3))) * CORR(OPEN, VOLUME, 10))"
           }
         }
       ]
@@ -4873,7 +4852,7 @@
       "factor_name": "Alpha137",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "E,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:(ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1)) & ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(CLOSE,1))?ABS(LOW-DELAY(CLOSE,1))+ABS(HIGH-DELAY(CLO SE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:ABS(HIGH-DELAY(LOW,1))+ABS(DELAY(CLOSE,1)-DELAY(OP EN,1))/4)))*MAX(ABS(HIGH-DELAY(CLOSE,1)),ABS(LOW-DELAY(CLOSE,1)))",
+        "formula": "16*(CLOSE-DELAY(CLOSE,1)+(CLOSE-OPEN)/2+DELAY(CLOSE,1)-DELAY(OPEN,1))/((ABS(HIGH-DELAY(CLOSE,1))>ABS(LOW-DELAY(CLOSE,1)) & ABS(HIGH-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1))?ABS(HIGH-DELAY(CLOSE,1))+ABS(LOW-DELAY(CLOSE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:(ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1)) & ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(CLOSE,1))?ABS(LOW-DELAY(CLOSE,1))+ABS(HIGH-DELAY(CLOSE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:ABS(HIGH-DELAY(LOW,1))+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4)))*MAX(ABS(HIGH-DELAY(CLOSE,1)),ABS(LOW-DELAY(CLOSE,1)))",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -4885,10 +4864,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -4898,7 +4875,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "E,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:(ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1)) & ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(CLOSE,1))?ABS(LOW-DELAY(CLOSE,1))+ABS(HIGH-DELAY(CLO SE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:ABS(HIGH-DELAY(LOW,1))+ABS(DELAY(CLOSE,1)-DELAY(OP EN,1))/4)))*MAX(ABS(HIGH-DELAY(CLOSE,1)),ABS(LOW-DELAY(CLOSE,1)))"
+            "formula": "16*(CLOSE-DELAY(CLOSE,1)+(CLOSE-OPEN)/2+DELAY(CLOSE,1)-DELAY(OPEN,1))/((ABS(HIGH-DELAY(CLOSE,1))>ABS(LOW-DELAY(CLOSE,1)) & ABS(HIGH-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1))?ABS(HIGH-DELAY(CLOSE,1))+ABS(LOW-DELAY(CLOSE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:(ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(LOW,1)) & ABS(LOW-DELAY(CLOSE,1))>ABS(HIGH-DELAY(CLOSE,1))?ABS(LOW-DELAY(CLOSE,1))+ABS(HIGH-DELAY(CLOSE,1))/2+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4:ABS(HIGH-DELAY(LOW,1))+ABS(DELAY(CLOSE,1)-DELAY(OPEN,1))/4)))*MAX(ABS(HIGH-DELAY(CLOSE,1)),ABS(LOW-DELAY(CLOSE,1)))"
           }
         }
       ]
@@ -5129,21 +5106,17 @@
       "factor_name": "Alpha145",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "(MEAN(VOLUME,9)-MEAN(VOLUME,26))/MEAN(VOLUME,12)*100 MEAN((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2),20)*(( CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2))/SMA(((CLOS",
+        "formula": "(MEAN(VOLUME,9)-MEAN(VOLUME,26))/MEAN(VOLUME,12)*100",
         "formula_source_locations": [
           "Table 6"
         ],
         "formula_required_fields": [
-          "CLOSE",
           "VOLUME"
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "paper_or_ocr_spelling_preserved",
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -5153,7 +5126,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "(MEAN(VOLUME,9)-MEAN(VOLUME,26))/MEAN(VOLUME,12)*100 MEAN((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2),20)*(( CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2))/SMA(((CLOS"
+            "formula": "(MEAN(VOLUME,9)-MEAN(VOLUME,26))/MEAN(VOLUME,12)*100"
           }
         }
       ]
@@ -5162,7 +5135,7 @@
       "factor_name": "Alpha146",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "E-DELAY(CLOSE,1))/DELAY(CLOSE,1)-((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE, 1))/DELAY(CLOSE,1),61,2)))^2,60);",
+        "formula": "MEAN((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2),20)*((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2))/SMA(((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2)))^2,60)",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -5171,11 +5144,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "paper_or_ocr_spelling_preserved",
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -5185,7 +5155,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "E-DELAY(CLOSE,1))/DELAY(CLOSE,1)-((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE, 1))/DELAY(CLOSE,1),61,2)))^2,60);"
+            "formula": "MEAN((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2),20)*((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2))/SMA(((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)-SMA((CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1),61,2)))^2,60)"
           }
         }
       ]
@@ -5536,7 +5506,7 @@
       "factor_name": "Alpha158",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "((HIGH-SMA(CLOSE,15,2))-(LOW-SMA(CLOSE,15,2)))/CLOSE ((CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),6))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CLOSE,1)),6) *12*24+(CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),12))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CL",
+        "formula": "((HIGH-SMA(CLOSE,15,2))-(LOW-SMA(CLOSE,15,2)))/CLOSE",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -5547,11 +5517,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "paper_or_ocr_spelling_preserved",
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -5561,7 +5528,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "((HIGH-SMA(CLOSE,15,2))-(LOW-SMA(CLOSE,15,2)))/CLOSE ((CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),6))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CLOSE,1)),6) *12*24+(CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),12))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CL"
+            "formula": "((HIGH-SMA(CLOSE,15,2))-(LOW-SMA(CLOSE,15,2)))/CLOSE"
           }
         }
       ]
@@ -5570,20 +5537,20 @@
       "factor_name": "Alpha159",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "OSE,1)),12)*6*24+(CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),24))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,D",
+        "formula": "((CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),6))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CLOSE,1)),6)*12*24+(CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),12))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CLOSE,1)),12)*6*24+(CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),24))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CLOSE,1)),24)*6*24)*100/(6*12+6*24+12*24)",
         "formula_source_locations": [
           "Table 6"
         ],
         "formula_required_fields": [
+          "HIGH",
           "LOW",
           "CLOSE"
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
+        "formula_audit_status": "text_extracted",
         "formula_audit_notes": [
-          "paper_or_ocr_spelling_preserved",
-          "requires_visual_formula_audit"
+          "paper_or_ocr_spelling_preserved"
         ]
       },
       "evaluation_cases": [
@@ -5594,7 +5561,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "OSE,1)),12)*6*24+(CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),24))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,D"
+            "formula": "((CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),6))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CLOSE,1)),6)*12*24+(CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),12))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CLOSE,1)),12)*6*24+(CLOSE-SUM(MIN(LOW,DELAY(CLOSE,1)),24))/SUM(MAX(HGIH,DELAY(CLOSE,1))-MIN(LOW,DELAY(CLOSE,1)),24)*6*24)*100/(6*12+6*24+12*24)"
           }
         }
       ]
@@ -5603,7 +5570,7 @@
       "factor_name": "Alpha160",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "ELAY(CLOSE,1)),24)*6*24)*100/(6*12+6*24+12*24) SMA((CLOSE<=DELAY(CLOSE,1)?STD(CLOSE,20):0),20,1)",
+        "formula": "SMA((CLOSE<=DELAY(CLOSE,1)?STD(CLOSE,20):0),20,1)",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -5612,11 +5579,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "paper_or_ocr_spelling_preserved",
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -5626,7 +5590,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "ELAY(CLOSE,1)),24)*6*24)*100/(6*12+6*24+12*24) SMA((CLOSE<=DELAY(CLOSE,1)?STD(CLOSE,20):0),20,1)"
+            "formula": "SMA((CLOSE<=DELAY(CLOSE,1)?STD(CLOSE,20):0),20,1)"
           }
         }
       ]
@@ -5635,7 +5599,7 @@
       "factor_name": "Alpha161",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "MEAN(MAX(MAX((HIGH-LOW),ABS(DELAY(CLOSE,1)-HIGH)),ABS(DELAY(CLOSE,1)-LOW)),12) (SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100-MIN(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12))/(MAX(SMA(MAX(CLOSE-DELAY(C",
+        "formula": "MEAN(MAX(MAX((HIGH-LOW),ABS(DELAY(CLOSE,1)-HIGH)),ABS(DELAY(CLOSE,1)-LOW)),12)",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -5646,11 +5610,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "paper_or_ocr_spelling_preserved",
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -5660,7 +5621,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "MEAN(MAX(MAX((HIGH-LOW),ABS(DELAY(CLOSE,1)-HIGH)),ABS(DELAY(CLOSE,1)-LOW)),12) (SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100-MIN(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12))/(MAX(SMA(MAX(CLOSE-DELAY(C"
+            "formula": "MEAN(MAX(MAX((HIGH-LOW),ABS(DELAY(CLOSE,1)-HIGH)),ABS(DELAY(CLOSE,1)-LOW)),12)"
           }
         }
       ]
@@ -5669,7 +5630,7 @@
       "factor_name": "Alpha162",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "LOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12)-MIN(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,",
+        "formula": "(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100-MIN(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12))/(MAX(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12)-MIN(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12))",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -5678,11 +5639,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "paper_or_ocr_spelling_preserved",
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -5692,7 +5650,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "LOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12)-MIN(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,"
+            "formula": "(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100-MIN(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12))/(MAX(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12)-MIN(SMA(MAX(CLOSE-DELAY(CLOSE,1),0),12,1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12))"
           }
         }
       ]
@@ -5701,7 +5659,7 @@
       "factor_name": "Alpha163",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12)) RANK(((((-1 * RET) * MEAN(VOLUME,20)) * VWAP) * (HIGH - CLOSE)))",
+        "formula": "RANK(((((-1 * RET) * MEAN(VOLUME,20)) * VWAP) * (HIGH - CLOSE)))",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -5714,11 +5672,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "paper_or_ocr_spelling_preserved",
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -5728,7 +5683,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "1)/SMA(ABS(CLOSE-DELAY(CLOSE,1)),12,1)*100,12)) RANK(((((-1 * RET) * MEAN(VOLUME,20)) * VWAP) * (HIGH - CLOSE)))"
+            "formula": "RANK(((((-1 * RET) * MEAN(VOLUME,20)) * VWAP) * (HIGH - CLOSE)))"
           }
         }
       ]
@@ -6394,23 +6349,18 @@
       "factor_name": "Alpha185",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "RANK((-1 * ((1 - (OPEN / CLOSE))^2))) (MEAN(ABS(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)-SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))/(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)+SUM((HD>0 &",
+        "formula": "RANK((-1 * ((1 - (OPEN / CLOSE))^2)))",
         "formula_source_locations": [
           "Table 6"
         ],
         "formula_required_fields": [
           "OPEN",
-          "CLOSE",
-          "TR",
-          "HD",
-          "LD"
+          "CLOSE"
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -6420,7 +6370,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "RANK((-1 * ((1 - (OPEN / CLOSE))^2))) (MEAN(ABS(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)-SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))/(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)+SUM((HD>0 &"
+            "formula": "RANK((-1 * ((1 - (OPEN / CLOSE))^2)))"
           }
         }
       ]
@@ -6429,7 +6379,7 @@
       "factor_name": "Alpha186",
       "description": "Short-cycle daily price-volume alpha factor from GTJA Table 6.",
       "formula_definition": {
-        "formula": "HD>LD)?HD:0,14)*100/SUM(TR,14))*100,6)+DELAY(MEAN(ABS(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)-SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))/(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)+SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))*100,6),6))/2",
+        "formula": "(MEAN(ABS(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)-SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))/(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)+SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))*100,6)+DELAY(MEAN(ABS(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)-SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))/(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)+SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))*100,6),6))/2",
         "formula_source_locations": [
           "Table 6"
         ],
@@ -6440,10 +6390,8 @@
         ],
         "parameters": {},
         "frequency": "day",
-        "formula_audit_status": "needs_review",
-        "formula_audit_notes": [
-          "requires_visual_formula_audit"
-        ]
+        "formula_audit_status": "text_extracted",
+        "formula_audit_notes": []
       },
       "evaluation_cases": [
         {
@@ -6453,7 +6401,7 @@
           "evaluation_family": "formula_extraction",
           "transform_spec_id": "raw_formula_value",
           "paper_truth": {
-            "formula": "HD>LD)?HD:0,14)*100/SUM(TR,14))*100,6)+DELAY(MEAN(ABS(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)-SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))/(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)+SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))*100,6),6))/2"
+            "formula": "(MEAN(ABS(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)-SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))/(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)+SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))*100,6)+DELAY(MEAN(ABS(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)-SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))/(SUM((LD>0 & LD>HD)?LD:0,14)*100/SUM(TR,14)+SUM((HD>0 & HD>LD)?HD:0,14)*100/SUM(TR,14))*100,6),6))/2"
           }
         }
       ]

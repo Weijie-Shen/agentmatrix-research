@@ -1,6 +1,48 @@
-# Paper Factor Reproduction — Quant API Integration Notes
+# Paper Factor Reproduction — Data Access Notes
 
-These notes explain how the paper-factor-reproduction workflow should connect to the Quant API v2 data source when real input panels are needed.
+These notes explain how the paper-factor-reproduction workflow should access real input panels. Prefer explicit user-provided artifacts first, then `/Users/mac/recommended_data`, then Quant API v2 only as a fallback.
+
+## Preferred local source
+
+Use `/Users/mac/recommended_data` before API access. It contains curated Parquet files:
+
+| File | Use |
+|---|---|
+| `kline_adj.parquet` | daily OHLCV, amount, adjustment factors, adjusted OHLC |
+| `security_status.parquet` | trading, ST, suspension, and price-limit status |
+| `market_cap_full.parquet` | daily market capitalization |
+| `calendar.parquet` | trading calendar |
+| `stock_info.parquet` | security master |
+| `income_stmt.parquet` / `balance_sheet.parquet` | point-in-time fundamentals |
+| `dividend_yield_v2.parquet` | daily dividend yield |
+
+Recommended helper:
+
+```python
+from research_core.factor_lab.paper_reproduction.recommended_data import (
+    apply_a_share_recommended_filters,
+    load_recommended_daily_panel,
+)
+
+panel = load_recommended_daily_panel(
+    start_date="2020-01-02",
+    end_date="2026-04-09",
+    adjusted=True,
+    include_status=True,
+    include_market_cap=True,
+)
+panel = apply_a_share_recommended_filters(panel)
+```
+
+This returns Factor Lab-style daily columns such as:
+
+```text
+date, code, open, high, low, close, volume, amount
+```
+
+with optional `is_trading`, `is_st`, `is_suspended`, limit flags, and `market_cap`.
+
+## Quant API fallback
 
 ## Security rule
 
@@ -12,9 +54,9 @@ Recommended environment variable:
 export QUANT_API_TOKEN="sk-..."
 ```
 
-## Required preflight
+## Required API preflight
 
-Before using data endpoints, verify connectivity and available sources:
+Before using API data endpoints, verify connectivity and available sources:
 
 ```python
 import os
@@ -37,9 +79,9 @@ ch = call("/ch")
 
 If `/whoami` fails with 401, stop and ask for a valid admin token.
 
-## Mapping extracted data requirements to Quant API data
+## Mapping extracted data requirements to API data
 
-For daily price-volume factors, prefer `ods_kline_1d`.
+For daily price-volume factors not covered by `/Users/mac/recommended_data`, prefer API table `ods_kline_1d`.
 
 Expected normalized input columns for Factor Lab:
 
