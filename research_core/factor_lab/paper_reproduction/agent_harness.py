@@ -184,7 +184,7 @@ Paper ID:
 - Use paper-reported `evaluation_results` only as truth.
 - Do not use paper factor-value truth matching.
 - Keep raw factor definitions separate from evaluation-case transforms, neutralization, return horizons, portfolio rules, and evaluation-required data.
-- Always inspect `/Users/mac/recommended_data` before using Quant API v2 or declaring `blocked_by_data` when real data is needed.
+- Always inspect `/Users/mac/recommended_data_v2` before using Quant API v2 or declaring `blocked_by_data` when real data is needed.
 - Use Quant API v2 only when the recommended local data folder cannot satisfy the paper's required fields/date window.
 - If formulas, preprocessing, neutralization, evaluation method, or data are ambiguous, record the blocker and stop at the correct gate.
 - Export extraction/spec/pipeline/report artifacts under the repo's Factor Lab runtime paths.

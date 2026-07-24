@@ -102,7 +102,7 @@ I am attaching a paper. Run the paper reproduction workflow for selected factors
 
 Use paper-reported evaluation results only as truth.
 Do not use factor-value truth matching.
-Always inspect `/Users/mac/recommended_data` before Quant API v2 or declaring blocked_by_data.
+Always inspect `/Users/mac/recommended_data_v2` before Quant API v2 or declaring blocked_by_data.
 If formulas, preprocessing, neutralization, evaluation method, or data are ambiguous, record the blocker in a markdown issue log and stop at the correct gate.
 ```
 

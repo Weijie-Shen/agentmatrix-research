@@ -135,7 +135,7 @@ Missing daily factor values, per-date IC series, or machine-readable portfolio c
 
 Use `needs_human_review` when a required paper method is missing or ambiguous.
 
-Use `blocked_by_data` when required data is unavailable after checking the available data path, including `/Users/mac/recommended_data` first and Quant API v2 only as a fallback when applicable.
+Use `blocked_by_data` when required data is unavailable after checking the available data path, including `/Users/mac/recommended_data_v2` first and Quant API v2 only as a fallback when applicable.
 
 ### 5. Stage 4 Starts With Readiness, Not Code
 
@@ -680,19 +680,21 @@ The paper does not provide per-factor evaluation tables. Aggregate evaluation me
 
 ## Recommended Local Data Notes
 
-Use `/Users/mac/recommended_data` before Quant API v2 when real data is needed.
+Use `/Users/mac/recommended_data_v2` before Quant API v2 when real data is needed.
 
 Curated files:
 
 ```text
-kline_adj.parquet          daily OHLCV, amount, adjustment factors, adjusted OHLC
-security_status.parquet    trading/ST/suspension/limit status
-market_cap_full.parquet    daily market capitalization
-calendar.parquet           trading calendar
-stock_info.parquet         security master
-income_stmt.parquet        point-in-time income values
+kline_daily_adjusted.parquet      daily OHLCV, amount, adjustment factors, adjusted OHLC
+security_status_through_2026-04-09.parquet
+                                  trading/ST/suspension/limit status
+market_cap.parquet               daily market capitalization
+trading_calendar.parquet          trading calendar
+security_master.parquet           security master
+income_statement.parquet          point-in-time income values
 balance_sheet.parquet      point-in-time balance-sheet values
-dividend_yield_v2.parquet  daily dividend yield
+dividend_yield.parquet     daily dividend yield
+industry_map.parquet       current industry mapping snapshot
 ```
 
 Daily panel helper:
@@ -709,20 +711,21 @@ panel = load_recommended_daily_panel(
     adjusted=True,
     include_status=True,
     include_market_cap=True,
+    include_industry=True,
 )
 panel = apply_a_share_recommended_filters(panel)
 ```
 
 Coverage notes:
 
-- `kline_adj.parquet`, `security_status.parquet`, and `calendar.parquet` cover roughly 2020-01-02 to 2026-04-09.
-- `market_cap_full.parquet` covers roughly 2017-01-03 to 2025-12-31.
-- `income_stmt.parquet`, `balance_sheet.parquet`, and `dividend_yield_v2.parquet` include data back to 2010.
-- Market-cap identifiers use `000001.XSHE`/`600000.XSHG`; normalize to `000001.SZ`/`600000.SH` before joining.
+- `kline_daily_adjusted.parquet` and `trading_calendar.parquet` cover roughly 2010-01-04 to 2026-07-22.
+- `security_status_through_2026-04-09.parquet` covers historical status through 2026-04-09; `st_status_recent_2026-07.parquet` is a recent ST-only supplement.
+- `market_cap.parquet` covers roughly 2017-01-03 to 2025-12-31 and already uses normalized `SZ/SH` symbols.
+- `income_statement.parquet`, `balance_sheet.parquet`, and `dividend_yield.parquet` include data back to 2010.
 
 ## Quant API v2 Data Notes
 
-Quant API v2 is now a fallback when no explicit artifact or `/Users/mac/recommended_data` file can satisfy the required fields/date window.
+Quant API v2 is now a fallback when no explicit artifact or `/Users/mac/recommended_data_v2` file can satisfy the required fields/date window.
 
 Base URL:
 

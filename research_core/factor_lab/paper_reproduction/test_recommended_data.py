@@ -23,13 +23,13 @@ class RecommendedDataHelperTest(unittest.TestCase):
     def test_manifest_and_availability_detect_curated_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
-            (root / "MANIFEST.csv").write_text("file,purpose\nkline_adj.parquet,Daily bars\n", encoding="utf-8")
-            pd.DataFrame({"symbol": []}).to_parquet(root / "kline_adj.parquet")
+            (root / "MANIFEST.json").write_text('[{"file": "kline_daily_adjusted.parquet", "rows": 0}]', encoding="utf-8")
+            pd.DataFrame({"symbol": []}).to_parquet(root / "kline_daily_adjusted.parquet")
             config = RecommendedDataConfig(data_dir=root)
 
             self.assertTrue(recommended_data_available(config))
             manifest = load_recommended_data_manifest(config)
-            self.assertEqual(manifest["file"].tolist(), ["kline_adj.parquet"])
+            self.assertEqual(manifest["file"].tolist(), ["kline_daily_adjusted.parquet"])
 
     def test_normalize_recommended_daily_kline_uses_adjusted_prices_by_default(self) -> None:
         raw = pd.DataFrame(
@@ -79,13 +79,16 @@ class RecommendedDataHelperTest(unittest.TestCase):
                 symbols=["000001.SZ", "000002.SZ"],
                 include_status=True,
                 include_market_cap=True,
+                include_industry=True,
                 config=RecommendedDataConfig(data_dir=root),
             )
 
             self.assertEqual(panel["code"].tolist(), ["000001.SZ", "000002.SZ"])
             self.assertIn("is_st", panel.columns)
             self.assertIn("market_cap", panel.columns)
+            self.assertIn("industry", panel.columns)
             self.assertEqual(panel.loc[panel["code"] == "000001.SZ", "market_cap"].tolist(), [100.0])
+            self.assertEqual(panel.loc[panel["code"] == "000001.SZ", "industry"].tolist(), ["bank"])
 
     def test_add_next_suspension_flag_and_a_share_filter_use_next_day_suspension(self) -> None:
         status = pd.DataFrame(
@@ -135,7 +138,7 @@ class RecommendedDataHelperTest(unittest.TestCase):
                 "low_adj": [9.0, 19.0],
                 "close_adj": [10.5, 20.5],
             }
-        ).to_parquet(root / "kline_adj.parquet")
+        ).to_parquet(root / "kline_daily_adjusted.parquet")
         pd.DataFrame(
             {
                 "symbol": ["000001.SZ", "000002.SZ"],
@@ -147,14 +150,20 @@ class RecommendedDataHelperTest(unittest.TestCase):
                 "low_limited": [0, 0],
                 "status_code": ["NORMAL", "ST"],
             }
-        ).to_parquet(root / "security_status.parquet")
+        ).to_parquet(root / "security_status_through_2026-04-09.parquet")
         pd.DataFrame(
             {"market_cap": [100.0, 200.0]},
             index=pd.MultiIndex.from_tuples(
                 [("000001.XSHE", pd.Timestamp("2020-01-02")), ("000002.XSHE", pd.Timestamp("2020-01-02"))],
                 names=["order_book_id", "date"],
             ),
-        ).to_parquet(root / "market_cap_full.parquet")
+        ).to_parquet(root / "market_cap.parquet")
+        pd.DataFrame(
+            {
+                "symbol": ["000001.SZ", "000002.SZ"],
+                "industry": ["bank", "property"],
+            }
+        ).to_parquet(root / "industry_map.parquet")
 
 
 if __name__ == "__main__":

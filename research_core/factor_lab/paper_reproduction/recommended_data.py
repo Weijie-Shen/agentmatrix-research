@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,12 @@ from typing import Any
 import pandas as pd
 
 
-DEFAULT_RECOMMENDED_DATA_DIR = Path("/Users/mac/recommended_data")
+DEFAULT_RECOMMENDED_DATA_DIR = Path("/Users/mac/recommended_data_v2")
+RECOMMENDED_MANIFEST_FILE = "MANIFEST.json"
+RECOMMENDED_KLINE_FILE = "kline_daily_adjusted.parquet"
+RECOMMENDED_STATUS_FILE = "security_status_through_2026-04-09.parquet"
+RECOMMENDED_MARKET_CAP_FILE = "market_cap.parquet"
+RECOMMENDED_INDUSTRY_FILE = "industry_map.parquet"
 
 
 @dataclass(slots=True)
@@ -26,15 +32,15 @@ class RecommendedDataConfig:
 
 def recommended_data_available(config: RecommendedDataConfig | None = None) -> bool:
     data_config = config or RecommendedDataConfig.from_env()
-    return data_config.path("MANIFEST.csv").exists() and data_config.path("kline_adj.parquet").exists()
+    return data_config.path(RECOMMENDED_MANIFEST_FILE).exists() and data_config.path(RECOMMENDED_KLINE_FILE).exists()
 
 
 def load_recommended_data_manifest(config: RecommendedDataConfig | None = None) -> pd.DataFrame:
     data_config = config or RecommendedDataConfig.from_env()
-    path = data_config.path("MANIFEST.csv")
+    path = data_config.path(RECOMMENDED_MANIFEST_FILE)
     if not path.exists():
         raise FileNotFoundError(f"recommended data manifest not found: {path}")
-    return pd.read_csv(path)
+    return pd.DataFrame(json.loads(path.read_text(encoding="utf-8")))
 
 
 def load_recommended_daily_panel(
@@ -45,13 +51,14 @@ def load_recommended_daily_panel(
     adjusted: bool = True,
     include_status: bool = False,
     include_market_cap: bool = False,
+    include_industry: bool = False,
     config: RecommendedDataConfig | None = None,
 ) -> pd.DataFrame:
     """Load a Factor Lab-style daily panel from the curated local data folder."""
 
     data_config = config or RecommendedDataConfig.from_env()
     panel = _read_recommended_kline(
-        data_config.path("kline_adj.parquet"),
+        data_config.path(RECOMMENDED_KLINE_FILE),
         start_date=start_date,
         end_date=end_date,
         symbols=symbols,
@@ -60,7 +67,7 @@ def load_recommended_daily_panel(
 
     if include_status:
         status = _read_recommended_status(
-            data_config.path("security_status.parquet"),
+            data_config.path(RECOMMENDED_STATUS_FILE),
             start_date=start_date,
             end_date=end_date,
             symbols=symbols,
@@ -69,12 +76,16 @@ def load_recommended_daily_panel(
 
     if include_market_cap:
         market_cap = _read_recommended_market_cap(
-            data_config.path("market_cap_full.parquet"),
+            data_config.path(RECOMMENDED_MARKET_CAP_FILE),
             start_date=start_date,
             end_date=end_date,
             symbols=symbols,
         )
         panel = panel.merge(market_cap, on=["date", "code"], how="left")
+
+    if include_industry:
+        industry = pd.read_parquet(data_config.path(RECOMMENDED_INDUSTRY_FILE))
+        panel = panel.merge(normalize_recommended_industry_frame(industry), on="code", how="left")
 
     return panel.sort_values(["code", "date"]).reset_index(drop=True)
 
@@ -108,6 +119,7 @@ def normalize_recommended_security_status_frame(raw_frame: pd.DataFrame) -> pd.D
         raise ValueError(f"missing recommended security status columns: {', '.join(missing)}")
     status = raw_frame.copy().rename(columns={"trade_date": "date", "symbol": "code"})
     status["date"] = pd.to_datetime(status["date"])
+    status["code"] = status["code"].map(normalize_recommended_symbol)
     columns = [
         "date",
         "code",
@@ -121,6 +133,8 @@ def normalize_recommended_security_status_frame(raw_frame: pd.DataFrame) -> pd.D
 
 def normalize_recommended_market_cap_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
     frame = raw_frame.reset_index() if isinstance(raw_frame.index, pd.MultiIndex) else raw_frame.copy()
+    if "symbol" in frame.columns and "order_book_id" not in frame.columns:
+        frame["order_book_id"] = frame["symbol"]
     required = ["order_book_id", "date", "market_cap"]
     missing = [column for column in required if column not in frame.columns]
     if missing:
@@ -128,6 +142,16 @@ def normalize_recommended_market_cap_frame(raw_frame: pd.DataFrame) -> pd.DataFr
     frame["date"] = pd.to_datetime(frame["date"])
     frame["code"] = frame["order_book_id"].map(normalize_recommended_symbol)
     return frame[["date", "code", "market_cap"]]
+
+
+def normalize_recommended_industry_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
+    required = ["symbol", "industry"]
+    missing = [column for column in required if column not in raw_frame.columns]
+    if missing:
+        raise ValueError(f"missing recommended industry columns: {', '.join(missing)}")
+    frame = raw_frame.copy()
+    frame["code"] = frame["symbol"].map(normalize_recommended_symbol)
+    return frame[["code", "industry"]]
 
 
 def add_next_suspension_flag(status_frame: pd.DataFrame) -> pd.DataFrame:

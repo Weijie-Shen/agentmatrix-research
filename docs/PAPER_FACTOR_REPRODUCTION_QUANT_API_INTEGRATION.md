@@ -1,20 +1,22 @@
 # Paper Factor Reproduction — Data Access Notes
 
-These notes explain how the paper-factor-reproduction workflow should access real input panels. Prefer explicit user-provided artifacts first, then `/Users/mac/recommended_data`, then Quant API v2 only as a fallback.
+These notes explain how the paper-factor-reproduction workflow should access real input panels. Prefer explicit user-provided artifacts first, then `/Users/mac/recommended_data_v2`, then Quant API v2 only as a fallback.
 
 ## Preferred local source
 
-Use `/Users/mac/recommended_data` before API access. It contains curated Parquet files:
+Use `/Users/mac/recommended_data_v2` before API access. Inspect `README.md` and `MANIFEST.json`; the bundle contains reviewed Parquet files:
 
 | File | Use |
 |---|---|
-| `kline_adj.parquet` | daily OHLCV, amount, adjustment factors, adjusted OHLC |
-| `security_status.parquet` | trading, ST, suspension, and price-limit status |
-| `market_cap_full.parquet` | daily market capitalization |
-| `calendar.parquet` | trading calendar |
-| `stock_info.parquet` | security master |
-| `income_stmt.parquet` / `balance_sheet.parquet` | point-in-time fundamentals |
-| `dividend_yield_v2.parquet` | daily dividend yield |
+| `kline_daily_adjusted.parquet` | daily OHLCV, amount, adjustment factors, adjusted OHLC |
+| `security_status_through_2026-04-09.parquet` | historical trading, ST, suspension, and price-limit status |
+| `st_status_recent_2026-07.parquet` | recent ST-only supplement |
+| `market_cap.parquet` | daily market capitalization |
+| `trading_calendar.parquet` | trading calendar |
+| `security_master.parquet` | security master |
+| `income_statement.parquet` / `balance_sheet.parquet` | point-in-time fundamentals |
+| `dividend_yield.parquet` | daily dividend yield |
+| `industry_map.parquet` | current industry mapping snapshot |
 
 Recommended helper:
 
@@ -30,6 +32,7 @@ panel = load_recommended_daily_panel(
     adjusted=True,
     include_status=True,
     include_market_cap=True,
+    include_industry=True,
 )
 panel = apply_a_share_recommended_filters(panel)
 ```
@@ -81,7 +84,7 @@ If `/whoami` fails with 401, stop and ask for a valid admin token.
 
 ## Mapping extracted data requirements to API data
 
-For daily price-volume factors not covered by `/Users/mac/recommended_data`, prefer API table `ods_kline_1d`.
+For daily price-volume factors not covered by `/Users/mac/recommended_data_v2`, prefer API table `ods_kline_1d`.
 
 Expected normalized input columns for Factor Lab:
 
