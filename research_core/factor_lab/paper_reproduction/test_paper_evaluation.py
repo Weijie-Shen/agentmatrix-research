@@ -160,13 +160,84 @@ class PaperEvaluationPlanningTest(unittest.TestCase):
         plan = build_paper_evaluation_plan([spec])
 
         factor_plan = plan.factor_plans[0]
-        self.assertEqual(plan.status, "needs_human_review")
+        self.assertEqual(plan.status, "ready_for_evaluation_with_limitations")
         self.assertTrue(factor_plan.requires_paper_local_evaluator)
         self.assertEqual(
             [target["evaluation_family"] for target in factor_plan.evaluator_implementation_targets],
             ["ic_decay", "layered_portfolio_backtest"],
         )
         self.assertEqual(factor_plan.selected_evaluation_cases, [])
+
+    def test_support_scoring_prefers_feasible_alternative_truth_without_mutating_source(self) -> None:
+        primary = self._case("wls", "ic_regression", {"rank_ic_mean": 0.04, "t_abs_mean": 2.0})
+        primary["required_data"] = {"evaluation": ["forward_return_20d"], "controls": ["industry"], "regression_weight": ["free_float_market_cap"]}
+        alternative = self._case("ic", "ic_analysis", {"rank_ic_mean": 0.04})
+        alternative["required_data"] = {"evaluation": ["forward_return_20d"]}
+        spec = self._spec_with_cases([primary, alternative])
+        original_primary = dict(primary)
+        profile = {
+            "columns": ["date", "code", "forward_return_20d"],
+            "missingness": {"forward_return_20d": 0.0},
+            "derived_fields": [],
+        }
+
+        plan = build_paper_evaluation_plan([spec], data_profiles={"alpha_from_paper": profile})
+
+        factor_plan = plan.factor_plans[0]
+        self.assertEqual(factor_plan.selected_evaluation_cases[0]["truth_id"], "ic")
+        self.assertEqual(factor_plan.selected_evaluation_cases[0]["selection_reason"], "highest support score among assessed truth sources")
+        self.assertEqual(factor_plan.selected_evaluation_cases[0]["lifecycle_state"], "selected")
+        self.assertEqual(primary, original_primary)
+        self.assertEqual({case["truth_id"] for case in factor_plan.assessed_evaluation_cases}, {"wls", "ic"})
+        self.assertIn("resolved_protocol", factor_plan.selected_evaluation_cases[0])
+
+    def test_selection_rule_allows_unselected_feasible_truth_source(self) -> None:
+        selected = self._case("unsupported_selected", "layered_portfolio_backtest", {"long_short_mean": 0.01})
+        fallback = self._case("feasible_ic", "ic_analysis", {"rank_ic_mean": 0.04})
+        fallback["required_data"] = {"evaluation": ["forward_return_20d"]}
+        spec = self._spec_with_cases([selected])
+        spec.metadata["truth_sources"] = [selected, fallback]
+        spec.metadata["truth_selection_rule"] = "Prefer the best-supported paper truth source available in local data."
+        profile = {"columns": ["date", "code", "forward_return_t20"], "missingness": {"forward_return_t20": 0.0}}
+
+        plan = build_paper_evaluation_plan([spec], data_profiles={"alpha_from_paper": profile})
+
+        factor_plan = plan.factor_plans[0]
+        self.assertEqual(factor_plan.selected_evaluation_cases[0]["truth_id"], "feasible_ic")
+        self.assertEqual({case["truth_id"] for case in factor_plan.assessed_evaluation_cases}, {"unsupported_selected", "feasible_ic"})
+
+    def test_resolved_case_maps_aliases_and_downgrades_unavailable_wls_weight_to_ols_proxy(self) -> None:
+        wls = self._case("table_52", "ic_regression", {"rank_ic_mean": 0.04, "t_abs_mean": 2.0})
+        wls["sample_period"] = "2010-01-04 to 2019-04-30"
+        wls["evaluation_spec"] = {
+            "return_horizon": 20,
+            "return_col": "forward_return_20d",
+            "regression_type": "wls",
+            "regression_weight": "sqrt_free_float_market_cap",
+        }
+        wls["required_data"] = {
+            "evaluation": ["forward_return_20d"],
+            "controls": ["market_cap_or_log_market_cap"],
+            "regression_weight": ["sqrt_free_float_market_cap"],
+        }
+        spec = self._spec_with_cases([wls])
+        profile = {
+            "columns": ["date", "code", "forward_return_t20", "log_market_cap"],
+            "date_min": "2017-01-03",
+            "date_max": "2019-04-30",
+            "missingness": {"forward_return_t20": 0.0, "log_market_cap": 0.0},
+        }
+
+        plan = build_paper_evaluation_plan([spec], data_profiles={"alpha_from_paper": profile})
+
+        selected = plan.factor_plans[0].selected_evaluation_cases[0]
+        self.assertEqual(selected["comparability"], "proxy")
+        self.assertEqual(selected["paper_protocol"]["evaluation_spec"]["regression_type"], "wls")
+        self.assertEqual(selected["resolved_protocol"]["evaluation_spec"]["regression_type"], "ols")
+        self.assertEqual(selected["resolved_protocol"]["evaluation_spec"]["return_col"], "forward_return_t20")
+        self.assertEqual(selected["resolved_protocol"]["evaluation_spec"]["regression_controls"], ["log_market_cap"])
+        self.assertIn("t_abs_mean", selected["diagnostic_only_metrics"])
+        self.assertIn("rank_ic_mean", selected["truth_match_eligible_metrics"])
 
     def _spec_with_cases(self, cases: list[dict[str, object]]) -> FactorResearchSpec:
         return FactorResearchSpec(

@@ -41,6 +41,8 @@ def build_paper_reproduction_report(
         for item in factor_truth_results:
             status = str(item.get("status", "unknown"))
             truth_status_counts[status] = truth_status_counts.get(status, 0) + 1
+        selected_cases = factor_evaluation_plan.get("selected_evaluation_cases", [])
+        selected_truth = selected_cases[0] if selected_cases else {}
         factor_status = str(spec_metadata.get("status", "extracted_only"))
         status_counts[factor_status] = status_counts.get(factor_status, 0) + 1
         factors.append(
@@ -53,9 +55,17 @@ def build_paper_reproduction_report(
                 "universe": factor.universe,
                 "truth_sources": [_as_plain_dict(source) for source in factor.truth_sources],
                 "evaluation_cases": [_as_plain_dict(source) for source in factor.truth_sources],
-                "selected_evaluation_cases": factor_evaluation_plan.get("selected_evaluation_cases", []),
+                "assessed_evaluation_cases": factor_evaluation_plan.get("assessed_evaluation_cases", []),
+                "selected_evaluation_cases": selected_cases,
                 "skipped_evaluation_cases": factor_evaluation_plan.get("skipped_evaluation_cases", []),
                 "unsupported_evaluation_cases": factor_evaluation_plan.get("unsupported_evaluation_cases", []),
+                "deferred_evaluation_cases": factor_evaluation_plan.get("deferred_evaluation_cases", []),
+                "selected_truth_id": selected_truth.get("source_truth_id") or selected_truth.get("truth_id", ""),
+                "selected_truth_reason": selected_truth.get("selection_reason", ""),
+                "comparability": selected_truth.get("comparability", ""),
+                "deviations": selected_truth.get("deviations", []),
+                "truth_match_eligible_metrics": selected_truth.get("truth_match_eligible_metrics", []),
+                "diagnostic_only_metrics": selected_truth.get("diagnostic_only_metrics", []),
                 "requires_paper_local_evaluator": factor_evaluation_plan.get("requires_paper_local_evaluator", False),
                 "evaluator_implementation_targets": factor_evaluation_plan.get("evaluator_implementation_targets", []),
                 "defaulted_transform_assumptions": _factor_defaulted_transform_assumptions(
@@ -73,6 +83,7 @@ def build_paper_reproduction_report(
 
     pipeline_payload = _pipeline_payload(pipeline_state)
     overall_status = _resolve_overall_status(pipeline_payload, status_counts, truth_status_counts)
+    truth_case_counts = _truth_case_counts(factors, truth_results)
     return {
         "job_id": job_id,
         "generated_at": now_iso(),
@@ -90,6 +101,8 @@ def build_paper_reproduction_report(
             "factor_count": len(factors),
             "spec_status_counts": status_counts,
             "truth_status_counts": truth_status_counts,
+            "truth_case_counts": truth_case_counts,
+            "truth_match_pass_rate": _truth_match_pass_rate(truth_case_counts),
             "pipeline_overall_status": pipeline_payload.get("overall_status"),
             "next_stage": pipeline_payload.get("next_stage"),
             "proof_language_note": "Do not claim full reproduction, zero bias, or passed proof unless evaluation-result truth checks pass under the agreed policy.",
@@ -119,6 +132,7 @@ def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
         f"- Year: {paper.get('year') or '-'}",
         f"- Factor family: {paper['factor_family_name']}",
         f"- Overall status: {summary['overall_status']}",
+        f"- Truth match pass rate: {summary.get('truth_match_pass_rate') or '-'}",
         f"- Next stage: {summary.get('next_stage') or '-'}",
         "",
         f"> {summary['proof_language_note']}",
@@ -141,7 +155,11 @@ def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
     for factor in report["factors"]:
         lines.append(f"### {factor['factor_name']}")
         lines.append("")
-        lines.append(f"- Evaluation method: {factor.get('evaluation_method') or '-'}")
+        lines.append(f"- Selected truth: {factor.get('selected_truth_id') or '-'}")
+        lines.append(f"- Selection reason: {factor.get('selected_truth_reason') or '-'}")
+        lines.append(f"- Comparability: {factor.get('comparability') or '-'}")
+        lines.append(f"- Eligible metrics: {', '.join(factor.get('truth_match_eligible_metrics', [])) or '-'}")
+        lines.append(f"- Diagnostic-only metrics: {', '.join(factor.get('diagnostic_only_metrics', [])) or '-'}")
         truth_sources = factor.get("truth_sources", [])
         if not truth_sources:
             lines.append("- Paper evaluation truth: missing")
@@ -158,6 +176,12 @@ def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
                     f"- Match result `{result.get('truth_id', '-')}`: {result.get('status', '-')} "
                     f"({result.get('diagnostics', {}).get('quality', '-')})"
                 )
+        deviations = factor.get("deviations", [])
+        for deviation in deviations:
+            lines.append(
+                f"- Deviation `{deviation.get('category', '-')}`: {deviation.get('paper_value', '-')} -> "
+                f"{deviation.get('resolved_value', '-')} ({deviation.get('severity', '-')})"
+            )
         lines.append("")
     lines.extend(["## Selected Evaluation Methods", ""])
     for factor in report["factors"]:
@@ -165,7 +189,10 @@ def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
         selected_cases = factor.get("selected_evaluation_cases", [])
         if selected_cases:
             for case in selected_cases:
-                lines.append(f"- Selected `{case.get('truth_id', '-')}`: {case.get('evaluation_family', '-')}")
+                lines.append(
+                    f"- Selected `{case.get('truth_id', '-')}`: {case.get('evaluation_family', '-')} "
+                    f"({case.get('comparability', 'exact')})"
+                )
         else:
             lines.append("- None selected for generic execution.")
         skipped_cases = factor.get("skipped_evaluation_cases", [])
@@ -181,6 +208,13 @@ def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
                 f"`{target.get('suggested_function_name', '-')}`"
             )
         lines.append("")
+    lines.extend(["## Truth Case Coverage", ""])
+    counts = report.get("summary", {}).get("truth_case_counts", {})
+    if counts:
+        lines.extend(f"- {key}: {value}" for key, value in counts.items())
+    else:
+        lines.append("- No truth case counts recorded.")
+    lines.append("")
     lines.extend(["## Defaulted Transform Assumptions", ""])
     defaulted_any = False
     for factor in report["factors"]:
@@ -246,9 +280,9 @@ def _resolve_overall_status(
 ) -> str:
     if pipeline_payload.get("overall_status"):
         return str(pipeline_payload["overall_status"])
-    if truth_status_counts.get("failed"):
+    if truth_status_counts.get("inconsistent") or truth_status_counts.get("failed"):
         return "failed"
-    if truth_status_counts.get("acceptable") or truth_status_counts.get("passed"):
+    if any(truth_status_counts.get(status) for status in ("exact_match", "approximately_consistent", "directionally_consistent", "acceptable", "passed")):
         return "paper_truth_evaluated"
     if status_counts.get("needs_human_review"):
         return "needs_human_review"
@@ -273,6 +307,11 @@ def _collect_known_gaps(factors: list[dict[str, Any]], pipeline_payload: dict[st
                     f"{factor['factor_name']} deferred {case.get('evaluation_family', 'unknown')} "
                     f"evaluation case {case.get('truth_id', '-')}: {case.get('skip_reason')}"
                 )
+        for deviation in factor.get("deviations", []):
+            gaps.append(
+                f"{factor['factor_name']} deviation {deviation.get('category', 'unknown')}: "
+                f"{deviation.get('reason', '-')}"
+            )
         if factor.get("defaulted_transform_assumptions"):
             gaps.append(
                 f"{factor['factor_name']} uses defaulted transform assumptions that may explain metric drift: "
@@ -282,6 +321,57 @@ def _collect_known_gaps(factors: list[dict[str, Any]], pipeline_payload: dict[st
         if stage.get("status") in {"failed", "needs_human_review", "blocked_by_data"}:
             gaps.append(f"Stage {stage.get('name')} is {stage.get('status')}: {stage.get('summary') or '-'}")
     return gaps
+
+
+def _truth_case_counts(factors: list[dict[str, Any]], truth_results: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
+    selected = sum(len(factor.get("selected_evaluation_cases", [])) for factor in factors)
+    assessed = sum(len(factor.get("assessed_evaluation_cases", [])) for factor in factors)
+    extracted = sum(len(factor.get("truth_sources", [])) for factor in factors)
+    deferred = sum(len(factor.get("deferred_evaluation_cases", [])) + len(factor.get("unsupported_evaluation_cases", [])) for factor in factors)
+    selected_by_factor = {
+        factor["factor_name"]: {
+            str(case.get("source_truth_id") or case.get("truth_id", ""))
+            for case in factor.get("selected_evaluation_cases", [])
+            if isinstance(case, dict)
+        }
+        for factor in factors
+    }
+    executed_results = [
+        result
+        for factor_name, results in truth_results.items()
+        for result in results
+        if _is_executed_selected_truth_result(result, selected_by_factor.get(factor_name, set()))
+    ]
+    comparable_statuses = {"exact_match", "approximately_consistent", "directionally_consistent", "inconsistent"}
+    matched_statuses = {"exact_match", "approximately_consistent", "directionally_consistent"}
+    return {
+        "truth_cases_extracted": extracted,
+        "truth_cases_assessed": assessed,
+        "truth_cases_selected": selected,
+        "truth_cases_executed": len(executed_results),
+        "truth_cases_sufficiently_comparable": sum(1 for result in executed_results if result.get("status") in comparable_statuses),
+        "truth_cases_matched": sum(1 for result in executed_results if result.get("status") in matched_statuses),
+        "truth_cases_inconsistent": sum(1 for result in executed_results if result.get("status") == "inconsistent"),
+        "truth_cases_deferred": deferred,
+    }
+
+
+def _truth_match_pass_rate(counts: dict[str, int]) -> str:
+    denominator = counts.get("truth_cases_sufficiently_comparable", 0)
+    if not denominator:
+        return ""
+    return f"{counts.get('truth_cases_matched', 0)}/{denominator}"
+
+
+def _is_executed_selected_truth_result(result: dict[str, Any], selected_ids: set[str]) -> bool:
+    truth_id = str(result.get("source_truth_id") or result.get("truth_id", ""))
+    if selected_ids and truth_id not in selected_ids:
+        return False
+    if result.get("lifecycle_state") and result.get("lifecycle_state") != "executed":
+        return False
+    if result.get("status") in {"not_evaluated", "unsupported_evaluator", "deferred_by_budget", "insufficient_data"}:
+        return False
+    return bool(truth_id)
 
 
 def _as_plain_dict(value: Any) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from research_core.factor_lab.paper_reproduction.recommended_data import (
     load_recommended_data_manifest,
     normalize_recommended_daily_kline_frame,
     normalize_recommended_market_cap_frame,
+    normalize_recommended_security_status_frame,
     normalize_recommended_symbol,
     recommended_data_available,
 )
@@ -25,11 +26,14 @@ class RecommendedDataHelperTest(unittest.TestCase):
             root = Path(tmp_dir)
             (root / "MANIFEST.json").write_text('[{"file": "kline_daily_adjusted.parquet", "rows": 0}]', encoding="utf-8")
             pd.DataFrame({"symbol": []}).to_parquet(root / "kline_daily_adjusted.parquet")
+            pd.DataFrame({"order_book_id": [], "date": [], "market_cap": []}).to_parquet(root / "market_cap_2010_2026.parquet")
             config = RecommendedDataConfig(data_dir=root)
 
             self.assertTrue(recommended_data_available(config))
             manifest = load_recommended_data_manifest(config)
-            self.assertEqual(manifest["file"].tolist(), ["kline_daily_adjusted.parquet"])
+            self.assertEqual(manifest["file"].tolist(), ["kline_daily_adjusted.parquet", "market_cap_2010_2026.parquet"])
+            self.assertEqual(manifest.loc[manifest["file"] == "kline_daily_adjusted.parquet", "present_on_disk"].iloc[0], True)
+            self.assertEqual(manifest.loc[manifest["file"] == "market_cap_2010_2026.parquet", "source"].iloc[0], "filesystem_detected")
 
     def test_normalize_recommended_daily_kline_uses_adjusted_prices_by_default(self) -> None:
         raw = pd.DataFrame(
@@ -89,6 +93,113 @@ class RecommendedDataHelperTest(unittest.TestCase):
             self.assertIn("industry", panel.columns)
             self.assertEqual(panel.loc[panel["code"] == "000001.SZ", "market_cap"].tolist(), [100.0])
             self.assertEqual(panel.loc[panel["code"] == "000001.SZ", "industry"].tolist(), ["bank"])
+
+    def test_load_recommended_daily_panel_prefers_expanded_market_cap_and_st_status_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_fixture_data(root)
+            (root / "market_cap.parquet").unlink()
+            pd.DataFrame(
+                {
+                    "order_book_id": ["000001.XSHE", "000002.XSHE"],
+                    "date": pd.to_datetime(["2017-01-03", "2017-01-03"]),
+                    "market_cap": [300.0, 400.0],
+                }
+            ).to_parquet(root / "market_cap_2010_2026.parquet")
+            pd.DataFrame(
+                {
+                    "symbol": ["000001.XSHE", "000002.XSHE"],
+                    "trade_date": pd.to_datetime(["2017-01-03", "2017-01-03"]),
+                    "is_st": [0, 1],
+                }
+            ).to_parquet(root / "st_status_full.parquet")
+            pd.DataFrame(
+                {
+                    "symbol": ["000001.SZ", "000002.SZ"],
+                    "trade_date": pd.to_datetime(["2017-01-03", "2017-01-03"]),
+                    "open": [10.0, 20.0],
+                    "high": [11.0, 21.0],
+                    "low": [9.0, 19.0],
+                    "close": [10.5, 20.5],
+                    "volume": [1000, 2000],
+                    "amount": [10500.0, 41000.0],
+                    "adj_factor": [1.0, 1.0],
+                    "open_adj": [10.0, 20.0],
+                    "high_adj": [11.0, 21.0],
+                    "low_adj": [9.0, 19.0],
+                    "close_adj": [10.5, 20.5],
+                }
+            ).to_parquet(root / "kline_daily_adjusted.parquet")
+
+            panel = load_recommended_daily_panel(
+                start_date="2017-01-03",
+                end_date="2017-01-03",
+                symbols=["000001.SZ", "000002.SZ"],
+                include_status=True,
+                include_market_cap=True,
+                config=RecommendedDataConfig(data_dir=root),
+            )
+
+            self.assertEqual(panel["market_cap"].tolist(), [300.0, 400.0])
+            self.assertEqual(panel["is_st"].tolist(), [0, 1])
+            self.assertTrue(panel["is_suspended"].isna().all())
+
+    def test_load_recommended_daily_panel_uses_2010_2016_st_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_fixture_data(root)
+            pd.DataFrame(
+                {
+                    "symbol": ["000001.SZ", "000002.SZ"],
+                    "trade_date": pd.to_datetime(["2010-01-04", "2010-01-04"]),
+                    "open": [10.0, 20.0],
+                    "high": [11.0, 21.0],
+                    "low": [9.0, 19.0],
+                    "close": [10.5, 20.5],
+                    "volume": [1000, 2000],
+                    "amount": [10500.0, 41000.0],
+                    "adj_factor": [1.0, 1.0],
+                    "open_adj": [10.0, 20.0],
+                    "high_adj": [11.0, 21.0],
+                    "low_adj": [9.0, 19.0],
+                    "close_adj": [10.5, 20.5],
+                }
+            ).to_parquet(root / "kline_daily_adjusted.parquet")
+            pd.DataFrame(
+                {
+                    "symbol": ["000001.XSHE", "000002.XSHE"],
+                    "trade_date": pd.to_datetime(["2010-01-04", "2010-01-04"]),
+                    "is_st": [0, 1],
+                }
+            ).to_parquet(root / "st_status_2010_2016.parquet")
+
+            panel = load_recommended_daily_panel(
+                start_date="2010-01-04",
+                end_date="2010-01-04",
+                symbols=["000001.SZ", "000002.SZ"],
+                include_status=True,
+                config=RecommendedDataConfig(data_dir=root),
+            )
+
+            self.assertEqual(panel["is_st"].tolist(), [0, 1])
+            self.assertTrue(panel["is_trading"].isna().all())
+            self.assertTrue(panel["is_suspended"].isna().all())
+
+    def test_normalize_st_only_status_frame_keeps_optional_status_columns_missing(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "symbol": ["000001.XSHE"],
+                "trade_date": ["2017-01-03"],
+                "is_st": [1],
+            }
+        )
+
+        normalized = normalize_recommended_security_status_frame(raw)
+
+        self.assertEqual(normalized["code"].tolist(), ["000001.SZ"])
+        self.assertEqual(normalized["is_st"].tolist(), [1])
+        self.assertTrue(pd.isna(normalized.loc[0, "is_trading"]))
+        self.assertTrue(pd.isna(normalized.loc[0, "is_suspended"]))
 
     def test_add_next_suspension_flag_and_a_share_filter_use_next_day_suspension(self) -> None:
         status = pd.DataFrame(

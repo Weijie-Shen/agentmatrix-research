@@ -7,8 +7,14 @@ from research_core.factor_lab.paper_reproduction.agent_harness import (
     prepare_agent_harness_bundle,
 )
 from research_core.factor_lab.paper_reproduction.data_validation import (
+    DataProfile,
     DataFrameValidationRequest,
     DataFrameValidationResult,
+    EvaluationCaseSupportAssessment,
+    EvaluationRequirementResult,
+    assess_evaluation_case_support,
+    build_data_profile,
+    structured_deviation,
     validate_input_frame,
 )
 from research_core.factor_lab.paper_reproduction.extraction import (
@@ -23,10 +29,13 @@ from research_core.factor_lab.paper_reproduction.extraction import (
     validate_paper_extraction,
 )
 from research_core.factor_lab.paper_reproduction.evaluators import (
+    GENERIC_EVALUATOR_CAPABILITIES,
     apply_transform_spec,
     compute_cross_sectional_regression,
     compute_ic_analysis,
+    evaluator_capabilities_for_case,
     evaluate_paper_case,
+    get_generic_evaluator_capabilities,
 )
 from research_core.factor_lab.paper_reproduction.implementation import (
     FactorImplementationPlan,
@@ -48,7 +57,10 @@ from research_core.factor_lab.paper_reproduction.pipeline import (
     PaperReproductionPipelineState,
     PaperReproductionStage,
     PaperReproductionStageState,
+    StageExecutionDecision,
     export_pipeline_state,
+    load_pipeline_state,
+    merge_pipeline_stage_update,
 )
 from research_core.factor_lab.paper_reproduction.quant_api import (
     QuantApiConfig,
@@ -80,6 +92,9 @@ from research_core.factor_lab.paper_reproduction.truth_matching import (
 __all__ = [
     "DataFrameValidationRequest",
     "DataFrameValidationResult",
+    "DataProfile",
+    "EvaluationCaseSupportAssessment",
+    "EvaluationRequirementResult",
     "ExtractedFactor",
     "ExtractedTruthSource",
     "ExtractionValidationResult",
@@ -96,9 +111,13 @@ __all__ = [
     "PaperTruthMatchResult",
     "QuantApiConfig",
     "RecommendedDataConfig",
+    "StageExecutionDecision",
+    "GENERIC_EVALUATOR_CAPABILITIES",
     "add_next_suspension_flag",
     "apply_transform_spec",
     "apply_a_share_recommended_filters",
+    "assess_evaluation_case_support",
+    "build_data_profile",
     "build_implementation_manifest",
     "build_paper_evaluation_plan",
     "build_paper_reproduction_report",
@@ -107,11 +126,13 @@ __all__ = [
     "compute_ic_analysis",
     "default_skill_path",
     "evaluate_paper_case",
+    "evaluator_capabilities_for_case",
     "export_implementation_manifest",
     "export_pipeline_state",
     "export_paper_extraction",
     "export_paper_reproduction_report",
     "load_paper_extraction",
+    "load_pipeline_state",
     "load_recommended_daily_panel",
     "load_recommended_data_manifest",
     "normalize_extraction_to_specs",
@@ -125,7 +146,10 @@ __all__ = [
     "recommended_data_available",
     "render_paper_reproduction_report_markdown",
     "selected_truth_sources",
+    "structured_deviation",
     "summarize_factor_truth_sources",
+    "get_generic_evaluator_capabilities",
+    "merge_pipeline_stage_update",
     "validate_paper_extraction",
     "validate_input_frame",
     "write_factor_family_scaffold",

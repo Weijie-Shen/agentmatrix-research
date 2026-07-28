@@ -135,8 +135,7 @@ def _build_factor_plan(
             status = "blocked_by_data"
             blocked_reasons.extend(data_validation.errors or ["input dataframe validation failed"])
         elif data_validation.status == "needs_human_review" and status == "ready_for_code":
-            status = "needs_human_review"
-            blocked_reasons.extend(data_validation.warnings or ["input dataframe validation needs human review"])
+            status = "ready_for_code_with_limitations"
 
     required_operator_hints, ai_designed_functions = _operator_and_ai_function_hints(spec)
     return FactorImplementationPlan(
@@ -162,6 +161,8 @@ def _build_factor_plan(
             "data_requirements": spec.metadata.get("data_requirements", {}),
             "known_limitations": spec.metadata.get("known_limitations", []),
             "data_validation_status": data_validation.status if data_validation else "not_provided",
+            "data_validation_warnings": data_validation.warnings if data_validation else [],
+            "evaluation_support_summary": spec.metadata.get("evaluation_support_summary", {}),
             "evaluator_implementation_targets": spec.metadata.get("evaluator_implementation_targets", []),
         },
     )
@@ -224,6 +225,8 @@ def _manifest_status(plans: list[FactorImplementationPlan]) -> str:
         return "needs_human_review"
     if statuses == {"ready_for_code"}:
         return "ready_for_code"
+    if statuses <= {"ready_for_code", "ready_for_code_with_limitations"}:
+        return "ready_for_code_with_limitations"
     return "mixed"
 
 

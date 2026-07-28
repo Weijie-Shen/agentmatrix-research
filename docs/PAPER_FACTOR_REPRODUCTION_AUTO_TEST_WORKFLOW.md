@@ -103,7 +103,8 @@ I am attaching a paper. Run the paper reproduction workflow for selected factors
 Use paper-reported evaluation results only as truth.
 Do not use factor-value truth matching.
 Always inspect `/Users/mac/recommended_data_v2` before Quant API v2 or declaring blocked_by_data.
-If formulas, preprocessing, neutralization, evaluation method, or data are ambiguous, record the blocker in a markdown issue log and stop at the correct gate.
+Preserve all extracted paper truth sources, profile available data, select the best-supported paper truth before computing metrics, and execute only selected resolved cases.
+Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue with documented degradation and report deviations.
 ```
 
 ### 3. Analyze the fresh-agent result against the golden JSON
@@ -135,6 +136,9 @@ Comparison priorities:
 8. Truth source granularity and source locations.
 9. Paper metric values.
 10. Known limitations vs blocking ambiguities.
+11. Data profile and evaluation-support assessment.
+12. Selected truth reason, resolved protocol, deviations, and metric eligibility.
+13. Correct truth-match denominator excluding unsupported/deferred cases.
 
 ### 4. Improve structure or skill
 
@@ -153,6 +157,8 @@ Examples:
 - If the agent marks missing daily factor values as a blocker despite aggregate metrics existing, improve skill/validation around `known_limitations`.
 - If it mixes multiple tables into one truth source, improve truth-source granularity instructions and/or validation warnings.
 - If it treats VWAP as a formula field when only portfolio evaluation needs it, improve stage-specific data requirement extraction.
+- If it reports unsupported evaluator cases as factor failures, improve selected-case-only execution and report denominators.
+- If it mutates the extracted WLS/neutralized truth into an OLS/proxy runtime case, improve resolved-case/deviation handling.
 
 ### 5. Retest
 

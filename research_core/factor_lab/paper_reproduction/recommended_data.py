@@ -13,8 +13,15 @@ DEFAULT_RECOMMENDED_DATA_DIR = Path("/Users/mac/recommended_data_v2")
 RECOMMENDED_MANIFEST_FILE = "MANIFEST.json"
 RECOMMENDED_KLINE_FILE = "kline_daily_adjusted.parquet"
 RECOMMENDED_STATUS_FILE = "security_status_through_2026-04-09.parquet"
-RECOMMENDED_MARKET_CAP_FILE = "market_cap.parquet"
+RECOMMENDED_ST_STATUS_2010_2016_FILE = "st_status_2010_2016.parquet"
+RECOMMENDED_ST_STATUS_FILE = "st_status_full.parquet"
+RECOMMENDED_MARKET_CAP_FILE = "market_cap_2010_2026.parquet"
+LEGACY_RECOMMENDED_MARKET_CAP_FILE = "market_cap.parquet"
 RECOMMENDED_INDUSTRY_FILE = "industry_map.parquet"
+RECOMMENDED_ST_STATUS_FILES = [
+    RECOMMENDED_ST_STATUS_2010_2016_FILE,
+    RECOMMENDED_ST_STATUS_FILE,
+]
 
 
 @dataclass(slots=True)
@@ -40,7 +47,10 @@ def load_recommended_data_manifest(config: RecommendedDataConfig | None = None) 
     path = data_config.path(RECOMMENDED_MANIFEST_FILE)
     if not path.exists():
         raise FileNotFoundError(f"recommended data manifest not found: {path}")
-    return pd.DataFrame(json.loads(path.read_text(encoding="utf-8")))
+    manifest = pd.DataFrame(json.loads(path.read_text(encoding="utf-8")))
+    if "file" in manifest.columns:
+        manifest["present_on_disk"] = manifest["file"].map(lambda name: data_config.path(str(name)).exists())
+    return _augment_manifest_with_present_files(data_config, manifest)
 
 
 def load_recommended_daily_panel(
@@ -66,17 +76,20 @@ def load_recommended_daily_panel(
     panel = normalize_recommended_daily_kline_frame(panel, adjusted=adjusted)
 
     if include_status:
-        status = _read_recommended_status(
-            data_config.path(RECOMMENDED_STATUS_FILE),
+        status = _read_recommended_status_panel(
+            data_config,
             start_date=start_date,
             end_date=end_date,
             symbols=symbols,
         )
-        panel = panel.merge(add_next_suspension_flag(normalize_recommended_security_status_frame(status)), on=["date", "code"], how="left")
+        panel = panel.merge(add_next_suspension_flag(status), on=["date", "code"], how="left")
 
     if include_market_cap:
         market_cap = _read_recommended_market_cap(
-            data_config.path(RECOMMENDED_MARKET_CAP_FILE),
+            _first_existing_path(
+                data_config,
+                [RECOMMENDED_MARKET_CAP_FILE, LEGACY_RECOMMENDED_MARKET_CAP_FILE],
+            ),
             start_date=start_date,
             end_date=end_date,
             symbols=symbols,
@@ -113,7 +126,7 @@ def normalize_recommended_daily_kline_frame(raw_frame: pd.DataFrame, *, adjusted
 
 
 def normalize_recommended_security_status_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
-    required = ["symbol", "trade_date", "is_trading", "is_st", "is_suspended"]
+    required = ["symbol", "trade_date", "is_st"]
     missing = [column for column in required if column not in raw_frame.columns]
     if missing:
         raise ValueError(f"missing recommended security status columns: {', '.join(missing)}")
@@ -128,6 +141,9 @@ def normalize_recommended_security_status_frame(raw_frame: pd.DataFrame) -> pd.D
         "is_suspended",
         *[column for column in ("high_limited", "low_limited", "status_code") if column in status.columns],
     ]
+    for optional in ("is_trading", "is_suspended"):
+        if optional not in status.columns:
+            status[optional] = pd.NA
     return status[columns]
 
 
@@ -155,12 +171,15 @@ def normalize_recommended_industry_frame(raw_frame: pd.DataFrame) -> pd.DataFram
 
 
 def add_next_suspension_flag(status_frame: pd.DataFrame) -> pd.DataFrame:
-    required = ["date", "code", "is_suspended"]
+    required = ["date", "code"]
     missing = [column for column in required if column not in status_frame.columns]
     if missing:
         raise ValueError(f"missing status columns for next suspension flag: {', '.join(missing)}")
     status = status_frame.sort_values(["code", "date"]).copy()
-    status["next_is_suspended"] = status.groupby("code")["is_suspended"].shift(-1)
+    if "is_suspended" in status.columns:
+        status["next_is_suspended"] = status.groupby("code")["is_suspended"].shift(-1)
+    else:
+        status["next_is_suspended"] = pd.NA
     return status
 
 
@@ -222,6 +241,60 @@ def _read_recommended_status(
     return _read_parquet_with_filters(path, columns=columns, date_col="trade_date", start_date=start_date, end_date=end_date, symbols=symbols)
 
 
+def _read_recommended_st_status(
+    path: Path,
+    *,
+    start_date: str | pd.Timestamp | None,
+    end_date: str | pd.Timestamp | None,
+    symbols: list[str] | None,
+) -> pd.DataFrame:
+    columns = ["symbol", "trade_date", "is_st"]
+    return _read_parquet_with_filters(path, columns=columns, date_col="trade_date", start_date=start_date, end_date=end_date, symbols=symbols)
+
+
+def _read_recommended_status_panel(
+    data_config: RecommendedDataConfig,
+    *,
+    start_date: str | pd.Timestamp | None,
+    end_date: str | pd.Timestamp | None,
+    symbols: list[str] | None,
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    status_path = data_config.path(RECOMMENDED_STATUS_FILE)
+    if status_path.exists():
+        frames.append(
+            normalize_recommended_security_status_frame(
+                _read_recommended_status(
+                    status_path,
+                    start_date=start_date,
+                    end_date=end_date,
+                    symbols=symbols,
+                )
+            )
+        )
+    for st_file in RECOMMENDED_ST_STATUS_FILES:
+        st_path = data_config.path(st_file)
+        if st_path.exists():
+            frames.append(
+                normalize_recommended_security_status_frame(
+                    _read_recommended_st_status(
+                        st_path,
+                        start_date=start_date,
+                        end_date=end_date,
+                        symbols=symbols,
+                    )
+                )
+            )
+    if not frames:
+        raise FileNotFoundError(
+            f"recommended status files not found: {status_path} or {', '.join(str(data_config.path(name)) for name in RECOMMENDED_ST_STATUS_FILES)}"
+        )
+    combined = frames[0]
+    for frame in frames[1:]:
+        combined = _merge_status_frames(combined, frame)
+    return combined
+
+
 def _read_recommended_market_cap(
     path: Path,
     *,
@@ -238,6 +311,28 @@ def _read_recommended_market_cap(
     if symbols:
         frame = frame[frame["code"].isin(symbols)]
     return frame
+
+
+def _merge_status_frames(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+    merged = left.merge(right, on=["date", "code"], how="outer", suffixes=("", "_right"))
+    for column in ("is_st", "is_trading", "is_suspended", "high_limited", "low_limited", "status_code"):
+        right_column = f"{column}_right"
+        if right_column not in merged.columns:
+            continue
+        if column in merged.columns:
+            merged[column] = merged[column].where(merged[column].notna(), merged[right_column])
+        else:
+            merged[column] = merged[right_column]
+        merged = merged.drop(columns=[right_column])
+    return merged
+
+
+def _first_existing_path(data_config: RecommendedDataConfig, names: list[str]) -> Path:
+    for name in names:
+        path = data_config.path(name)
+        if path.exists():
+            return path
+    return data_config.path(names[0])
 
 
 def _read_parquet_with_filters(
@@ -257,7 +352,7 @@ def _read_parquet_with_filters(
     if end_date is not None:
         filters.append((date_col, "<=", pd.Timestamp(end_date)))
     if symbols:
-        filters.append(("symbol", "in", symbols))
+        filters.append(("symbol", "in", _symbol_filter_values(symbols)))
     try:
         return pd.read_parquet(path, columns=columns, filters=filters or None)
     except Exception:
@@ -268,5 +363,56 @@ def _read_parquet_with_filters(
         if end_date is not None:
             frame = frame[frame[date_col] <= pd.Timestamp(end_date)]
         if symbols:
-            frame = frame[frame["symbol"].isin(symbols)]
+            frame = frame[frame["symbol"].isin(_symbol_filter_values(symbols))]
         return frame
+
+
+def _symbol_filter_values(symbols: list[str]) -> list[str]:
+    values: list[str] = []
+    for symbol in symbols:
+        text = str(symbol)
+        candidates = [text]
+        if text.endswith(".SZ"):
+            candidates.append(f"{text[:-3]}.XSHE")
+        elif text.endswith(".SH"):
+            candidates.append(f"{text[:-3]}.XSHG")
+        elif text.endswith(".XSHE"):
+            candidates.append(f"{text[:-5]}.SZ")
+        elif text.endswith(".XSHG"):
+            candidates.append(f"{text[:-5]}.SH")
+        for candidate in candidates:
+            if candidate not in values:
+                values.append(candidate)
+    return values
+
+
+def _augment_manifest_with_present_files(data_config: RecommendedDataConfig, manifest: pd.DataFrame) -> pd.DataFrame:
+    listed = set(manifest["file"].tolist()) if "file" in manifest.columns else set()
+    rows: list[dict[str, Any]] = []
+    for name in (RECOMMENDED_MARKET_CAP_FILE, *RECOMMENDED_ST_STATUS_FILES):
+        path = data_config.path(name)
+        if name in listed or not path.exists():
+            continue
+        rows.append(_parquet_manifest_row(path))
+    if not rows:
+        return manifest
+    return pd.concat([manifest, pd.DataFrame(rows)], ignore_index=True)
+
+
+def _parquet_manifest_row(path: Path) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "file": path.name,
+        "bytes": path.stat().st_size,
+        "present_on_disk": True,
+    }
+    try:
+        import pyarrow.parquet as pq
+
+        metadata = pq.ParquetFile(path).metadata
+        payload["rows"] = metadata.num_rows
+        payload["columns"] = metadata.schema.names
+    except Exception:
+        payload["rows"] = None
+        payload["columns"] = []
+    payload["source"] = "filesystem_detected"
+    return payload

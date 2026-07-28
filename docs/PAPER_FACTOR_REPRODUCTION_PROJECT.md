@@ -22,8 +22,8 @@ research_core/factor_lab/paper_reproduction/
 Current test status:
 
 ```text
-python -m pytest research_core/factor_lab/paper_reproduction
-54 passed
+python -m unittest discover research_core/factor_lab/paper_reproduction
+76 passed
 ```
 
 Implemented capabilities:
@@ -34,13 +34,14 @@ Implemented capabilities:
 - normalization into `FactorResearchSpec`
 - specs/catalog export through existing Factor Lab registry
 - input dataframe validation
+- reusable data profiling and evaluation-case support assessment
 - implementation readiness manifests
 - safe unimplemented factor-family scaffolds
-- paper evaluation planning
+- support-scored paper evaluation planning with selected/resolved runtime cases
 - generic evaluator support for transform specs, IC analysis, and IC regression
-- paper-reported evaluation metric matching
+- protocol-aware paper-reported evaluation metric matching
 - final paper reproduction report generation
-- pipeline-stage state tracking
+- persistent pipeline-stage state tracking with separate execution and truth-validation statuses
 - Quant API daily kline normalization helper
 - fresh-agent harness packet generation with bundled skill copy and skill hash
 
@@ -133,9 +134,11 @@ Do not merge IC/regression metrics, IC decay metrics, and portfolio TOP-layer me
 
 Missing daily factor values, per-date IC series, or machine-readable portfolio curves is usually a known limitation, not a blocker, when aggregate paper evaluation metrics and methods are available.
 
-Use `needs_human_review` when a required paper method is missing or ambiguous.
+Use `needs_human_review` only when automation cannot safely resolve ambiguity that changes the factor definition or the meaning of the selected truth.
 
-Use `blocked_by_data` when required data is unavailable after checking the available data path, including `/Users/mac/recommended_data_v2` first and Quant API v2 only as a fallback when applicable.
+Use `blocked_by_data` when formula-required data is unavailable after checking the available data path, including `/Users/mac/recommended_data_v2` first and Quant API v2 only as a fallback when applicable.
+
+Evaluation-data limitations should normally produce a resolved case with deviations, a proxy/reduced-period evaluation, a deferred unsupported case, or `not_evaluated` truth status. They should not block factor implementation.
 
 ### 5. Stage 4 Starts With Readiness, Not Code
 
@@ -337,6 +340,7 @@ The generated scaffold should be importable but intentionally unimplemented unti
 Per-factor statuses:
 
 - `ready_for_code`
+- `ready_for_code_with_limitations`
 - `needs_human_review`
 - `blocked_by_data`
 
@@ -405,14 +409,28 @@ research_core/factor_lab/paper_reproduction/evaluators.py
 Main APIs:
 
 ```python
-build_paper_evaluation_plan(specs)
+build_paper_evaluation_plan(specs, data_profiles={...})
 apply_transform_spec(...)
 compute_ic_analysis(...)
 compute_cross_sectional_regression(...)
 evaluate_paper_case(...)
 ```
 
-Evaluation must follow the selected paper truth source. Before computing metrics, apply the evaluation-case `transform_spec` in order.
+Before selecting truth, profile the available data and assess every candidate evaluation case. The extracted truth source represents what the paper did and must not be mutated during execution. The planner creates a separate resolved runtime case containing:
+
+- `source_truth_id`
+- `paper_protocol`
+- `resolved_protocol`
+- `support_assessment`
+- `deviations`
+- `comparability`
+- `truth_match_eligible_metrics`
+- `diagnostic_only_metrics`
+- `lifecycle_state`
+
+Evaluation execution must consume `selected_evaluation_cases`, not loop over every extracted truth source. Unsupported, budget-deferred, or insufficient-data cases remain visible in reports but do not enter metric truth matching.
+
+Evaluation must follow the selected resolved case. Before computing metrics, apply the evaluation-case `transform_spec` in order.
 
 Do not assume:
 
@@ -450,11 +468,16 @@ Truth matching compares computed evaluation metrics to paper-reported evaluation
 
 Statuses:
 
-- `passed`: all metrics match within absolute tolerance
-- `acceptable`: not exact, but present, same sign, and within relative tolerance policy
-- `failed`: missing metrics, non-numeric metrics, sign mismatch, or excessive error
+- `exact_match`
+- `approximately_consistent`
+- `directionally_consistent`
+- `inconclusive_due_to_protocol_gap`
+- `inconsistent`
+- `not_evaluated`
 
 Use exact matching as a strong signal, but do not require perfect equality for useful implementation confidence. Data vendor, sample period, adjustment, universe, and rounding differences may make approximate consistency the correct outcome.
+
+Only `inconsistent` is direct negative truth evidence. Unsupported, skipped, deferred, insufficient-data, and protocol-gap cases are coverage/comparability outcomes and must not be counted as failed metric comparisons.
 
 ### Stage 8: Final Report
 
@@ -475,11 +498,20 @@ Report contents:
 
 - job id
 - paper metadata
+- whether factor implementation was produced
+- selected paper truth and selection reason
+- exact/comparable/proxy/directional comparability
+- truth-validation result
+- most important limitations
 - factor definitions
 - formulas and required fields
 - evaluation truth sources
-- evaluation cases
+- assessed, selected, deferred, and unsupported evaluation cases
+- extracted versus resolved protocol information
+- data coverage and evaluator support summaries when supplied
+- structured deviations and affected metrics
 - truth match results
+- correct truth-match denominators
 - pipeline stage state
 - artifacts
 - tests run
@@ -521,14 +553,26 @@ paper_truth_validation
 final_report
 ```
 
-Gating statuses:
+Execution statuses:
 
 - `pending`
-- `needs_human_review`
+- `running`
+- `completed`
+- `completed_with_limitations`
 - `failed`
-- `blocked_by_data`
 
-Do not skip later stages when an earlier gate is blocked.
+Truth-validation statuses:
+
+- `exact_match`
+- `approximately_consistent`
+- `directionally_consistent`
+- `inconclusive_due_to_protocol_gap`
+- `inconsistent`
+- `not_evaluated`
+
+Legacy stage `status` remains serialized for compatibility. New code should use `execution_status`, `truth_validation_status`, and `execution_decision(stage_name)`.
+
+Soft limitations do not block later stages. Hard failures block only dependent work; factor-local failures should not unnecessarily block unrelated factors.
 
 ## Skill and Fresh-Agent Testing
 
@@ -688,7 +732,9 @@ Curated files:
 kline_daily_adjusted.parquet      daily OHLCV, amount, adjustment factors, adjusted OHLC
 security_status_through_2026-04-09.parquet
                                   trading/ST/suspension/limit status
-market_cap.parquet               daily market capitalization
+st_status_2010_2016.parquet       ST-only status, 2010-01-04 to 2016-12-30
+st_status_full.parquet            ST-only status, 2017-01-03 to 2026-07-22
+market_cap_2010_2026.parquet      daily market capitalization, 2010-01-04 to 2026-07-22
 trading_calendar.parquet          trading calendar
 security_master.parquet           security master
 income_statement.parquet          point-in-time income values
@@ -707,7 +753,7 @@ from research_core.factor_lab.paper_reproduction.recommended_data import (
 
 panel = load_recommended_daily_panel(
     start_date="2020-01-02",
-    end_date="2026-04-09",
+    end_date="2026-07-22",
     adjusted=True,
     include_status=True,
     include_market_cap=True,
@@ -719,8 +765,10 @@ panel = apply_a_share_recommended_filters(panel)
 Coverage notes:
 
 - `kline_daily_adjusted.parquet` and `trading_calendar.parquet` cover roughly 2010-01-04 to 2026-07-22.
-- `security_status_through_2026-04-09.parquet` covers historical status through 2026-04-09; `st_status_recent_2026-07.parquet` is a recent ST-only supplement.
-- `market_cap.parquet` covers roughly 2017-01-03 to 2025-12-31 and already uses normalized `SZ/SH` symbols.
+- `security_status_through_2026-04-09.parquet` covers trading/suspension/limit status through 2026-04-09.
+- `st_status_2010_2016.parquet` and `st_status_full.parquet` provide ST-only coverage from 2010-01-04 to 2026-07-22. They do not contain suspension/trading fields.
+- `market_cap_2010_2026.parquet` is the preferred market-cap file and covers 2010-01-04 to 2026-07-22. The loader falls back to legacy `market_cap.parquet` only when the expanded file is absent.
+- For all-A-share filters outside full status coverage, ST filtering can still run from the ST-only files, but next-day suspension filtering is unavailable and must be reported as a universe-filter limitation.
 - `income_statement.parquet`, `balance_sheet.parquet`, and `dividend_yield.parquet` include data back to 2010.
 
 ## Quant API v2 Data Notes

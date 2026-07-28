@@ -102,6 +102,25 @@ class PaperImplementationScaffoldTest(unittest.TestCase):
         self.assertEqual(manifest.factors[0].status, "blocked_by_data")
         self.assertIn("missing required columns: volume", manifest.factors[0].blocked_reasons)
 
+    def test_manifest_keeps_data_warnings_as_implementation_limitations(self) -> None:
+        manifest = build_implementation_manifest(
+            [self._spec()],
+            data_validation_results={
+                "paper_alpha_1": DataFrameValidationResult(
+                    valid=True,
+                    status="needs_human_review",
+                    warnings=["max history is shorter than requested lookback"],
+                ),
+            },
+        )
+
+        self.assertEqual(manifest.status, "ready_for_code_with_limitations")
+        self.assertEqual(manifest.factors[0].status, "ready_for_code_with_limitations")
+        self.assertEqual(
+            manifest.factors[0].metadata["data_validation_warnings"],
+            ["max history is shorter than requested lookback"],
+        )
+
     def test_manifest_exports_json_artifact(self) -> None:
         manifest = build_implementation_manifest([self._spec()])
         with tempfile.TemporaryDirectory() as tmp_dir:

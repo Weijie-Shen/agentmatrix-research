@@ -186,7 +186,8 @@ Paper ID:
 - Keep raw factor definitions separate from evaluation-case transforms, neutralization, return horizons, portfolio rules, and evaluation-required data.
 - Always inspect `/Users/mac/recommended_data_v2` before using Quant API v2 or declaring `blocked_by_data` when real data is needed.
 - Use Quant API v2 only when the recommended local data folder cannot satisfy the paper's required fields/date window.
-- If formulas, preprocessing, neutralization, evaluation method, or data are ambiguous, record the blocker and stop at the correct gate.
+- Preserve all extracted truth sources, profile available data, select the best-supported paper truth before computing metrics, and execute only selected resolved cases.
+- Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue through documented degradation and report deviations.
 - Export extraction/spec/pipeline/report artifacts under the repo's Factor Lab runtime paths.
 
 ## Notes

@@ -10,8 +10,9 @@ Use `/Users/mac/recommended_data_v2` before API access. Inspect `README.md` and 
 |---|---|
 | `kline_daily_adjusted.parquet` | daily OHLCV, amount, adjustment factors, adjusted OHLC |
 | `security_status_through_2026-04-09.parquet` | historical trading, ST, suspension, and price-limit status |
-| `st_status_recent_2026-07.parquet` | recent ST-only supplement |
-| `market_cap.parquet` | daily market capitalization |
+| `st_status_2010_2016.parquet` | ST-only status, 2010-01-04 to 2016-12-30 |
+| `st_status_full.parquet` | ST-only status, 2017-01-03 to 2026-07-22 |
+| `market_cap_2010_2026.parquet` | daily market capitalization, 2010-01-04 to 2026-07-22 |
 | `trading_calendar.parquet` | trading calendar |
 | `security_master.parquet` | security master |
 | `income_statement.parquet` / `balance_sheet.parquet` | point-in-time fundamentals |
@@ -28,7 +29,7 @@ from research_core.factor_lab.paper_reproduction.recommended_data import (
 
 panel = load_recommended_daily_panel(
     start_date="2020-01-02",
-    end_date="2026-04-09",
+    end_date="2026-07-22",
     adjusted=True,
     include_status=True,
     include_market_cap=True,
@@ -44,6 +45,13 @@ date, code, open, high, low, close, volume, amount
 ```
 
 with optional `is_trading`, `is_st`, `is_suspended`, limit flags, and `market_cap`.
+
+Coverage details:
+
+- `load_recommended_data_manifest()` augments the JSON manifest with known Parquet files found on disk and adds `present_on_disk`; use that field when the data folder has been refreshed before `MANIFEST.json`.
+- `market_cap_2010_2026.parquet` is the preferred market-cap source. The helper falls back to legacy `market_cap.parquet` only if the expanded file is absent.
+- `st_status_2010_2016.parquet` and `st_status_full.parquet` extend ST coverage across 2010-01-04 to 2026-07-22, but they only have `is_st`. Suspension, trading, and limit fields still come from `security_status_through_2026-04-09.parquet` where available.
+- For all-A-share filters after 2026-04-09, the helper can exclude ST rows, but `next_is_suspended` will be unavailable unless another full status source is provided. Record that as a universe-filter limitation instead of claiming an exact next-day suspension filter.
 
 ## Quant API fallback
 
@@ -140,6 +148,8 @@ with open("runtime/factor_lab/frames/simplepv_input.parquet", "wb") as f:
 panel = pd.read_parquet("runtime/factor_lab/frames/simplepv_input.parquet")
 ```
 
+Before selecting a paper truth case for evaluation, build a structured data profile with `build_data_profile(...)` and feed it into `build_paper_evaluation_plan(..., data_profiles={...})` or `assess_evaluation_case_support(...)`. Formula-required missing fields can block factor implementation; evaluation-only gaps should become deviations, proxy/reduced-period cases, deferred evaluator targets, or `not_evaluated` truth outcomes.
+
 ## Integration point with current code
 
 After loading and normalizing a dataframe, run:
@@ -154,13 +164,11 @@ request = DataFrameValidationRequest.from_factor(extracted_factor)
 result = validate_input_frame(panel, request)
 ```
 
-Only proceed to factor implementation if:
+Proceed to factor implementation if formula-required validation is valid. Formula-stage failures block implementation; evaluation-only gaps should be handled by evaluation support assessment and documented degradation.
 
 ```python
-result.valid and result.status == "passed"
+result.valid
 ```
-
-If `needs_human_review`, write the validation result into the pipeline state and stop that stage.
 
 ## Current open adapter questions
 

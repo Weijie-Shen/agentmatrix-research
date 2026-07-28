@@ -171,6 +171,38 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
         self.assertIn("ic", result["metrics"])
         self.assertEqual(result["metrics"]["regression"]["cross_section_count"], 2)
 
+    def test_evaluate_paper_case_executes_resolved_protocol_instead_of_paper_protocol(self) -> None:
+        frame = self._base_frame().rename(columns={"forward_return_1d": "forward_return_t20"})
+        case = {
+            "case_id": "wls_paper_ols_runtime",
+            "source_truth_id": "table_52",
+            "evaluation_family": "ic_regression",
+            "evaluation_spec": {
+                "return_col": "forward_return_20d",
+                "regression_type": "wls",
+                "weight_col": "sqrt_free_float_market_cap",
+            },
+            "required_data": {"evaluation": ["forward_return_20d"], "regression_weight": ["sqrt_free_float_market_cap"]},
+            "resolved_protocol": {
+                "evaluation_family": "ic_regression",
+                "evaluation_spec": {
+                    "return_col": "forward_return_t20",
+                    "regression_type": "ols",
+                    "weight_col": None,
+                    "regression_controls": ["market_cap"],
+                },
+                "required_data": {"evaluation": ["forward_return_t20"], "controls": ["market_cap"]},
+                "transform_spec": {"steps": []},
+            },
+        }
+
+        result = evaluate_paper_case(case, frame, factor_col="factor")
+
+        self.assertEqual(result["source_truth_id"], "table_52")
+        self.assertEqual(result["return_col"], "forward_return_t20")
+        self.assertEqual(result["resolved_parameters"]["evaluation_spec"]["regression_type"], "ols")
+        self.assertEqual(result["metrics"]["regression"]["weight_col"], None)
+
 
 if __name__ == "__main__":
     unittest.main()

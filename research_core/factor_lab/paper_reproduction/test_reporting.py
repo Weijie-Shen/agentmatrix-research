@@ -151,6 +151,53 @@ class PaperReproductionReportingTest(unittest.TestCase):
         self.assertIn("Selected Evaluation Methods", markdown)
         self.assertIn("Defaulted Transform Assumptions", markdown)
 
+    def test_report_counts_only_executed_selected_truth_results(self) -> None:
+        extraction = self._extraction()
+        evaluation_plan = PaperEvaluationPlan(
+            library="PaperDemo",
+            status="ready_for_evaluation_with_limitations",
+            factor_plans=[
+                PaperFactorEvaluationPlan(
+                    factor_name="paper_alpha_1",
+                    status="ready_for_evaluation_with_limitations",
+                    selected_evaluation_cases=[
+                        {
+                            "truth_id": "table_3_eval",
+                            "source_truth_id": "table_3_eval",
+                            "evaluation_family": "ic_analysis",
+                        }
+                    ],
+                    unsupported_evaluation_cases=[
+                        {
+                            "truth_id": "portfolio",
+                            "evaluation_family": "layered_portfolio_backtest",
+                            "lifecycle_state": "unsupported_evaluator",
+                        }
+                    ],
+                )
+            ],
+        )
+        truth_results = {
+            "paper_alpha_1": [
+                {"truth_id": "table_3_eval", "status": "approximately_consistent", "lifecycle_state": "executed"},
+                {"truth_id": "portfolio", "status": "not_evaluated", "lifecycle_state": "unsupported_evaluator"},
+            ]
+        }
+
+        report = build_paper_reproduction_report(
+            job_id="paper-demo-job",
+            extraction=extraction,
+            specs=[self._spec()],
+            evaluation_plan=evaluation_plan,
+            truth_results=truth_results,
+        )
+
+        counts = report["summary"]["truth_case_counts"]
+        self.assertEqual(counts["truth_cases_executed"], 1)
+        self.assertEqual(counts["truth_cases_deferred"], 1)
+        self.assertEqual(counts["truth_cases_matched"], 1)
+        self.assertEqual(report["summary"]["truth_match_pass_rate"], "1/1")
+
     def test_export_report_writes_json_and_markdown(self) -> None:
         report = build_paper_reproduction_report(
             job_id="paper-demo-job",

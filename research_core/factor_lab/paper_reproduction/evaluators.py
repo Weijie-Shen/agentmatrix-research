@@ -9,6 +9,57 @@ import pandas as pd
 DEFAULT_DATE_COL = "date"
 DEFAULT_CODE_COL = "code"
 PROCESSED_FACTOR_COL = "processed_factor"
+GENERIC_IC_REGRESSION_EVALUATOR_ID = "generic_ic_regression_v1"
+
+
+GENERIC_EVALUATOR_CAPABILITIES: dict[str, dict[str, Any]] = {
+    GENERIC_IC_REGRESSION_EVALUATOR_ID: {
+        "evaluator_id": GENERIC_IC_REGRESSION_EVALUATOR_ID,
+        "evaluation_families": ["ic_analysis", "ic_regression"],
+        "capabilities": {
+            "ic_types": ["spearman_rank_ic", "pearson_ic"],
+            "regression_types": ["ols", "wls"],
+            "categorical_controls": True,
+            "continuous_controls": True,
+            "weighting": True,
+            "return_horizon_units": ["trading_day"],
+            "standard_errors": ["classical"],
+            "transform_steps": [
+                "median_mad",
+                "cross_sectional_regression_residual",
+                "cross_section_zscore",
+                "do_not_fill",
+            ],
+            "metrics": [
+                "rank_ic_mean",
+                "rank_ic_std",
+                "ic_mean",
+                "ic_std",
+                "ic_ir",
+                "ic_positive_ratio",
+                "factor_return_mean",
+                "t_abs_mean",
+                "t_abs_gt_2_ratio",
+                "t_mean",
+            ],
+        },
+    }
+}
+
+
+def get_generic_evaluator_capabilities(evaluator_id: str = GENERIC_IC_REGRESSION_EVALUATOR_ID) -> dict[str, Any]:
+    try:
+        return GENERIC_EVALUATOR_CAPABILITIES[evaluator_id]
+    except KeyError as exc:
+        raise KeyError(f"Unknown generic evaluator: {evaluator_id}") from exc
+
+
+def evaluator_capabilities_for_case(evaluation_case: dict[str, Any]) -> dict[str, Any] | None:
+    family = str(evaluation_case.get("evaluation_family", ""))
+    for descriptor in GENERIC_EVALUATOR_CAPABILITIES.values():
+        if family in set(descriptor.get("evaluation_families", []) or []):
+            return descriptor
+    return None
 
 
 def apply_transform_spec(
@@ -150,13 +201,15 @@ def evaluate_paper_case(
 ) -> dict[str, Any]:
     """Evaluate a supported paper evaluation case on a prepared frame."""
 
-    family = str(evaluation_case.get("evaluation_family", ""))
+    runtime_case = _runtime_case(evaluation_case)
+    family = str(runtime_case.get("evaluation_family", ""))
     if family not in {"ic_analysis", "ic_regression"}:
         raise NotImplementedError(f"Generic evaluator not implemented for evaluation_family={family!r}")
-    transform_spec = evaluation_case.get("transform_spec") or {}
+    evaluator_descriptor = evaluator_capabilities_for_case(runtime_case) or get_generic_evaluator_capabilities()
+    transform_spec = runtime_case.get("transform_spec") or {}
     transformed = apply_transform_spec(frame, value_col=factor_col, transform_spec=transform_spec, date_col=date_col)
-    evaluation_spec = evaluation_case.get("evaluation_spec") or {}
-    required_data = evaluation_case.get("required_data") or {}
+    evaluation_spec = runtime_case.get("evaluation_spec") or {}
+    required_data = runtime_case.get("required_data") or {}
     return_col = str(evaluation_spec.get("return_col") or _first_required(required_data, "evaluation") or "forward_return_1d")
     ic_type = str(evaluation_spec.get("ic_type", "spearman_rank_ic")).lower()
     method = _ic_method_from_type(ic_type)
@@ -177,14 +230,33 @@ def evaluate_paper_case(
         metrics = ic_metrics
     return {
         "case_id": evaluation_case.get("case_id") or evaluation_case.get("truth_id", ""),
+        "source_truth_id": evaluation_case.get("source_truth_id") or evaluation_case.get("truth_id", ""),
+        "evaluator_id": evaluator_descriptor["evaluator_id"],
         "evaluation_family": family,
         "status": "passed",
         "metrics": metrics,
+        "resolved_parameters": {
+            "evaluation_spec": evaluation_spec,
+            "required_data": required_data,
+            "return_col": return_col,
+            "date_col": date_col,
+        },
         "transform_applied": bool(transform_spec.get("steps")),
         "factor_col": factor_col,
         "processed_factor_col": PROCESSED_FACTOR_COL,
         "return_col": return_col,
     }
+
+
+def _runtime_case(evaluation_case: dict[str, Any]) -> dict[str, Any]:
+    resolved_protocol = evaluation_case.get("resolved_protocol", {})
+    if not isinstance(resolved_protocol, dict) or not resolved_protocol:
+        return evaluation_case
+    runtime = dict(evaluation_case)
+    for key in ("evaluation_family", "evaluation_method", "evaluation_spec", "required_data", "transform_spec"):
+        if key in resolved_protocol:
+            runtime[key] = resolved_protocol[key]
+    return runtime
 
 
 def _median_mad_winsorize(series: pd.Series, *, threshold: float) -> pd.Series:
