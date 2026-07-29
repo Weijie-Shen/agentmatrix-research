@@ -184,7 +184,7 @@ Paper ID:
 - Use paper-reported `evaluation_results` only as truth.
 - Do not use paper factor-value truth matching.
 - Keep raw factor definitions separate from evaluation-case transforms, neutralization, return horizons, portfolio rules, and evaluation-required data.
-- Always inspect `/Users/mac/recommended_data_v2` before using Quant API v2 or declaring `blocked_by_data` when real data is needed.
+- Always use `load_recommended_daily_panel()` with `/Users/mac/recommended_data_v2` before Quant API v2 or declaring `blocked_by_data`; do not hand-pick dated or supplemental files.
 - Use Quant API v2 only when the recommended local data folder cannot satisfy the paper's required fields/date window.
 - Preserve all extracted truth sources, profile available data, select the best-supported paper truth before computing metrics, and execute only selected resolved cases.
 - Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue through documented degradation and report deviations.

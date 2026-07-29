@@ -726,15 +726,12 @@ The paper does not provide per-factor evaluation tables. Aggregate evaluation me
 
 Use `/Users/mac/recommended_data_v2` before Quant API v2 when real data is needed.
 
-Curated files:
+Canonical daily-panel files:
 
 ```text
 kline_daily_adjusted.parquet      daily OHLCV, amount, adjustment factors, adjusted OHLC
-security_status_through_2026-04-09.parquet
-                                  trading/ST/suspension/limit status
-st_status_2010_2016.parquet       ST-only status, 2010-01-04 to 2016-12-30
-st_status_full.parquet            ST-only status, 2017-01-03 to 2026-07-22
-market_cap_2010_2026.parquet      daily market capitalization, 2010-01-04 to 2026-07-22
+security_status.parquet           unified ST status, plus richer status fields where available
+market_cap.parquet                unified daily market cap, plus recent share fields
 trading_calendar.parquet          trading calendar
 security_master.parquet           security master
 income_statement.parquet          point-in-time income values
@@ -765,9 +762,10 @@ panel = apply_a_share_recommended_filters(panel)
 Coverage notes:
 
 - `kline_daily_adjusted.parquet` and `trading_calendar.parquet` cover roughly 2010-01-04 to 2026-07-22.
-- `security_status_through_2026-04-09.parquet` covers trading/suspension/limit status through 2026-04-09.
-- `st_status_2010_2016.parquet` and `st_status_full.parquet` provide ST-only coverage from 2010-01-04 to 2026-07-22. They do not contain suspension/trading fields.
-- `market_cap_2010_2026.parquet` is the preferred market-cap file and covers 2010-01-04 to 2026-07-22. The loader falls back to legacy `market_cap.parquet` only when the expanded file is absent.
+- `security_status.parquet` provides one canonical ST series from 2010-01-04 to 2026-07-22. Trading/suspension/limit fields are populated only where the richer source has coverage, currently through 2026-04-09.
+- `market_cap.parquet` is the canonical market-cap series and covers 2010-01-04 to 2026-07-22.
+- Use `load_recommended_daily_panel()` rather than reading or joining source files directly. `resolve_recommended_data_sources()` is diagnostic only.
+- The dated and split files are retained as provenance/build inputs. Regenerate canonical files with `python scripts/build_recommended_data_v2.py` after source refreshes.
 - For all-A-share filters outside full status coverage, ST filtering can still run from the ST-only files, but next-day suspension filtering is unavailable and must be reported as a universe-filter limitation.
 - `income_statement.parquet`, `balance_sheet.parquet`, and `dividend_yield.parquet` include data back to 2010.
 

@@ -17,6 +17,7 @@ from research_core.factor_lab.paper_reproduction.recommended_data import (
     normalize_recommended_security_status_frame,
     normalize_recommended_symbol,
     recommended_data_available,
+    resolve_recommended_data_sources,
 )
 
 
@@ -94,7 +95,7 @@ class RecommendedDataHelperTest(unittest.TestCase):
             self.assertEqual(panel.loc[panel["code"] == "000001.SZ", "market_cap"].tolist(), [100.0])
             self.assertEqual(panel.loc[panel["code"] == "000001.SZ", "industry"].tolist(), ["bank"])
 
-    def test_load_recommended_daily_panel_prefers_expanded_market_cap_and_st_status_files(self) -> None:
+    def test_load_recommended_daily_panel_falls_back_to_expanded_market_cap_and_st_status_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             self._write_fixture_data(root)
@@ -143,6 +144,49 @@ class RecommendedDataHelperTest(unittest.TestCase):
             self.assertEqual(panel["market_cap"].tolist(), [300.0, 400.0])
             self.assertEqual(panel["is_st"].tolist(), [0, 1])
             self.assertTrue(panel["is_suspended"].isna().all())
+
+    def test_canonical_files_hide_legacy_status_and_market_cap_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_fixture_data(root)
+            canonical_status = root / "security_status.parquet"
+            canonical_market_cap = root / "market_cap.parquet"
+            (root / "market_cap.parquet").rename(root / "market_cap_2010_2026.parquet")
+            pd.DataFrame(
+                {
+                    "symbol": ["000001.SZ", "000002.SZ"],
+                    "trade_date": pd.to_datetime(["2020-01-02", "2020-01-02"]),
+                    "is_trading": [1, 1],
+                    "is_st": [0, 0],
+                    "is_suspended": [0, 0],
+                    "high_limited": [0, 0],
+                    "low_limited": [0, 0],
+                    "status_code": ["CANONICAL", "CANONICAL"],
+                }
+            ).to_parquet(canonical_status)
+            pd.DataFrame(
+                {
+                    "symbol": ["000001.SZ", "000002.SZ"],
+                    "trade_date": pd.to_datetime(["2020-01-02", "2020-01-02"]),
+                    "market_cap": [900.0, 800.0],
+                }
+            ).to_parquet(canonical_market_cap)
+
+            config = RecommendedDataConfig(data_dir=root)
+            sources = resolve_recommended_data_sources(config)
+            panel = load_recommended_daily_panel(
+                start_date="2020-01-02",
+                end_date="2020-01-02",
+                include_status=True,
+                include_market_cap=True,
+                config=config,
+            )
+
+            self.assertTrue(sources.uses_canonical_status)
+            self.assertEqual(sources.status_supplements, ())
+            self.assertEqual(sources.market_cap, canonical_market_cap)
+            self.assertEqual(panel["status_code"].tolist(), ["CANONICAL", "CANONICAL"])
+            self.assertEqual(panel["market_cap"].tolist(), [900.0, 800.0])
 
     def test_load_recommended_daily_panel_uses_2010_2016_st_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -102,7 +102,7 @@ I am attaching a paper. Run the paper reproduction workflow for selected factors
 
 Use paper-reported evaluation results only as truth.
 Do not use factor-value truth matching.
-Always inspect `/Users/mac/recommended_data_v2` before Quant API v2 or declaring blocked_by_data.
+Always load `/Users/mac/recommended_data_v2` through `load_recommended_daily_panel()` before Quant API v2 or declaring blocked_by_data. Use the canonical files selected by the loader; do not hand-pick dated or supplemental files.
 Preserve all extracted paper truth sources, profile available data, select the best-supported paper truth before computing metrics, and execute only selected resolved cases.
 Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue with documented degradation and report deviations.
 ```

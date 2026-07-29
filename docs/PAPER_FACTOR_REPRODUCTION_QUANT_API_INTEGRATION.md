@@ -4,15 +4,13 @@ These notes explain how the paper-factor-reproduction workflow should access rea
 
 ## Preferred local source
 
-Use `/Users/mac/recommended_data_v2` before API access. Inspect `README.md` and `MANIFEST.json`; the bundle contains reviewed Parquet files:
+Use `/Users/mac/recommended_data_v2` before API access. Normal workflow code should use the loader below and should not select physical files itself. The loader resolves these canonical datasets:
 
 | File | Use |
 |---|---|
 | `kline_daily_adjusted.parquet` | daily OHLCV, amount, adjustment factors, adjusted OHLC |
-| `security_status_through_2026-04-09.parquet` | historical trading, ST, suspension, and price-limit status |
-| `st_status_2010_2016.parquet` | ST-only status, 2010-01-04 to 2016-12-30 |
-| `st_status_full.parquet` | ST-only status, 2017-01-03 to 2026-07-22 |
-| `market_cap_2010_2026.parquet` | daily market capitalization, 2010-01-04 to 2026-07-22 |
+| `security_status.parquet` | unified ST coverage for 2010-01-04 to 2026-07-22, plus trading/suspension/limit fields where available |
+| `market_cap.parquet` | unified daily market capitalization for 2010-01-04 to 2026-07-22, plus recent share fields |
 | `trading_calendar.parquet` | trading calendar |
 | `security_master.parquet` | security master |
 | `income_statement.parquet` / `balance_sheet.parquet` | point-in-time fundamentals |
@@ -46,11 +44,12 @@ date, code, open, high, low, close, volume, amount
 
 with optional `is_trading`, `is_st`, `is_suspended`, limit flags, and `market_cap`.
 
-Coverage details:
+Loader rules:
 
-- `load_recommended_data_manifest()` augments the JSON manifest with known Parquet files found on disk and adds `present_on_disk`; use that field when the data folder has been refreshed before `MANIFEST.json`.
-- `market_cap_2010_2026.parquet` is the preferred market-cap source. The helper falls back to legacy `market_cap.parquet` only if the expanded file is absent.
-- `st_status_2010_2016.parquet` and `st_status_full.parquet` extend ST coverage across 2010-01-04 to 2026-07-22, but they only have `is_st`. Suspension, trading, and limit fields still come from `security_status_through_2026-04-09.parquet` where available.
+- `load_recommended_daily_panel()` is the only normal entry point for the daily research panel.
+- `resolve_recommended_data_sources()` reports the physical files selected for diagnostics; do not use it to hand-pick smaller sources.
+- Canonical files always win. Legacy split files are compatibility inputs only when a canonical file has not been built.
+- Rebuild canonical files after a data refresh with `python scripts/build_recommended_data_v2.py`.
 - For all-A-share filters after 2026-04-09, the helper can exclude ST rows, but `next_is_suspended` will be unavailable unless another full status source is provided. Record that as a universe-filter limitation instead of claiming an exact next-day suspension filter.
 
 ## Quant API fallback

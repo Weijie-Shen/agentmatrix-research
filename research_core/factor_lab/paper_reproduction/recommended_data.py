@@ -12,11 +12,12 @@ import pandas as pd
 DEFAULT_RECOMMENDED_DATA_DIR = Path("/Users/mac/recommended_data_v2")
 RECOMMENDED_MANIFEST_FILE = "MANIFEST.json"
 RECOMMENDED_KLINE_FILE = "kline_daily_adjusted.parquet"
-RECOMMENDED_STATUS_FILE = "security_status_through_2026-04-09.parquet"
+RECOMMENDED_STATUS_FILE = "security_status.parquet"
+LEGACY_RECOMMENDED_STATUS_FILE = "security_status_through_2026-04-09.parquet"
 RECOMMENDED_ST_STATUS_2010_2016_FILE = "st_status_2010_2016.parquet"
 RECOMMENDED_ST_STATUS_FILE = "st_status_full.parquet"
-RECOMMENDED_MARKET_CAP_FILE = "market_cap_2010_2026.parquet"
-LEGACY_RECOMMENDED_MARKET_CAP_FILE = "market_cap.parquet"
+RECOMMENDED_MARKET_CAP_FILE = "market_cap.parquet"
+LEGACY_RECOMMENDED_MARKET_CAP_FILE = "market_cap_2010_2026.parquet"
 RECOMMENDED_INDUSTRY_FILE = "industry_map.parquet"
 RECOMMENDED_ST_STATUS_FILES = [
     RECOMMENDED_ST_STATUS_2010_2016_FILE,
@@ -37,9 +38,53 @@ class RecommendedDataConfig:
         return self.data_dir / name
 
 
-def recommended_data_available(config: RecommendedDataConfig | None = None) -> bool:
+@dataclass(frozen=True, slots=True)
+class RecommendedDataSources:
+    """Physical files selected for each logical recommended-data dataset."""
+
+    daily_prices: Path
+    security_status: Path | None
+    status_supplements: tuple[Path, ...]
+    market_cap: Path | None
+    industry: Path | None
+
+    @property
+    def uses_canonical_status(self) -> bool:
+        return self.security_status is not None and self.security_status.name == RECOMMENDED_STATUS_FILE
+
+
+def resolve_recommended_data_sources(config: RecommendedDataConfig | None = None) -> RecommendedDataSources:
+    """Resolve canonical files once so callers never choose among overlapping sources."""
+
     data_config = config or RecommendedDataConfig.from_env()
-    return data_config.path(RECOMMENDED_MANIFEST_FILE).exists() and data_config.path(RECOMMENDED_KLINE_FILE).exists()
+    canonical_status = data_config.path(RECOMMENDED_STATUS_FILE)
+    if canonical_status.exists():
+        security_status = canonical_status
+        status_supplements: tuple[Path, ...] = ()
+    else:
+        legacy_status = data_config.path(LEGACY_RECOMMENDED_STATUS_FILE)
+        security_status = legacy_status if legacy_status.exists() else None
+        status_supplements = tuple(
+            data_config.path(name) for name in RECOMMENDED_ST_STATUS_FILES if data_config.path(name).exists()
+        )
+
+    market_cap = _first_existing_path(
+        data_config,
+        [RECOMMENDED_MARKET_CAP_FILE, LEGACY_RECOMMENDED_MARKET_CAP_FILE],
+        required=False,
+    )
+    industry = data_config.path(RECOMMENDED_INDUSTRY_FILE)
+    return RecommendedDataSources(
+        daily_prices=data_config.path(RECOMMENDED_KLINE_FILE),
+        security_status=security_status,
+        status_supplements=status_supplements,
+        market_cap=market_cap,
+        industry=industry if industry.exists() else None,
+    )
+
+
+def recommended_data_available(config: RecommendedDataConfig | None = None) -> bool:
+    return resolve_recommended_data_sources(config).daily_prices.exists()
 
 
 def load_recommended_data_manifest(config: RecommendedDataConfig | None = None) -> pd.DataFrame:
@@ -67,8 +112,9 @@ def load_recommended_daily_panel(
     """Load a Factor Lab-style daily panel from the curated local data folder."""
 
     data_config = config or RecommendedDataConfig.from_env()
+    sources = resolve_recommended_data_sources(data_config)
     panel = _read_recommended_kline(
-        data_config.path(RECOMMENDED_KLINE_FILE),
+        sources.daily_prices,
         start_date=start_date,
         end_date=end_date,
         symbols=symbols,
@@ -77,7 +123,7 @@ def load_recommended_daily_panel(
 
     if include_status:
         status = _read_recommended_status_panel(
-            data_config,
+            sources,
             start_date=start_date,
             end_date=end_date,
             symbols=symbols,
@@ -85,11 +131,10 @@ def load_recommended_daily_panel(
         panel = panel.merge(add_next_suspension_flag(status), on=["date", "code"], how="left")
 
     if include_market_cap:
+        if sources.market_cap is None:
+            raise FileNotFoundError(f"recommended market-cap dataset not found in {data_config.data_dir}")
         market_cap = _read_recommended_market_cap(
-            _first_existing_path(
-                data_config,
-                [RECOMMENDED_MARKET_CAP_FILE, LEGACY_RECOMMENDED_MARKET_CAP_FILE],
-            ),
+            sources.market_cap,
             start_date=start_date,
             end_date=end_date,
             symbols=symbols,
@@ -97,7 +142,9 @@ def load_recommended_daily_panel(
         panel = panel.merge(market_cap, on=["date", "code"], how="left")
 
     if include_industry:
-        industry = pd.read_parquet(data_config.path(RECOMMENDED_INDUSTRY_FILE))
+        if sources.industry is None:
+            raise FileNotFoundError(f"recommended industry dataset not found in {data_config.data_dir}")
+        industry = pd.read_parquet(sources.industry)
         panel = panel.merge(normalize_recommended_industry_frame(industry), on="code", how="left")
 
     return panel.sort_values(["code", "date"]).reset_index(drop=True)
@@ -149,6 +196,8 @@ def normalize_recommended_security_status_frame(raw_frame: pd.DataFrame) -> pd.D
 
 def normalize_recommended_market_cap_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
     frame = raw_frame.reset_index() if isinstance(raw_frame.index, pd.MultiIndex) else raw_frame.copy()
+    if "trade_date" in frame.columns and "date" not in frame.columns:
+        frame = frame.rename(columns={"trade_date": "date"})
     if "symbol" in frame.columns and "order_book_id" not in frame.columns:
         frame["order_book_id"] = frame["symbol"]
     required = ["order_book_id", "date", "market_cap"]
@@ -253,42 +302,37 @@ def _read_recommended_st_status(
 
 
 def _read_recommended_status_panel(
-    data_config: RecommendedDataConfig,
+    sources: RecommendedDataSources,
     *,
     start_date: str | pd.Timestamp | None,
     end_date: str | pd.Timestamp | None,
     symbols: list[str] | None,
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
-    status_path = data_config.path(RECOMMENDED_STATUS_FILE)
-    if status_path.exists():
+    for st_path in sources.status_supplements:
         frames.append(
             normalize_recommended_security_status_frame(
-                _read_recommended_status(
-                    status_path,
+                _read_recommended_st_status(
+                    st_path,
                     start_date=start_date,
                     end_date=end_date,
                     symbols=symbols,
                 )
             )
         )
-    for st_file in RECOMMENDED_ST_STATUS_FILES:
-        st_path = data_config.path(st_file)
-        if st_path.exists():
-            frames.append(
-                normalize_recommended_security_status_frame(
-                    _read_recommended_st_status(
-                        st_path,
-                        start_date=start_date,
-                        end_date=end_date,
-                        symbols=symbols,
-                    )
+    if sources.security_status is not None:
+        frames.append(
+            normalize_recommended_security_status_frame(
+                _read_recommended_status(
+                    sources.security_status,
+                    start_date=start_date,
+                    end_date=end_date,
+                    symbols=symbols,
                 )
             )
-    if not frames:
-        raise FileNotFoundError(
-            f"recommended status files not found: {status_path} or {', '.join(str(data_config.path(name)) for name in RECOMMENDED_ST_STATUS_FILES)}"
         )
+    if not frames:
+        raise FileNotFoundError(f"recommended security-status dataset not found beside {sources.daily_prices}")
     combined = frames[0]
     for frame in frames[1:]:
         combined = _merge_status_frames(combined, frame)
@@ -302,6 +346,23 @@ def _read_recommended_market_cap(
     end_date: str | pd.Timestamp | None,
     symbols: list[str] | None,
 ) -> pd.DataFrame:
+    try:
+        import pyarrow.parquet as pq
+
+        columns = set(pq.read_schema(path).names)
+    except Exception:
+        columns = set()
+    if {"symbol", "trade_date", "market_cap"}.issubset(columns):
+        raw = _read_parquet_with_filters(
+            path,
+            columns=["symbol", "trade_date", "market_cap"],
+            date_col="trade_date",
+            start_date=start_date,
+            end_date=end_date,
+            symbols=symbols,
+        )
+        return normalize_recommended_market_cap_frame(raw)
+
     frame = pd.read_parquet(path)
     frame = normalize_recommended_market_cap_frame(frame)
     if start_date is not None:
@@ -327,12 +388,14 @@ def _merge_status_frames(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFram
     return merged
 
 
-def _first_existing_path(data_config: RecommendedDataConfig, names: list[str]) -> Path:
+def _first_existing_path(data_config: RecommendedDataConfig, names: list[str], *, required: bool = True) -> Path | None:
     for name in names:
         path = data_config.path(name)
         if path.exists():
             return path
-    return data_config.path(names[0])
+    if required:
+        return data_config.path(names[0])
+    return None
 
 
 def _read_parquet_with_filters(
@@ -389,8 +452,8 @@ def _symbol_filter_values(symbols: list[str]) -> list[str]:
 def _augment_manifest_with_present_files(data_config: RecommendedDataConfig, manifest: pd.DataFrame) -> pd.DataFrame:
     listed = set(manifest["file"].tolist()) if "file" in manifest.columns else set()
     rows: list[dict[str, Any]] = []
-    for name in (RECOMMENDED_MARKET_CAP_FILE, *RECOMMENDED_ST_STATUS_FILES):
-        path = data_config.path(name)
+    for path in sorted(data_config.data_dir.glob("*.parquet")):
+        name = path.name
         if name in listed or not path.exists():
             continue
         rows.append(_parquet_manifest_row(path))
