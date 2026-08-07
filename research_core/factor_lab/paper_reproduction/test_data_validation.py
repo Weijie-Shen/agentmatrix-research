@@ -154,6 +154,22 @@ class PaperInputDataValidationTest(unittest.TestCase):
         self.assertEqual(results["sample_period"].availability, "partially_available")
         self.assertEqual(assessment.comparability, "materially_comparable")
 
+    def test_data_profile_infers_explicit_price_view_conventions(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2019-04-29", "2019-04-30"]),
+                "code": ["AAA", "AAA"],
+                "close": [10.0, 11.0],
+                "price_adjustment": ["qfq", "qfq"],
+                "adjustment_anchor_date": pd.to_datetime(["2019-04-30", "2019-04-30"]),
+            }
+        )
+
+        profile = build_data_profile(frame, source_id="qfq-test")
+
+        self.assertEqual(profile.conventions["price_adjustment"], "qfq")
+        self.assertEqual(profile.conventions["adjustment_anchor_date"], "2019-04-30")
+
 
 if __name__ == "__main__":
     unittest.main()

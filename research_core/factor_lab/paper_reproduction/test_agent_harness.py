@@ -46,9 +46,13 @@ class PaperReproductionAgentHarnessTest(unittest.TestCase):
             self.assertEqual(metadata["skill_copy_path"], str(copied_skill))
             self.assertEqual(metadata["skill_sha256"], bundle.skill_sha256)
             self.assertEqual(metadata["selected_factors"], ["Alpha3", "Alpha13", "Alpha15"])
+            self.assertEqual(metadata["required_price_adjustment_views"], ["qfq", "hfq"])
             self.assertIn(str(copied_skill), prompt)
             self.assertIn("Load and follow the bundled skill", prompt)
             self.assertIn("Use paper-reported `evaluation_results` only as truth", prompt)
+            self.assertIn("load_recommended_paper_panels(test_end_date=...)", prompt)
+            self.assertIn("testing-end-anchored QFQ", prompt)
+            self.assertIn("initial-baseline HFQ", prompt)
 
     def test_missing_skill_path_fails_before_writing_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

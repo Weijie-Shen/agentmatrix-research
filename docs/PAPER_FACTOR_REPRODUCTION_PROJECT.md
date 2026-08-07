@@ -729,8 +729,7 @@ Use `/Users/mac/recommended_data_v2` before Quant API v2 when real data is neede
 Canonical daily-panel files:
 
 ```text
-kline_daily_adjusted.parquet      daily OHLCV, amount, adjustment factors, adjusted OHLC
-security_status.parquet           unified ST status, plus richer status fields where available
+kline_raw_rqdata.parquet          raw RQData OHLCV/amount, factors, ST/suspension status, price-observation flags
 market_cap.parquet                unified daily market cap, plus recent share fields
 trading_calendar.parquet          trading calendar
 security_master.parquet           security master
@@ -745,28 +744,30 @@ Daily panel helper:
 ```python
 from research_core.factor_lab.paper_reproduction.recommended_data import (
     apply_a_share_recommended_filters,
-    load_recommended_daily_panel,
+    load_recommended_paper_panels,
 )
 
-panel = load_recommended_daily_panel(
-    start_date="2020-01-02",
-    end_date="2026-07-22",
-    adjusted=True,
+panels = load_recommended_paper_panels(
+    test_end_date=paper_test_end,
+    start_date=paper_data_start,
+    end_date=paper_test_end,
     include_status=True,
     include_market_cap=True,
     include_industry=True,
 )
-panel = apply_a_share_recommended_filters(panel)
+qfq_panel = apply_a_share_recommended_filters(panels["qfq"])
+hfq_panel = apply_a_share_recommended_filters(panels["hfq"])
 ```
 
 Coverage notes:
 
-- `kline_daily_adjusted.parquet` and `trading_calendar.parquet` cover roughly 2010-01-04 to 2026-07-22.
-- `security_status.parquet` provides one canonical ST series from 2010-01-04 to 2026-07-22. Trading/suspension/limit fields are populated only where the richer source has coverage, currently through 2026-04-09.
+- `kline_raw_rqdata.parquet` is the primary panel and covers 2000-01-04 to 2026-08-06. Its OHLC/limits/`prev_close` are unadjusted RQData values requested with `adjust_type="none"`.
+- The same file contains complete listed-calendar ST and suspension status. Status-only rows retain null market fields and must not be forward-filled.
+- Every reproduction runs two independent views: testing-end-anchored QFQ (`raw * F[t] / F[test_end]`) and initial-baseline HFQ (`raw * F[t]`). The paper test end is configuration, not a fixed date.
+- Apply the same view multiplier to OHLC and `amount / volume` VWAP; leave volume and amount unchanged. Never mix QFQ and HFQ fields in one run.
 - `market_cap.parquet` is the canonical market-cap series and covers 2010-01-04 to 2026-07-22.
-- Use `load_recommended_daily_panel()` rather than reading or joining source files directly. `resolve_recommended_data_sources()` is diagnostic only.
-- The dated and split files are retained as provenance/build inputs. Regenerate canonical files with `python scripts/build_recommended_data_v2.py` after source refreshes.
-- For all-A-share filters outside full status coverage, ST filtering can still run from the ST-only files, but next-day suspension filtering is unavailable and must be reported as a universe-filter limitation.
+- Use `load_recommended_paper_panels(test_end_date=...)` rather than reading or joining physical source files directly. `resolve_recommended_data_sources()` is diagnostic only.
+- Require `has_price_observation=true` for price calculations. The standard A-share filter additionally removes zero-volume provider rows, current ST rows, and next-panel-date suspensions.
 - `income_statement.parquet`, `balance_sheet.parquet`, and `dividend_yield.parquet` include data back to 2010.
 
 ## Quant API v2 Data Notes
@@ -806,7 +807,7 @@ date, code, open, high, low, close, volume, amount
 Known limits:
 
 - `ods_kline_1d` coverage starts around 2020
-- Huatai's 2010-2019 full sample cannot be fully reproduced from this API instance; check recommended local financial/dividend files before declaring a data blocker for non-kline fields
+- the local RQData K-line panel now covers Huatai's 2010-2019 K-line window; other required fields such as exact point-in-time industry or free-float weights may still limit protocol fidelity
 - recent windows can validate implementation/data flow but not full sample reproduction
 
 Date encoding pitfall:
@@ -835,9 +836,9 @@ Evaluation gaps:
 
 Data gaps:
 
-- pre-2020 A-share history for papers like Huatai
-- industry classification panel
-- market-cap / free-float market-cap panel
+- point-in-time industry classification aligned to each paper's taxonomy
+- complete historical free-float market capitalization/weights for paper-specific WLS protocols
+- provider anomalies in a small minority of raw VWAP and zero-volume source rows
 - ST/PT and suspension filters
 - benchmark return series for paper portfolio metrics
 

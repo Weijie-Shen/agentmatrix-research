@@ -121,6 +121,9 @@ def _metadata_payload(
             "required_agent_instruction": "Load and follow the bundled paper-factor-reproduction skill before doing reproduction work.",
             "truth_policy": "Use paper-reported evaluation_results only; do not use factor-value truth matching.",
             "stage_policy": "Proceed through the gated paper reproduction workflow and stop at the correct gate when blocked.",
+            "required_price_adjustment_views": ["qfq", "hfq"],
+            "qfq_anchor_policy": "per-security cumulative factor at the paper testing-period end",
+            "hfq_anchor_policy": "RQData initial cumulative-factor baseline",
         }
     )
     return payload
@@ -184,11 +187,13 @@ Paper ID:
 - Use paper-reported `evaluation_results` only as truth.
 - Do not use paper factor-value truth matching.
 - Keep raw factor definitions separate from evaluation-case transforms, neutralization, return horizons, portfolio rules, and evaluation-required data.
-- Always use `load_recommended_daily_panel()` with `/Users/mac/recommended_data_v2` before Quant API v2 or declaring `blocked_by_data`; do not hand-pick dated or supplemental files.
+- Always use `load_recommended_paper_panels(test_end_date=...)` with `/Users/mac/recommended_data_v2` before Quant API v2 or declaring `blocked_by_data`; run both the testing-end-anchored QFQ view and the initial-baseline HFQ view, and do not hand-pick physical files.
 - Use Quant API v2 only when the recommended local data folder cannot satisfy the paper's required fields/date window.
 - Preserve all extracted truth sources, profile available data, select the best-supported paper truth before computing metrics, and execute only selected resolved cases.
 - Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue through documented degradation and report deviations.
 - Export extraction/spec/pipeline/report artifacts under the repo's Factor Lab runtime paths.
+
+Required price views recorded by this harness: `{", ".join(metadata["required_price_adjustment_views"])}`.
 
 ## Notes
 

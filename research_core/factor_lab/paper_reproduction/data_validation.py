@@ -182,6 +182,15 @@ def build_data_profile(
     if parsed_dates.isna().any() and date_column in frame.columns:
         limitations.append(f"invalid {date_column} values: {int(parsed_dates.isna().sum())}")
 
+    resolved_conventions = dict(conventions or {})
+    if "price_adjustment" in frame.columns:
+        price_views = [str(value) for value in frame["price_adjustment"].dropna().unique()]
+        resolved_conventions.setdefault("price_adjustment", price_views[0] if len(price_views) == 1 else price_views)
+    if "adjustment_anchor_date" in frame.columns:
+        anchor_dates = pd.to_datetime(frame["adjustment_anchor_date"], errors="coerce").dropna().unique()
+        if len(anchor_dates) == 1:
+            resolved_conventions.setdefault("adjustment_anchor_date", pd.Timestamp(anchor_dates[0]).date().isoformat())
+
     return DataProfile(
         source_id=source_id,
         row_count=int(len(frame)),
@@ -193,7 +202,7 @@ def build_data_profile(
         missingness=missingness,
         duplicate_key_count=duplicate_count,
         field_coverage=field_coverage,
-        conventions=conventions or {},
+        conventions=resolved_conventions,
         derived_fields=derived_fields or [],
         limitations=limitations,
     )

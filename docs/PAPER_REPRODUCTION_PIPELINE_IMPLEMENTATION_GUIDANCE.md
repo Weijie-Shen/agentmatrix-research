@@ -227,12 +227,13 @@ Derived fields should record lineage. Example:
 ```json
 {
   "field": "vwap",
-  "sources": ["amount", "volume"],
-  "formula": "amount / volume",
-  "price_basis": "raw",
-  "compatible_with_adjusted_ohlc": false,
+  "sources": ["amount", "volume", "ex_cum_factor"],
+  "raw_formula": "amount / volume",
+  "adjustment_formula": "raw_vwap * price_multiplier",
+  "price_basis": "qfq_or_hfq_selected_for_this_run",
+  "compatible_with_selected_ohlc": true,
   "limitations": [
-    "VWAP and adjusted OHLC do not share the same price basis"
+    "provider VWAP/candle sanity exceptions are retained and reported"
   ]
 }
 ```
@@ -626,7 +627,7 @@ The Hermes skill is the primary policy driver. Update it before or alongside fra
 
 The skill should explicitly instruct the agent to:
 
-1. load and profile the canonical recommended-data panel through `load_recommended_daily_panel()` rather than selecting among physical source files;
+1. load and profile both canonical paper price views through `load_recommended_paper_panels(test_end_date=...)`: testing-end-anchored QFQ and initial-baseline HFQ, each derived from the same raw RQData panel;
 2. preserve all extracted truth sources;
 3. assess truth support before selecting a case;
 4. select truth before computing results;

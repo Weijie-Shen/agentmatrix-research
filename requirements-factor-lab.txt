@@ -1,5 +1,6 @@
 numpy>=2.0
 pandas>=2.2
+pyarrow>=15.0
 scipy>=1.14
 Flask>=3.0
 flask-cors>=5.0

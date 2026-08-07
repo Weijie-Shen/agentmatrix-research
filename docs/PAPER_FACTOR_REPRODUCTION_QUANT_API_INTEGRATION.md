@@ -8,8 +8,7 @@ Use `/Users/mac/recommended_data_v2` before API access. Normal workflow code sho
 
 | File | Use |
 |---|---|
-| `kline_daily_adjusted.parquet` | daily OHLCV, amount, adjustment factors, adjusted OHLC |
-| `security_status.parquet` | unified ST coverage for 2010-01-04 to 2026-07-22, plus trading/suspension/limit fields where available |
+| `kline_raw_rqdata.parquet` | RQData unadjusted daily OHLCV/amount, cumulative factors, factor-event dates, historical ST status, suspension status, and explicit price-observation flags; 2000-01-04 to 2026-08-06 |
 | `market_cap.parquet` | unified daily market capitalization for 2010-01-04 to 2026-07-22, plus recent share fields |
 | `trading_calendar.parquet` | trading calendar |
 | `security_master.parquet` | security master |
@@ -22,18 +21,19 @@ Recommended helper:
 ```python
 from research_core.factor_lab.paper_reproduction.recommended_data import (
     apply_a_share_recommended_filters,
-    load_recommended_daily_panel,
+    load_recommended_paper_panels,
 )
 
-panel = load_recommended_daily_panel(
-    start_date="2020-01-02",
-    end_date="2026-07-22",
-    adjusted=True,
+panels = load_recommended_paper_panels(
+    test_end_date=paper_test_end,
+    start_date=paper_data_start,
+    end_date=paper_test_end,
     include_status=True,
     include_market_cap=True,
     include_industry=True,
 )
-panel = apply_a_share_recommended_filters(panel)
+qfq_panel = apply_a_share_recommended_filters(panels["qfq"])
+hfq_panel = apply_a_share_recommended_filters(panels["hfq"])
 ```
 
 This returns Factor Lab-style daily columns such as:
@@ -42,15 +42,30 @@ This returns Factor Lab-style daily columns such as:
 date, code, open, high, low, close, volume, amount
 ```
 
-with optional `is_trading`, `is_st`, `is_suspended`, limit flags, and `market_cap`.
+with raw audit columns, `vwap`, `is_trading`, `is_st`, `is_suspended`,
+`has_price_observation`, `next_is_suspended`, factor fields, and optional
+`market_cap`/`industry`.
+
+Every paper reproduction must run both price conventions from the same raw panel:
+
+```text
+QFQ(t; T) = raw_price(t) * ex_cum_factor(t) / ex_cum_factor(T)
+HFQ(t)    = raw_price(t) * ex_cum_factor(t)
+```
+
+`T` is the paper's testing-period end and is configuration, never a fixed
+Huatai-specific date. The same multiplier applies to OHLC, VWAP, price limits,
+and `prev_close`; `volume` and `amount` remain unchanged. Do not mix the two
+views inside one factor/evaluation run.
 
 Loader rules:
 
-- `load_recommended_daily_panel()` is the only normal entry point for the daily research panel.
+- `load_recommended_paper_panels(test_end_date=...)` is the normal paper-reproduction entry point and always returns `qfq` and `hfq` panels.
+- `load_recommended_daily_panel(..., price_view="raw"|"qfq"|"hfq")` remains available for explicit diagnostics and non-paper workflows.
 - `resolve_recommended_data_sources()` reports the physical files selected for diagnostics; do not use it to hand-pick smaller sources.
-- Canonical files always win. Legacy split files are compatibility inputs only when a canonical file has not been built.
-- Rebuild canonical files after a data refresh with `python scripts/build_recommended_data_v2.py`.
-- For all-A-share filters after 2026-04-09, the helper can exclude ST rows, but `next_is_suspended` will be unavailable unless another full status source is provided. Record that as a universe-filter limitation instead of claiming an exact next-day suspension filter.
+- Filter price computations to `has_price_observation=true`; the standard A-share filter also requires positive volume through derived `is_trading`.
+- Status-only rows remain null and must not be forward-filled.
+- `has_factor_event` is authoritative; do not infer event presence solely from `ex_factor != 1`, because valid unit-factor events exist.
 
 ## Quant API fallback
 

@@ -1,28 +1,25 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+import numpy as np
 import pandas as pd
 
 
 DEFAULT_RECOMMENDED_DATA_DIR = Path("/Users/mac/recommended_data_v2")
 RECOMMENDED_MANIFEST_FILE = "MANIFEST.json"
-RECOMMENDED_KLINE_FILE = "kline_daily_adjusted.parquet"
-RECOMMENDED_STATUS_FILE = "security_status.parquet"
-LEGACY_RECOMMENDED_STATUS_FILE = "security_status_through_2026-04-09.parquet"
-RECOMMENDED_ST_STATUS_2010_2016_FILE = "st_status_2010_2016.parquet"
-RECOMMENDED_ST_STATUS_FILE = "st_status_full.parquet"
+RECOMMENDED_KLINE_FILE = "kline_raw_rqdata.parquet"
 RECOMMENDED_MARKET_CAP_FILE = "market_cap.parquet"
 LEGACY_RECOMMENDED_MARKET_CAP_FILE = "market_cap_2010_2026.parquet"
 RECOMMENDED_INDUSTRY_FILE = "industry_map.parquet"
-RECOMMENDED_ST_STATUS_FILES = [
-    RECOMMENDED_ST_STATUS_2010_2016_FILE,
-    RECOMMENDED_ST_STATUS_FILE,
-]
+
+PriceAdjustmentView = Literal["raw", "qfq", "hfq"]
+PAPER_PRICE_ADJUSTMENT_VIEWS: tuple[Literal["qfq", "hfq"], ...] = ("qfq", "hfq")
+RAW_PRICE_COLUMNS = ("open", "high", "low", "close", "limit_up", "limit_down", "prev_close")
 
 
 @dataclass(slots=True)
@@ -43,31 +40,18 @@ class RecommendedDataSources:
     """Physical files selected for each logical recommended-data dataset."""
 
     daily_prices: Path
-    security_status: Path | None
-    status_supplements: tuple[Path, ...]
     market_cap: Path | None
     industry: Path | None
 
     @property
-    def uses_canonical_status(self) -> bool:
-        return self.security_status is not None and self.security_status.name == RECOMMENDED_STATUS_FILE
+    def uses_integrated_kline_status(self) -> bool:
+        return self.daily_prices.name == RECOMMENDED_KLINE_FILE
 
 
 def resolve_recommended_data_sources(config: RecommendedDataConfig | None = None) -> RecommendedDataSources:
     """Resolve canonical files once so callers never choose among overlapping sources."""
 
     data_config = config or RecommendedDataConfig.from_env()
-    canonical_status = data_config.path(RECOMMENDED_STATUS_FILE)
-    if canonical_status.exists():
-        security_status = canonical_status
-        status_supplements: tuple[Path, ...] = ()
-    else:
-        legacy_status = data_config.path(LEGACY_RECOMMENDED_STATUS_FILE)
-        security_status = legacy_status if legacy_status.exists() else None
-        status_supplements = tuple(
-            data_config.path(name) for name in RECOMMENDED_ST_STATUS_FILES if data_config.path(name).exists()
-        )
-
     market_cap = _first_existing_path(
         data_config,
         [RECOMMENDED_MARKET_CAP_FILE, LEGACY_RECOMMENDED_MARKET_CAP_FILE],
@@ -76,8 +60,6 @@ def resolve_recommended_data_sources(config: RecommendedDataConfig | None = None
     industry = data_config.path(RECOMMENDED_INDUSTRY_FILE)
     return RecommendedDataSources(
         daily_prices=data_config.path(RECOMMENDED_KLINE_FILE),
-        security_status=security_status,
-        status_supplements=status_supplements,
         market_cap=market_cap,
         industry=industry if industry.exists() else None,
     )
@@ -103,32 +85,41 @@ def load_recommended_daily_panel(
     start_date: str | pd.Timestamp | None = None,
     end_date: str | pd.Timestamp | None = None,
     symbols: list[str] | None = None,
-    adjusted: bool = True,
+    price_view: PriceAdjustmentView = "raw",
+    adjustment_end_date: str | pd.Timestamp | None = None,
     include_status: bool = False,
     include_market_cap: bool = False,
     include_industry: bool = False,
     config: RecommendedDataConfig | None = None,
 ) -> pd.DataFrame:
-    """Load a Factor Lab-style daily panel from the curated local data folder."""
+    """Load one explicit price view from the canonical raw RQData daily panel.
+
+    Paper reproductions should normally call :func:`load_recommended_paper_panels`
+    so both required adjustment views are produced from the same raw observations.
+    """
 
     data_config = config or RecommendedDataConfig.from_env()
     sources = resolve_recommended_data_sources(data_config)
+    read_end_date = _status_lookahead_end(end_date) if include_status else end_date
     panel = _read_recommended_kline(
         sources.daily_prices,
         start_date=start_date,
-        end_date=end_date,
+        end_date=read_end_date,
         symbols=symbols,
     )
-    panel = normalize_recommended_daily_kline_frame(panel, adjusted=adjusted)
+    panel = normalize_recommended_daily_kline_frame(panel)
 
     if include_status:
-        status = _read_recommended_status_panel(
-            sources,
-            start_date=start_date,
-            end_date=end_date,
-            symbols=symbols,
-        )
-        panel = panel.merge(add_next_suspension_flag(status), on=["date", "code"], how="left")
+        panel = add_next_suspension_flag(panel)
+
+    if end_date is not None:
+        panel = panel[panel["date"] <= pd.Timestamp(end_date)]
+
+    panel = build_recommended_price_view(
+        panel,
+        price_view=price_view,
+        adjustment_end_date=adjustment_end_date if adjustment_end_date is not None else end_date,
+    )
 
     if include_market_cap:
         if sources.market_cap is None:
@@ -150,48 +141,191 @@ def load_recommended_daily_panel(
     return panel.sort_values(["code", "date"]).reset_index(drop=True)
 
 
-def normalize_recommended_daily_kline_frame(raw_frame: pd.DataFrame, *, adjusted: bool = True) -> pd.DataFrame:
-    required = ["symbol", "trade_date", "open", "high", "low", "close", "volume", "amount"]
+def load_recommended_paper_panels(
+    *,
+    test_end_date: str | pd.Timestamp,
+    start_date: str | pd.Timestamp | None = None,
+    end_date: str | pd.Timestamp | None = None,
+    symbols: list[str] | None = None,
+    include_status: bool = True,
+    include_market_cap: bool = False,
+    include_industry: bool = False,
+    config: RecommendedDataConfig | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Load the mandatory QFQ and HFQ panels for a paper reproduction.
+
+    QFQ is anchored independently for each security at the latest cumulative
+    factor available on or before ``test_end_date``. HFQ uses the RQData
+    initial factor baseline and therefore needs no end-date normalization.
+    """
+
+    test_end = pd.Timestamp(test_end_date)
+    requested_end = pd.Timestamp(end_date) if end_date is not None else test_end
+    if requested_end < test_end:
+        raise ValueError("end_date must reach test_end_date so QFQ anchor factors are observable")
+    raw_panel = load_recommended_daily_panel(
+        start_date=start_date,
+        end_date=requested_end,
+        symbols=symbols,
+        price_view="raw",
+        include_status=include_status,
+        include_market_cap=include_market_cap,
+        include_industry=include_industry,
+        config=config,
+    )
+    return {
+        "qfq": build_recommended_price_view(
+            raw_panel,
+            price_view="qfq",
+            adjustment_end_date=test_end,
+        ),
+        "hfq": build_recommended_price_view(raw_panel, price_view="hfq"),
+    }
+
+
+def normalize_recommended_daily_kline_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
+    required = [
+        "symbol",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "num_trades",
+        "limit_up",
+        "limit_down",
+        "prev_close",
+        "ex_factor",
+        "ex_cum_factor",
+        "factor_ex_date",
+        "has_factor_event",
+        "is_st",
+        "is_suspended",
+        "has_price_observation",
+    ]
     missing = [column for column in required if column not in raw_frame.columns]
     if missing:
         raise ValueError(f"missing recommended daily kline columns: {', '.join(missing)}")
 
-    panel = raw_frame.copy()
-    if adjusted:
-        adjusted_columns = {"open_adj": "open", "high_adj": "high", "low_adj": "low", "close_adj": "close"}
-        missing_adjusted = [column for column in adjusted_columns if column not in panel.columns]
-        if missing_adjusted:
-            raise ValueError(f"missing adjusted price columns: {', '.join(missing_adjusted)}")
-        for source, target in adjusted_columns.items():
-            panel[target] = panel[source]
-
-    panel = panel.rename(columns={"trade_date": "date", "symbol": "code"})
+    panel = raw_frame.copy().rename(columns={"trade_date": "date", "symbol": "code"})
     panel["date"] = pd.to_datetime(panel["date"])
-    columns = ["date", "code", "open", "high", "low", "close", "volume", "amount"]
-    optional_columns = [column for column in ("adj_factor", "open_adj", "high_adj", "low_adj", "close_adj") if column in panel.columns]
-    return panel[columns + optional_columns]
-
-
-def normalize_recommended_security_status_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
-    required = ["symbol", "trade_date", "is_st"]
-    missing = [column for column in required if column not in raw_frame.columns]
-    if missing:
-        raise ValueError(f"missing recommended security status columns: {', '.join(missing)}")
-    status = raw_frame.copy().rename(columns={"trade_date": "date", "symbol": "code"})
-    status["date"] = pd.to_datetime(status["date"])
-    status["code"] = status["code"].map(normalize_recommended_symbol)
+    panel["factor_ex_date"] = pd.to_datetime(panel["factor_ex_date"])
+    panel["code"] = panel["code"].map(normalize_recommended_symbol)
+    panel["is_trading"] = panel["has_price_observation"].astype(bool) & panel["volume"].gt(0)
+    panel["vwap"] = _raw_vwap(panel)
     columns = [
         "date",
         "code",
-        "is_trading",
+        "open",
+        "high",
+        "low",
+        "close",
+        "vwap",
+        "volume",
+        "amount",
+        "num_trades",
+        "limit_up",
+        "limit_down",
+        "prev_close",
+        "ex_factor",
+        "ex_cum_factor",
+        "factor_ex_date",
+        "has_factor_event",
         "is_st",
         "is_suspended",
-        *[column for column in ("high_limited", "low_limited", "status_code") if column in status.columns],
+        "has_price_observation",
+        "is_trading",
     ]
-    for optional in ("is_trading", "is_suspended"):
-        if optional not in status.columns:
-            status[optional] = pd.NA
-    return status[columns]
+    return panel[columns]
+
+
+def build_recommended_price_view(
+    raw_panel: pd.DataFrame,
+    *,
+    price_view: PriceAdjustmentView,
+    adjustment_end_date: str | pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """Apply one explicit raw/QFQ/HFQ price convention to a normalized panel."""
+
+    if price_view not in {"raw", "qfq", "hfq"}:
+        raise ValueError(f"unsupported price_view: {price_view}")
+    required = ["date", "code", "ex_cum_factor", *RAW_PRICE_COLUMNS]
+    missing = [column for column in required if column not in raw_panel.columns]
+    if missing:
+        raise ValueError(f"missing price-view columns: {', '.join(missing)}")
+
+    panel = raw_panel.copy()
+    factors = pd.to_numeric(panel["ex_cum_factor"], errors="coerce")
+    if factors.isna().any() or (factors <= 0).any():
+        raise ValueError("ex_cum_factor must be finite and positive")
+
+    raw_vwap = _raw_vwap(panel)
+    for column in RAW_PRICE_COLUMNS:
+        raw_column = f"{column}_raw"
+        if raw_column not in panel.columns:
+            panel[raw_column] = panel[column]
+        else:
+            panel[column] = panel[raw_column]
+    if "vwap_raw" not in panel.columns:
+        panel["vwap_raw"] = raw_vwap
+    else:
+        panel["vwap"] = panel["vwap_raw"]
+
+    if price_view == "raw":
+        multiplier = pd.Series(1.0, index=panel.index, dtype=float)
+        anchor_factor = pd.Series(1.0, index=panel.index, dtype=float)
+        anchor_date = pd.NaT
+        anchor_observation_date = pd.Series(pd.NaT, index=panel.index, dtype="datetime64[ns]")
+    elif price_view == "hfq":
+        multiplier = factors
+        anchor_factor = pd.Series(1.0, index=panel.index, dtype=float)
+        anchor_date = pd.NaT
+        anchor_observation_date = pd.Series(pd.NaT, index=panel.index, dtype="datetime64[ns]")
+    else:
+        if adjustment_end_date is None:
+            raise ValueError("adjustment_end_date is required for the qfq price view")
+        anchor_date = pd.Timestamp(adjustment_end_date)
+        eligible = panel.loc[panel["date"] <= anchor_date, ["date", "code", "ex_cum_factor"]]
+        anchors = (
+            eligible.sort_values(["code", "date"])
+            .groupby("code", sort=False)
+            .last()
+        )
+        anchor_factor = panel["code"].map(anchors["ex_cum_factor"]).astype(float)
+        anchor_observation_date = pd.to_datetime(panel["code"].map(anchors["date"]))
+        multiplier = factors / anchor_factor
+
+    for column in (*RAW_PRICE_COLUMNS, "vwap"):
+        raw_column = f"{column}_raw"
+        panel[column] = panel[raw_column] * multiplier
+    panel["price_multiplier"] = multiplier
+    panel["price_adjustment"] = price_view
+    panel["adjustment_anchor_date"] = anchor_date
+    panel["adjustment_anchor_observation_date"] = anchor_observation_date
+    panel["adjustment_anchor_factor"] = anchor_factor
+    panel.attrs["price_adjustment"] = price_view
+    panel.attrs["adjustment_anchor_date"] = None if pd.isna(anchor_date) else str(anchor_date.date())
+    return panel
+
+
+def _raw_vwap(panel: pd.DataFrame) -> pd.Series:
+    volume = pd.to_numeric(panel["volume"], errors="coerce")
+    amount = pd.to_numeric(panel["amount"], errors="coerce")
+    values = np.divide(
+        amount.to_numpy(dtype=float),
+        volume.to_numpy(dtype=float),
+        out=np.full(len(panel), np.nan, dtype=float),
+        where=volume.to_numpy(dtype=float) > 0,
+    )
+    return pd.Series(values, index=panel.index, dtype=float)
+
+
+def _status_lookahead_end(end_date: str | pd.Timestamp | None) -> pd.Timestamp | None:
+    if end_date is None:
+        return None
+    return pd.Timestamp(end_date) + pd.Timedelta(days=31)
 
 
 def normalize_recommended_market_cap_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
@@ -236,12 +370,14 @@ def apply_a_share_recommended_filters(panel: pd.DataFrame) -> pd.DataFrame:
     """Apply the default all-A-share filters supported by recommended data status columns."""
 
     result = panel.copy()
+    if "has_price_observation" in result.columns:
+        result = result[result["has_price_observation"].fillna(False).astype(bool)]
+    if "is_trading" in result.columns:
+        result = result[result["is_trading"].fillna(False).astype(bool)]
     suspension_column = "next_is_suspended" if "next_is_suspended" in result.columns else "is_suspended"
     for column in ("is_st", suspension_column):
         if column in result.columns:
             result = result[result[column].fillna(0).astype(int) == 0]
-    if "is_trading" in result.columns:
-        result = result[result["is_trading"].fillna(1).astype(int) == 1]
     return result.reset_index(drop=True)
 
 
@@ -270,73 +406,19 @@ def _read_recommended_kline(
         "close",
         "volume",
         "amount",
-        "adj_factor",
-        "open_adj",
-        "high_adj",
-        "low_adj",
-        "close_adj",
+        "num_trades",
+        "limit_up",
+        "limit_down",
+        "prev_close",
+        "ex_factor",
+        "ex_cum_factor",
+        "factor_ex_date",
+        "has_factor_event",
+        "is_st",
+        "is_suspended",
+        "has_price_observation",
     ]
     return _read_parquet_with_filters(path, columns=columns, date_col="trade_date", start_date=start_date, end_date=end_date, symbols=symbols)
-
-
-def _read_recommended_status(
-    path: Path,
-    *,
-    start_date: str | pd.Timestamp | None,
-    end_date: str | pd.Timestamp | None,
-    symbols: list[str] | None,
-) -> pd.DataFrame:
-    columns = ["symbol", "trade_date", "is_trading", "is_st", "is_suspended", "high_limited", "low_limited", "status_code"]
-    return _read_parquet_with_filters(path, columns=columns, date_col="trade_date", start_date=start_date, end_date=end_date, symbols=symbols)
-
-
-def _read_recommended_st_status(
-    path: Path,
-    *,
-    start_date: str | pd.Timestamp | None,
-    end_date: str | pd.Timestamp | None,
-    symbols: list[str] | None,
-) -> pd.DataFrame:
-    columns = ["symbol", "trade_date", "is_st"]
-    return _read_parquet_with_filters(path, columns=columns, date_col="trade_date", start_date=start_date, end_date=end_date, symbols=symbols)
-
-
-def _read_recommended_status_panel(
-    sources: RecommendedDataSources,
-    *,
-    start_date: str | pd.Timestamp | None,
-    end_date: str | pd.Timestamp | None,
-    symbols: list[str] | None,
-) -> pd.DataFrame:
-    frames: list[pd.DataFrame] = []
-    for st_path in sources.status_supplements:
-        frames.append(
-            normalize_recommended_security_status_frame(
-                _read_recommended_st_status(
-                    st_path,
-                    start_date=start_date,
-                    end_date=end_date,
-                    symbols=symbols,
-                )
-            )
-        )
-    if sources.security_status is not None:
-        frames.append(
-            normalize_recommended_security_status_frame(
-                _read_recommended_status(
-                    sources.security_status,
-                    start_date=start_date,
-                    end_date=end_date,
-                    symbols=symbols,
-                )
-            )
-        )
-    if not frames:
-        raise FileNotFoundError(f"recommended security-status dataset not found beside {sources.daily_prices}")
-    combined = frames[0]
-    for frame in frames[1:]:
-        combined = _merge_status_frames(combined, frame)
-    return combined
 
 
 def _read_recommended_market_cap(
@@ -372,20 +454,6 @@ def _read_recommended_market_cap(
     if symbols:
         frame = frame[frame["code"].isin(symbols)]
     return frame
-
-
-def _merge_status_frames(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
-    merged = left.merge(right, on=["date", "code"], how="outer", suffixes=("", "_right"))
-    for column in ("is_st", "is_trading", "is_suspended", "high_limited", "low_limited", "status_code"):
-        right_column = f"{column}_right"
-        if right_column not in merged.columns:
-            continue
-        if column in merged.columns:
-            merged[column] = merged[column].where(merged[column].notna(), merged[right_column])
-        else:
-            merged[column] = merged[right_column]
-        merged = merged.drop(columns=[right_column])
-    return merged
 
 
 def _first_existing_path(data_config: RecommendedDataConfig, names: list[str], *, required: bool = True) -> Path | None:
