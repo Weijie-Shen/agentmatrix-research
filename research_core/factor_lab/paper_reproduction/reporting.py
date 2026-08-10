@@ -99,6 +99,10 @@ def build_paper_reproduction_report(
     overall_status = _resolve_overall_status(pipeline_payload, status_counts, truth_status_counts)
     truth_case_counts = _truth_case_counts(factors, truth_results)
     data_requirement_counts = _data_requirement_counts(factors)
+    resource_preflight = evaluation_bundle_payload.get("resource_preflight", {}) or {}
+    resource_telemetry = evaluation_bundle_payload.get("resource_telemetry", {}) or {}
+    resource_adaptations = evaluation_bundle_payload.get("resource_adaptations", []) or []
+    methodological_deviations = evaluation_bundle_payload.get("methodological_deviations", []) or []
     return {
         "job_id": job_id,
         "generated_at": now_iso(),
@@ -124,6 +128,13 @@ def build_paper_reproduction_report(
                 int((record.get("universe_diagnostics", {}) or {}).get("removed_rows", 0) or 0)
                 for record in execution_records
             ),
+            "evaluation_execution_mode": resource_preflight.get("execution_mode", ""),
+            "measured_process_peak_rss_bytes": resource_telemetry.get("measured_process_peak_rss_bytes"),
+            "resource_adaptation_count": len(resource_adaptations),
+            "methodological_deviation_count": len(methodological_deviations),
+            "raw_factor_before_evaluation_filters": evaluation_bundle_payload.get(
+                "raw_factor_before_evaluation_filters"
+            ),
             "truth_match_pass_rate": _truth_match_pass_rate(truth_case_counts),
             "pipeline_overall_status": pipeline_payload.get("overall_status"),
             "next_stage": pipeline_payload.get("next_stage"),
@@ -132,6 +143,17 @@ def build_paper_reproduction_report(
         "pipeline": pipeline_payload,
         "evaluation_plan": _as_plain_dict(evaluation_plan) if evaluation_plan else {},
         "evaluation_bundle": evaluation_bundle_payload,
+        "resource_execution": {
+            "preflight": resource_preflight,
+            "telemetry": resource_telemetry,
+            "resource_adaptations": resource_adaptations,
+            "methodological_deviations": methodological_deviations,
+            "requested_execution": evaluation_bundle_payload.get("requested_execution", {}) or {},
+            "executed_execution": evaluation_bundle_payload.get("executed_execution", {}) or {},
+            "raw_factor_before_evaluation_filters": evaluation_bundle_payload.get(
+                "raw_factor_before_evaluation_filters"
+            ),
+        },
         "evaluation_report": evaluation_report or {},
         "factors": factors,
         "artifacts": artifacts or {},
@@ -256,6 +278,35 @@ def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
         lines.extend(f"- {key}: {value}" for key, value in counts.items())
     else:
         lines.append("- No truth case counts recorded.")
+    lines.append("")
+    lines.extend(["## Resource Execution", ""])
+    resource_execution = report.get("resource_execution", {}) or {}
+    preflight = resource_execution.get("preflight", {}) or {}
+    telemetry = resource_execution.get("telemetry", {}) or {}
+    if preflight:
+        lines.append(f"- Execution mode: {preflight.get('execution_mode', '-')}")
+        lines.append(f"- Memory budget bytes: {preflight.get('memory_budget_bytes') or '-'}")
+        lines.append(
+            f"- Estimated projected peak bytes: {preflight.get('estimated_projected_peak_bytes') or '-'}"
+        )
+        lines.append(
+            f"- Measured process peak RSS bytes: {telemetry.get('measured_process_peak_rss_bytes') or '-'}"
+        )
+        lines.append(
+            "- Raw factors calculated before evaluation filters: "
+            f"{resource_execution.get('raw_factor_before_evaluation_filters')}"
+        )
+        lines.append(f"- Requested execution: {_format_metrics(resource_execution.get('requested_execution', {}))}")
+        lines.append(f"- Executed execution: {_format_metrics(resource_execution.get('executed_execution', {}))}")
+        for adaptation in resource_execution.get("resource_adaptations", []) or []:
+            lines.append(f"- Methodology-preserving resource adaptation: {adaptation}")
+        deviations = resource_execution.get("methodological_deviations", []) or []
+        if deviations:
+            lines.extend(f"- Methodological deviation: {deviation}" for deviation in deviations)
+        else:
+            lines.append("- Methodological deviations: none")
+    else:
+        lines.append("- No resource preflight was supplied.")
     lines.append("")
     lines.extend(["## Defaulted Transform Assumptions", ""])
     defaulted_any = False

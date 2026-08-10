@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -8,6 +9,26 @@ from research_core.factor_lab.paper_reproduction.factor_frame import align_facto
 
 
 class FactorFrameContractTest(unittest.TestCase):
+    def test_equal_keys_use_fast_path_before_any_merge(self) -> None:
+        evaluation = pd.DataFrame(
+            {"date": ["2026-01-01", "2026-01-02"], "code": ["A", "A"], "return": [0.1, 0.2]}
+        )
+        factors = pd.DataFrame(
+            {"date": ["2026-01-01", "2026-01-02"], "code": ["A", "A"], "alpha": [1.0, 2.0]}
+        )
+
+        with patch.object(pd.DataFrame, "merge", side_effect=AssertionError("merge must not run")):
+            result = align_factor_frame(
+                evaluation,
+                factors,
+                key_columns=["date", "code"],
+                factor_columns=["alpha"],
+            )
+
+        self.assertTrue(result.valid)
+        self.assertEqual(result.diagnostics["alignment_method"], "verified_positional_fast_path")
+        self.assertTrue(result.diagnostics["outer_key_merge_avoided"])
+
     def test_shuffled_factor_rows_align_by_keys(self) -> None:
         evaluation = pd.DataFrame(
             {

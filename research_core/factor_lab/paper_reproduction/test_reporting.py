@@ -187,6 +187,38 @@ class PaperReproductionReportingTest(unittest.TestCase):
         self.assertEqual(report["factors"][0]["evaluation_executions"][0]["execution_id"], "execution-1")
         self.assertIn("Filter `exclude_st_pt` at `factor_cross_section` removed 2 rows", markdown)
 
+    def test_report_separates_resource_adaptations_from_methodological_deviations(self) -> None:
+        bundle = {
+            "schema_version": "evaluation_bundle/v2",
+            "records": [],
+            "resource_preflight": {
+                "execution_mode": "resource_bounded_projected",
+                "memory_budget_bytes": 4_000_000_000,
+                "estimated_projected_peak_bytes": 3_000_000_000,
+            },
+            "resource_telemetry": {"measured_process_peak_rss_bytes": 2_500_000_000},
+            "resource_adaptations": ["required-column projection"],
+            "methodological_deviations": [],
+            "requested_execution": {"sample": {"start_date": "2010-01-04", "end_date": "2019-04-30"}},
+            "executed_execution": {"sample": {"start_date": "2010-01-04", "end_date": "2019-04-30"}},
+            "raw_factor_before_evaluation_filters": True,
+        }
+
+        report = build_paper_reproduction_report(
+            job_id="paper-demo-job",
+            extraction=self._extraction(),
+            specs=[self._spec()],
+            evaluation_bundle=bundle,
+        )
+        markdown = render_paper_reproduction_report_markdown(report)
+
+        self.assertEqual(report["summary"]["evaluation_execution_mode"], "resource_bounded_projected")
+        self.assertEqual(report["summary"]["resource_adaptation_count"], 1)
+        self.assertEqual(report["summary"]["methodological_deviation_count"], 0)
+        self.assertTrue(report["summary"]["raw_factor_before_evaluation_filters"])
+        self.assertIn("Methodology-preserving resource adaptation: required-column projection", markdown)
+        self.assertIn("Methodological deviations: none", markdown)
+
     def test_report_counts_only_executed_selected_truth_results(self) -> None:
         extraction = self._extraction()
         evaluation_plan = PaperEvaluationPlan(

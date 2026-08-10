@@ -18,6 +18,13 @@ from research_core.factor_lab.paper_reproduction.implementation import (
 )
 from research_core.factor_lab.paper_reproduction.methodology import apply_universe_protocol
 from research_core.factor_lab.paper_reproduction.paper_evaluation import PaperEvaluationPlan
+from research_core.factor_lab.paper_reproduction.resource_execution import (
+    ResourceBudgetExceededError,
+    ResourceExecutionConfig,
+    estimate_resource_preflight,
+    incremental_data_hash,
+    process_peak_rss_bytes,
+)
 
 
 @dataclass(slots=True)
@@ -28,6 +35,13 @@ class EvaluationDataContext:
     evaluation_inputs: pd.DataFrame | None = field(default=None, repr=False)
     scenario_id: str = "base"
     data_snapshot_hash: str = ""
+    source_identity: dict[str, Any] = field(default_factory=dict)
+    resource_config: ResourceExecutionConfig = field(default_factory=ResourceExecutionConfig)
+    requested_sample: dict[str, Any] = field(default_factory=dict)
+    executed_sample: dict[str, Any] = field(default_factory=dict)
+    requested_universe: str = ""
+    executed_universe: str = ""
+    methodological_deviations: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -60,7 +74,14 @@ class EvaluationBundle:
     implementation_artifact: dict[str, Any]
     records: list[EvaluationExecutionRecord]
     limitations: list[str] = field(default_factory=list)
-    schema_version: str = "evaluation_bundle/v1"
+    resource_preflight: dict[str, Any] = field(default_factory=dict)
+    resource_telemetry: dict[str, Any] = field(default_factory=dict)
+    resource_adaptations: list[str] = field(default_factory=list)
+    methodological_deviations: list[str] = field(default_factory=list)
+    requested_execution: dict[str, Any] = field(default_factory=dict)
+    executed_execution: dict[str, Any] = field(default_factory=dict)
+    raw_factor_before_evaluation_filters: bool = True
+    schema_version: str = "evaluation_bundle/v2"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -84,23 +105,55 @@ def execute_evaluation_plan(
         raise ValueError(f"calculation panel is missing implementation inputs: {missing_inputs}")
 
     shared_panel = data_context.evaluation_inputs is None
-    evaluation_inputs = (
-        data_context.calculation_panel.copy()
-        if shared_panel
-        else data_context.evaluation_inputs.copy()
+    evaluation_source = data_context.calculation_panel if shared_panel else data_context.evaluation_inputs
+    assert evaluation_source is not None
+    colliding_factor_columns = [
+        column for column in implementation_artifact.output_factor_columns if column in evaluation_source.columns
+    ]
+    if colliding_factor_columns:
+        raise ValueError(
+            "evaluation inputs must not contain artifact factor columns: "
+            f"{colliding_factor_columns}"
+        )
+    calculation_columns = list(
+        dict.fromkeys(
+            [
+                *implementation_artifact.output_key_columns,
+                *implementation_artifact.required_input_columns,
+            ]
+        )
     )
+    evaluation_columns = _evaluation_projection_columns(plan, implementation_artifact)
+    selected_case_count = sum(len(factor_plan.selected_evaluation_cases) for factor_plan in plan.factor_plans)
+    preflight = estimate_resource_preflight(
+        data_context.calculation_panel,
+        evaluation_source,
+        calculation_columns=calculation_columns,
+        evaluation_columns=evaluation_columns,
+        factor_output_columns=implementation_artifact.output_factor_columns,
+        selected_case_count=selected_case_count,
+        config=data_context.resource_config,
+        methodological_deviations=data_context.methodological_deviations,
+    )
+    if preflight.partition_required:
+        raise ResourceBudgetExceededError(preflight)
+
+    calculation_panel = data_context.calculation_panel.loc[:, preflight.calculation_columns].copy()
+    evaluation_inputs = evaluation_source.loc[:, preflight.evaluation_columns].copy(deep=False)
     context_limitations: list[str] = []
     if shared_panel:
         context_limitations.append(
-            "calculation and evaluation panels were not separately supplied; calculation_panel was also used as evaluation_inputs"
+            "calculation and evaluation panels were not separately supplied; one logical base panel is reused and evaluation eligibility is still applied after factor calculation"
         )
+    context_limitations.extend(preflight.limitations)
     snapshot_hash = data_context.data_snapshot_hash or _data_context_hash(
-        data_context.calculation_panel,
+        calculation_panel,
         evaluation_inputs,
-        key_columns=implementation_artifact.output_key_columns,
+        hash_chunk_rows=data_context.resource_config.hash_chunk_rows,
+        source_identity=data_context.source_identity,
     )
 
-    factor_frame = execute_factor_callable(implementation_artifact, data_context.calculation_panel)
+    factor_frame = execute_factor_callable(implementation_artifact, calculation_panel, copy_input=False)
     factor_validation = validate_factor_frame(
         factor_frame,
         key_columns=implementation_artifact.output_key_columns,
@@ -117,6 +170,11 @@ def execute_evaluation_plan(
     if not alignment.valid or alignment.aligned_frame is None:
         raise ValueError("ambiguous FactorFrame alignment: " + "; ".join(alignment.errors))
     aligned_frame = alignment.aligned_frame
+    resource_adaptations = list(preflight.resource_adaptations)
+    if alignment.diagnostics.get("alignment_method") == "verified_positional_fast_path":
+        resource_adaptations.append("verified positional factor alignment avoided a key merge")
+    else:
+        resource_adaptations.append("one-to-one left key join avoided a separate full outer key merge")
 
     records: list[EvaluationExecutionRecord] = []
     for factor_plan in plan.factor_plans:
@@ -132,8 +190,17 @@ def execute_evaluation_plan(
             universe_protocol = dict(
                 resolved_protocol.get("universe_protocol", {}) or case.get("universe_protocol", {}) or {}
             )
+            projected_case_columns = _case_projection_columns(
+                case,
+                factor_column=factor_column,
+                key_columns=implementation_artifact.output_key_columns,
+            )
+            case_input = aligned_frame.loc[
+                :,
+                [column for column in projected_case_columns if column in aligned_frame.columns],
+            ].copy(deep=False)
             universe_application = apply_universe_protocol(
-                aligned_frame,
+                case_input,
                 universe_protocol,
                 stage=_evaluation_filter_stage(case),
             )
@@ -243,6 +310,27 @@ def execute_evaluation_plan(
         implementation_artifact=_artifact_identity(implementation_artifact),
         records=records,
         limitations=context_limitations,
+        resource_preflight=preflight.to_dict(),
+        resource_telemetry={
+            "measured_process_peak_rss_bytes": process_peak_rss_bytes(),
+            "calculation_rows": len(calculation_panel),
+            "evaluation_rows": len(evaluation_inputs),
+            "factor_rows": len(factor_frame),
+            "active_scenario_count": 1,
+        },
+        resource_adaptations=resource_adaptations,
+        methodological_deviations=list(data_context.methodological_deviations),
+        requested_execution={
+            "sample": data_context.requested_sample or _frame_sample(evaluation_source),
+            "universe": data_context.requested_universe or "as_declared_by_selected_evaluation_cases",
+            "scenario_id": data_context.scenario_id,
+        },
+        executed_execution={
+            "sample": data_context.executed_sample or _frame_sample(evaluation_inputs),
+            "universe": data_context.executed_universe or "resolved_evaluation_universe",
+            "scenario_id": data_context.scenario_id,
+            "execution_mode": preflight.execution_mode,
+        },
     )
 
 
@@ -290,22 +378,121 @@ def _evaluation_filter_stage(case: dict[str, Any]) -> str:
     return "factor_cross_section"
 
 
+def _evaluation_projection_columns(
+    plan: PaperEvaluationPlan,
+    artifact: FactorImplementationArtifact,
+) -> list[str]:
+    columns = list(artifact.output_key_columns)
+    for factor_plan in plan.factor_plans:
+        for case in factor_plan.selected_evaluation_cases:
+            columns.extend(_runtime_input_columns(case))
+    return list(dict.fromkeys(columns))
+
+
+def _case_projection_columns(
+    case: dict[str, Any],
+    *,
+    factor_column: str,
+    key_columns: list[str],
+) -> list[str]:
+    return list(dict.fromkeys([*key_columns, factor_column, *_runtime_input_columns(case)]))
+
+
+def _runtime_input_columns(case: dict[str, Any]) -> list[str]:
+    runtime = dict(case.get("resolved_protocol", {}) or case)
+    evaluation_spec = dict(runtime.get("evaluation_spec", {}) or {})
+    required_data = dict(runtime.get("required_data", {}) or {})
+    columns: list[str] = []
+    return_col = str(evaluation_spec.get("return_col", "") or "")
+    if return_col:
+        columns.append(return_col)
+    else:
+        evaluation_values = _string_values(required_data.get("evaluation", []))
+        columns.append(evaluation_values[0] if evaluation_values else "forward_return_1d")
+    columns.extend(_string_values(evaluation_spec.get("regression_controls", [])))
+    columns.extend(_string_values(evaluation_spec.get("weight_col")))
+    for category, values in required_data.items():
+        if str(category) != "formula":
+            columns.extend(_string_values(values))
+
+    transform_spec = dict(runtime.get("transform_spec", {}) or {})
+    for step in transform_spec.get("steps", []) or []:
+        if isinstance(step, dict) and str(step.get("name", "")).lower() == "neutralization":
+            columns.extend(_string_values(step.get("controls", [])))
+
+    neutralization_spec = dict(runtime.get("neutralization_spec", {}) or {})
+    for control in neutralization_spec.get("controls", []) or []:
+        if isinstance(control, dict):
+            columns.extend(
+                _string_values(control.get("resolved_field") or control.get("field"))
+            )
+
+    universe_protocol = dict(runtime.get("universe_protocol", {}) or {})
+    for item in universe_protocol.get("filters", []) or []:
+        if isinstance(item, dict):
+            columns.extend(_string_values(item.get("resolved_field") or item.get("field")))
+    return list(dict.fromkeys(column for column in columns if column))
+
+
+def _string_values(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, dict):
+        return [str(item) for item in value.values() if isinstance(item, str) and item]
+    if isinstance(value, (list, tuple, set)):
+        result: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item:
+                result.append(item)
+            elif isinstance(item, dict):
+                result.extend(_string_values(item.get("resolved_field") or item.get("field")))
+        return result
+    return []
+
+
+def _frame_sample(frame: pd.DataFrame) -> dict[str, Any]:
+    date_column = next(
+        (column for column in frame.columns if column.lower() in {"date", "datetime", "trade_date"}),
+        None,
+    )
+    if date_column is None or frame.empty:
+        return {"row_count": len(frame)}
+    dates = pd.to_datetime(frame[date_column], errors="coerce")
+    return {
+        "start_date": dates.min().isoformat() if dates.notna().any() else None,
+        "end_date": dates.max().isoformat() if dates.notna().any() else None,
+        "row_count": len(frame),
+    }
+
+
+def _frame_identity_summary(frame: pd.DataFrame) -> dict[str, Any]:
+    return {
+        "columns": list(frame.columns),
+        "dtypes": [str(dtype) for dtype in frame.dtypes],
+        "sample": _frame_sample(frame),
+    }
+
+
 def _data_context_hash(
     calculation_panel: pd.DataFrame,
     evaluation_inputs: pd.DataFrame,
     *,
-    key_columns: list[str],
+    hash_chunk_rows: int,
+    source_identity: dict[str, Any],
 ) -> str:
-    digest = hashlib.sha256()
-    for label, frame in (("calculation", calculation_panel), ("evaluation", evaluation_inputs)):
-        ordered = frame.copy()
-        if all(column in ordered.columns for column in key_columns):
-            ordered = ordered.sort_values(key_columns, kind="stable").reset_index(drop=True)
-        digest.update(label.encode("utf-8"))
-        digest.update(json.dumps(list(ordered.columns), ensure_ascii=False).encode("utf-8"))
-        digest.update(json.dumps([str(dtype) for dtype in ordered.dtypes]).encode("utf-8"))
-        digest.update(pd.util.hash_pandas_object(ordered, index=False, categorize=True).values.tobytes())
-    return digest.hexdigest()
+    if source_identity:
+        identity = {
+            "source_identity": source_identity,
+            "calculation_schema": _frame_identity_summary(calculation_panel),
+            "evaluation_schema": _frame_identity_summary(evaluation_inputs),
+        }
+        return incremental_data_hash([], chunk_rows=hash_chunk_rows, source_identity=identity)
+    return incremental_data_hash(
+        [("calculation", calculation_panel), ("evaluation", evaluation_inputs)],
+        chunk_rows=hash_chunk_rows,
+    )
 
 
 def _stable_execution_id(identity: dict[str, Any]) -> str:

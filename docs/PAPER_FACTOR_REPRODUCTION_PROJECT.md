@@ -42,6 +42,8 @@ Implemented capabilities:
 - keyed `FactorFrame` validation and one-to-one alignment diagnostics
 - support-scored paper evaluation planning with selected/resolved runtime cases
 - canonical selected-case execution with separate calculation and evaluation panels
+- configurable resource preflight with methodology-preserving projected execution
+- incremental data hashing, narrow evaluator boundaries, and compact alignment fast paths
 - generic evaluator support for ordered factor/control transforms, neutralization, IC analysis, and IC regression
 - stage-aware calculation/evaluation universe protocols and post-calculation filters
 - protocol-aware paper-reported evaluation metric matching
@@ -434,6 +436,7 @@ apply_neutralization_spec(...)
 compute_ic_analysis(...)
 compute_cross_sectional_regression(...)
 execute_evaluation_plan(plan, implementation_artifact, data_context)
+ResourceExecutionConfig(memory_budget_bytes=...)
 ```
 
 `evaluate_paper_case(...)` remains a backward-compatible low-level evaluator. It
@@ -785,23 +788,27 @@ industry_map.parquet       current industry mapping snapshot
 Daily panel helper:
 
 ```python
-from research_core.factor_lab.paper_reproduction.recommended_data import load_recommended_paper_panels
+from research_core.factor_lab.paper_reproduction.recommended_data import load_recommended_daily_panel
 
-panels = load_recommended_paper_panels(
-    test_end_date=paper_test_end,
-    start_date=paper_data_start,
-    end_date=paper_test_end,
-    include_status=True,
-    include_market_cap=True,
-    include_industry=True,
-)
-qfq_calculation_panel = panels["qfq"]
-hfq_calculation_panel = panels["hfq"]
+for price_view in ("qfq", "hfq"):
+    calculation_panel = load_recommended_daily_panel(
+        start_date=paper_data_start,
+        end_date=paper_test_end,
+        price_view=price_view,
+        adjustment_end_date=paper_test_end if price_view == "qfq" else None,
+        include_status=True,
+        include_market_cap=True,
+        include_industry=True,
+    )
+    # Execute, persist the narrow FactorFrame/evaluation bundle, then release this
+    # panel before loading the next price scenario.
 ```
 
-Keep these calculation panels intact. Supply status/return/control columns through
+Keep each active calculation panel intact. Supply status/return/control columns through
 `EvaluationDataContext.evaluation_inputs` and let the resolved
 `universe_protocol` apply eligibility filters after factor calculation.
+`load_recommended_paper_panels(...)` remains a convenience API for manageable
+diagnostics, but it keeps both views resident and is not the full-period default.
 `apply_a_share_recommended_filters(...)` is retained only as a compatibility helper
 for building a post-calculation evaluation panel; never feed its output into a
 rolling factor callable.
@@ -813,7 +820,7 @@ Coverage notes:
 - Every reproduction runs two independent views: testing-end-anchored QFQ (`raw * F[t] / F[test_end]`) and initial-baseline HFQ (`raw * F[t]`). The paper test end is configuration, not a fixed date.
 - Apply the same view multiplier to OHLC and `amount / volume` VWAP; leave volume and amount unchanged. Never mix QFQ and HFQ fields in one run.
 - `market_cap.parquet` is the canonical market-cap series and covers 2010-01-04 to 2026-07-22.
-- Use `load_recommended_paper_panels(test_end_date=...)` rather than reading or joining physical source files directly. `resolve_recommended_data_sources()` is diagnostic only.
+- For full-period work, load QFQ and HFQ sequentially with `load_recommended_daily_panel(...)`; use the two-view convenience loader only when preflight shows both views are manageable. `resolve_recommended_data_sources()` is diagnostic only.
 - Require `has_price_observation=true` when a factor needs an actual price observation. Treat zero-volume/tradability, ST/PT, and suspension masks as staged universe decisions; the typical all-A-share protocol applies them to evaluation eligibility after factor calculation.
 - `income_statement.parquet`, `balance_sheet.parquet`, and `dividend_yield.parquet` include data back to 2010.
 

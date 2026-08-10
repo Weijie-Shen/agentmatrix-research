@@ -293,7 +293,12 @@ def validate_factor_implementation_artifact(
     )
 
 
-def execute_factor_callable(artifact: FactorImplementationArtifact, panel: pd.DataFrame) -> pd.DataFrame:
+def execute_factor_callable(
+    artifact: FactorImplementationArtifact,
+    panel: pd.DataFrame,
+    *,
+    copy_input: bool = True,
+) -> pd.DataFrame:
     """Execute only the callable declared by the canonical implementation artifact."""
 
     current_hash = _file_sha256(Path(artifact.module_path))
@@ -304,7 +309,8 @@ def execute_factor_callable(artifact: FactorImplementationArtifact, panel: pd.Da
     kwargs: dict[str, Any] = {}
     if "factor_names" in signature.parameters:
         kwargs["factor_names"] = list(artifact.output_factor_columns)
-    output = callable_object(panel.copy(), **kwargs)
+    callable_input = panel.copy() if copy_input else panel
+    output = callable_object(callable_input, **kwargs)
     if not isinstance(output, pd.DataFrame):
         raise TypeError(f"declared factor callable returned {type(output).__name__}, expected pandas.DataFrame")
     return output

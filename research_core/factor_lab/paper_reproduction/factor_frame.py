@@ -50,7 +50,7 @@ def validate_factor_frame(
         errors.append(f"factor frame is missing declared columns: {missing}")
         return FactorFrameValidationResult(False, "failed", errors, [], diagnostics)
 
-    normalized = normalize_key_columns(frame, key_columns=key_columns)
+    normalized = normalize_key_columns(frame[key_columns], key_columns=key_columns)
     null_key_rows = int(normalized[key_columns].isna().any(axis=1).sum())
     duplicate_key_rows = int(normalized.duplicated(key_columns, keep=False).sum())
     diagnostics["null_key_rows"] = null_key_rows
@@ -112,31 +112,10 @@ def align_factor_frame(
     if errors:
         return FactorFrameAlignmentResult(False, "failed", errors=errors, limitations=limitations, diagnostics=diagnostics)
 
-    key_comparison = left[key_columns].merge(
-        right[key_columns],
-        on=key_columns,
-        how="outer",
-        indicator=True,
-        validate="one_to_one",
-    )
-    left_only = int((key_comparison["_merge"] == "left_only").sum())
-    right_only = int((key_comparison["_merge"] == "right_only").sum())
-    matched = int((key_comparison["_merge"] == "both").sum())
-    denominator = max(len(left), 1)
-    diagnostics.update(
-        {
-            "evaluation_row_count": len(left),
-            "factor_row_count": len(right),
-            "matched_rows": matched,
-            "left_only_rows": left_only,
-            "right_only_rows": right_only,
-            "matched_row_ratio": float(matched / denominator),
-        }
-    )
-    if left_only or right_only:
-        limitations.append(f"key coverage is incomplete: evaluation-only={left_only}, factor-only={right_only}")
-
     if len(left) == len(right) and left[key_columns].reset_index(drop=True).equals(right[key_columns].reset_index(drop=True)):
+        matched = len(left)
+        left_only = 0
+        right_only = 0
         aligned = pd.concat(
             [left.reset_index(drop=True), right[factor_columns].reset_index(drop=True)],
             axis=1,
@@ -149,8 +128,28 @@ def align_factor_frame(
             how="left",
             validate="one_to_one",
             sort=False,
+            indicator="__factor_merge",
         )
+        matched = int((aligned["__factor_merge"] == "both").sum())
+        left_only = len(left) - matched
+        right_only = len(right) - matched
+        aligned = aligned.drop(columns="__factor_merge")
         diagnostics["alignment_method"] = "one_to_one_key_join"
+
+    denominator = max(len(left), 1)
+    diagnostics.update(
+        {
+            "evaluation_row_count": len(left),
+            "factor_row_count": len(right),
+            "matched_rows": matched,
+            "left_only_rows": left_only,
+            "right_only_rows": right_only,
+            "matched_row_ratio": float(matched / denominator),
+            "outer_key_merge_avoided": True,
+        }
+    )
+    if left_only or right_only:
+        limitations.append(f"key coverage is incomplete: evaluation-only={left_only}, factor-only={right_only}")
 
     factor_null_ratios = {
         column: float(pd.to_numeric(aligned[column], errors="coerce").isna().mean()) for column in factor_columns
@@ -169,7 +168,7 @@ def align_factor_frame(
 
 
 def normalize_key_columns(frame: pd.DataFrame, *, key_columns: list[str]) -> pd.DataFrame:
-    result = frame.copy()
+    result = frame.copy(deep=False)
     for column in key_columns:
         if column.lower() in {"date", "datetime", "trade_date"}:
             result[column] = pd.to_datetime(result[column], errors="coerce")

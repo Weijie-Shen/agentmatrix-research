@@ -94,8 +94,10 @@ def load_recommended_daily_panel(
 ) -> pd.DataFrame:
     """Load one explicit price view from the canonical raw RQData daily panel.
 
-    Paper reproductions should normally call :func:`load_recommended_paper_panels`
-    so both required adjustment views are produced from the same raw observations.
+    Resource-bounded paper reproductions should call this function once per price
+    scenario, complete/persist that scenario, release it, and then load the next
+    view. Use :func:`load_recommended_paper_panels` only for manageable diagnostics
+    that intentionally keep both views resident.
     """
 
     data_config = config or RecommendedDataConfig.from_env()
@@ -152,11 +154,16 @@ def load_recommended_paper_panels(
     include_industry: bool = False,
     config: RecommendedDataConfig | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Load the mandatory QFQ and HFQ panels for a paper reproduction.
+    """Load both mandatory price views for a manageable in-memory diagnostic.
 
     QFQ is anchored independently for each security at the latest cumulative
     factor available on or before ``test_end_date``. HFQ uses the RQData
     initial factor baseline and therefore needs no end-date normalization.
+
+    This convenience API retains raw, QFQ, and HFQ representations during
+    construction. Full-period resource-bounded runs should instead call
+    :func:`load_recommended_daily_panel` sequentially with ``price_view="qfq"``
+    and ``price_view="hfq"``.
     """
 
     test_end = pd.Timestamp(test_end_date)

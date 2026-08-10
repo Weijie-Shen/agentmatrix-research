@@ -123,6 +123,14 @@ from research_core.factor_lab.paper_reproduction.reporting import (
     export_paper_reproduction_report,
     render_paper_reproduction_report_markdown,
 )
+from research_core.factor_lab.paper_reproduction.resource_execution import (
+    ResourceBudgetExceededError,
+    ResourceExecutionConfig,
+    ResourcePreflightResult,
+    estimate_resource_preflight,
+    incremental_data_hash,
+    process_peak_rss_bytes,
+)
 from research_core.factor_lab.paper_reproduction.truth_matching import (
     PaperTruthMatchResult,
     compare_evaluation_metrics_to_paper_truth,
@@ -161,6 +169,9 @@ __all__ = [
     "PAPER_PRICE_ADJUSTMENT_VIEWS",
     "QuantApiConfig",
     "RecommendedDataConfig",
+    "ResourceBudgetExceededError",
+    "ResourceExecutionConfig",
+    "ResourcePreflightResult",
     "StageExecutionDecision",
     "UniverseFilterApplicationResult",
     "GENERIC_EVALUATOR_CAPABILITIES",
@@ -189,6 +200,7 @@ __all__ = [
     "default_skill_path",
     "evaluate_paper_case",
     "evaluator_capabilities_for_case",
+    "estimate_resource_preflight",
     "execute_evaluation_plan",
     "execute_factor_callable",
     "export_factor_implementation_artifact",
@@ -203,6 +215,7 @@ __all__ = [
     "load_recommended_daily_panel",
     "load_recommended_data_manifest",
     "load_recommended_paper_panels",
+    "incremental_data_hash",
     "normalize_extraction_to_specs",
     "normalize_quant_daily_kline_frame",
     "normalize_recommended_daily_kline_frame",
@@ -210,6 +223,7 @@ __all__ = [
     "normalize_recommended_market_cap_frame",
     "normalize_recommended_symbol",
     "prepare_agent_harness_bundle",
+    "process_peak_rss_bytes",
     "recommended_data_available",
     "render_paper_reproduction_report_markdown",
     "selected_truth_sources",

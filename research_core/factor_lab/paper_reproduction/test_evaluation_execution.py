@@ -16,6 +16,10 @@ from research_core.factor_lab.paper_reproduction.paper_evaluation import (
     PaperEvaluationPlan,
     PaperFactorEvaluationPlan,
 )
+from research_core.factor_lab.paper_reproduction.resource_execution import (
+    ResourceBudgetExceededError,
+    ResourceExecutionConfig,
+)
 
 
 class CanonicalEvaluationExecutionTest(unittest.TestCase):
@@ -243,6 +247,102 @@ class CanonicalEvaluationExecutionTest(unittest.TestCase):
 
         self.assertEqual(first.records[0].execution_id, second.records[0].execution_id)
         self.assertEqual(first.data_snapshot_hash, second.data_snapshot_hash)
+
+    def test_executor_projects_columns_and_selects_bounded_mode_without_shortening(self) -> None:
+        calculation = self._calculation_panel()
+        calculation["unused_payload"] = ["x" * 10_000 for _ in range(len(calculation))]
+        evaluation = pd.DataFrame(
+            {
+                "date": ["2026-01-03", "2026-01-03"],
+                "code": ["A", "B"],
+                "forward_return_1d": [0.1, -0.1],
+                "unused_evaluation_payload": ["y" * 10_000, "y" * 10_000],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact = self._artifact(Path(tmp_dir), calculation[["date", "code", "close"]])
+            first = execute_evaluation_plan(
+                self._plan(),
+                artifact,
+                EvaluationDataContext(calculation_panel=calculation, evaluation_inputs=evaluation),
+            )
+            preflight = first.resource_preflight
+            budget = (
+                preflight["estimated_standard_peak_bytes"] + preflight["estimated_projected_peak_bytes"]
+            ) // 2
+            bounded = execute_evaluation_plan(
+                self._plan(),
+                artifact,
+                EvaluationDataContext(
+                    calculation_panel=calculation,
+                    evaluation_inputs=evaluation,
+                    resource_config=ResourceExecutionConfig(memory_budget_bytes=budget),
+                    requested_sample={"start_date": "2026-01-01", "end_date": "2026-01-03"},
+                ),
+            )
+
+        self.assertEqual(bounded.resource_preflight["execution_mode"], "resource_bounded_projected")
+        self.assertEqual(bounded.resource_preflight["calculation_columns"], ["date", "code", "close"])
+        self.assertEqual(
+            bounded.resource_preflight["evaluation_columns"],
+            ["date", "code", "forward_return_1d"],
+        )
+        self.assertEqual(bounded.requested_execution["sample"]["start_date"], "2026-01-01")
+        self.assertEqual(bounded.executed_execution["sample"]["row_count"], 2)
+        self.assertEqual(bounded.methodological_deviations, [])
+        self.assertTrue(bounded.raw_factor_before_evaluation_filters)
+
+    def test_factor_callable_receives_only_declared_calculation_columns(self) -> None:
+        calculation = self._calculation_panel()
+        calculation["unused_payload"] = "must_not_reach_callable"
+        evaluation = pd.DataFrame(
+            {"date": ["2026-01-03"], "code": ["A"], "forward_return_1d": [0.1], "unused": [99]}
+        )
+        module_source = (
+            "import pandas as pd\n\n"
+            "def compute_factors(panel, factor_names=None):\n"
+            "    assert list(panel.columns) == ['date', 'code', 'close']\n"
+            "    result = panel[['date', 'code']].copy()\n"
+            "    result['alpha'] = panel.groupby('code')['close'].transform(lambda s: s.rolling(2).mean())\n"
+            "    return result\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            module_path = Path(tmp_dir) / "factor.py"
+            module_path.write_text(module_source, encoding="utf-8")
+            artifact = build_factor_implementation_artifact(
+                [self._spec()],
+                module_path=module_path,
+                callable_import_path="compute_factors",
+                probe_panel=calculation[["date", "code", "close"]],
+            )
+            bundle = execute_evaluation_plan(
+                self._plan(),
+                artifact,
+                EvaluationDataContext(calculation_panel=calculation, evaluation_inputs=evaluation),
+            )
+
+        self.assertEqual(bundle.records[0].lifecycle_state, "executed")
+
+    def test_executor_stops_before_oom_risk_instead_of_changing_methodology(self) -> None:
+        calculation = self._calculation_panel()
+        evaluation = pd.DataFrame(
+            {"date": ["2026-01-03"], "code": ["A"], "forward_return_1d": [0.1]}
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact = self._artifact(Path(tmp_dir), calculation)
+            with self.assertRaises(ResourceBudgetExceededError) as raised:
+                execute_evaluation_plan(
+                    self._plan(),
+                    artifact,
+                    EvaluationDataContext(
+                        calculation_panel=calculation,
+                        evaluation_inputs=evaluation,
+                        resource_config=ResourceExecutionConfig(memory_budget_bytes=1),
+                    ),
+                )
+
+        self.assertTrue(raised.exception.preflight.partition_required)
+        self.assertEqual(raised.exception.preflight.methodological_deviations, [])
 
     def test_duplicate_factor_keys_block_canonical_artifact_certification(self) -> None:
         calculation = self._calculation_panel()
