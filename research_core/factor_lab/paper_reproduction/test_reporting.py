@@ -151,6 +151,42 @@ class PaperReproductionReportingTest(unittest.TestCase):
         self.assertIn("Selected Evaluation Methods", markdown)
         self.assertIn("Defaulted Transform Assumptions", markdown)
 
+    def test_report_preserves_canonical_execution_and_universe_filter_provenance(self) -> None:
+        bundle = {
+            "schema_version": "evaluation_bundle/v1",
+            "records": [
+                {
+                    "execution_id": "execution-1",
+                    "factor_name": "paper_alpha_1",
+                    "lifecycle_state": "executed",
+                    "evaluator_output": {"execution_mode": "canonical_plan_executor"},
+                    "universe_diagnostics": {
+                        "removed_rows": 2,
+                        "applied_filters": [
+                            {
+                                "filter_name": "exclude_st_pt",
+                                "application_stage": "factor_cross_section",
+                                "removed_rows": 2,
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+
+        report = build_paper_reproduction_report(
+            job_id="paper-demo-job",
+            extraction=self._extraction(),
+            specs=[self._spec()],
+            evaluation_bundle=bundle,
+        )
+        markdown = render_paper_reproduction_report_markdown(report)
+
+        self.assertEqual(report["summary"]["evaluation_execution_counts"], {"executed": 1})
+        self.assertEqual(report["summary"]["evaluation_filter_rows_removed"], 2)
+        self.assertEqual(report["factors"][0]["evaluation_executions"][0]["execution_id"], "execution-1")
+        self.assertIn("Filter `exclude_st_pt` at `factor_cross_section` removed 2 rows", markdown)
+
     def test_report_counts_only_executed_selected_truth_results(self) -> None:
         extraction = self._extraction()
         evaluation_plan = PaperEvaluationPlan(
@@ -197,6 +233,70 @@ class PaperReproductionReportingTest(unittest.TestCase):
         self.assertEqual(counts["truth_cases_deferred"], 1)
         self.assertEqual(counts["truth_cases_matched"], 1)
         self.assertEqual(report["summary"]["truth_match_pass_rate"], "1/1")
+
+    def test_report_preserves_canonical_requirement_and_replacement_provenance(self) -> None:
+        requirement = {
+            "requirement": "free_float_market_cap",
+            "category": "regression_weight",
+            "available_value": "market_cap",
+            "availability": "available",
+            "semantic_availability": "replacement_available",
+            "relationship": "proxy_substitute",
+            "execution_ready": True,
+            "pipeline_blocking": False,
+        }
+        replacement = {
+            "required_semantic_role": "regression_weight",
+            "paper_definition": "free_float_market_cap",
+            "replacement_field": "market_cap",
+            "relationship": "proxy_substitute",
+            "status": "accepted_proxy",
+            "accepted": True,
+            "execution_ready": True,
+            "replacement_reason": "Free-float capitalization is unavailable.",
+            "pipeline_blocking": False,
+        }
+        assessed_case = {
+            "truth_id": "table_3_eval",
+            "source_truth_id": "table_3_eval",
+            "support_assessment": {
+                "requirement_results": [requirement],
+                "replacement_records": [replacement],
+                "case_executable": True,
+            },
+        }
+        evaluation_plan = PaperEvaluationPlan(
+            library="PaperDemo",
+            status="ready_for_evaluation_with_limitations",
+            factor_plans=[
+                PaperFactorEvaluationPlan(
+                    factor_name="paper_alpha_1",
+                    status="ready_for_evaluation_with_limitations",
+                    assessed_evaluation_cases=[assessed_case],
+                    selected_evaluation_cases=[
+                        {
+                            **assessed_case,
+                            "comparability": "proxy",
+                            "case_executable": True,
+                        }
+                    ],
+                )
+            ],
+        )
+
+        report = build_paper_reproduction_report(
+            job_id="paper-demo-job",
+            extraction=self._extraction(),
+            specs=[self._spec()],
+            evaluation_plan=evaluation_plan,
+        )
+
+        factor = report["factors"][0]
+        self.assertEqual(factor["data_requirement_assessments"][0]["semantic_availability"], "replacement_available")
+        self.assertEqual(factor["data_replacements"][0], {**replacement, "truth_id": "table_3_eval"})
+        self.assertEqual(report["summary"]["data_requirement_counts"]["replacement_available"], 1)
+        self.assertEqual(report["summary"]["data_replacement_count"], 1)
+        self.assertIn("accepted_proxy", render_paper_reproduction_report_markdown(report))
 
     def test_export_report_writes_json_and_markdown(self) -> None:
         report = build_paper_reproduction_report(

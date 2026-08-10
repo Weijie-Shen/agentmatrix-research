@@ -7,6 +7,142 @@ from typing import Any
 import pandas as pd
 
 from research_core.factor_lab.paper_reproduction.extraction import ExtractedFactor
+from research_core.factor_lab.paper_reproduction.methodology import canonical_transform_method, transformed_input_methods
+
+
+FIELD_RELATIONSHIP_TYPES = {
+    "exact_alias",
+    "derived_equivalent",
+    "proxy_substitute",
+    "unsupported_substitute",
+}
+
+
+@dataclass(slots=True)
+class FieldRelationship:
+    """A declared semantic relationship between a paper field and a physical field.
+
+    Relationships describe semantics only.  A derivation is not considered
+    executable until its output column has actually been materialized in the
+    profiled frame.
+    """
+
+    paper_field: str
+    physical_field: str
+    relationship: str
+    reason: str = ""
+    expected_effect: str = ""
+    derivation: dict[str, Any] = field(default_factory=dict)
+    requires_reporting: bool = False
+    selection_mode: str = "automatic"
+    source: str = "built_in"
+
+    def __post_init__(self) -> None:
+        if self.relationship not in FIELD_RELATIONSHIP_TYPES:
+            raise ValueError(f"Unsupported field relationship: {self.relationship}")
+
+
+DEFAULT_FIELD_RELATIONSHIPS: tuple[FieldRelationship, ...] = (
+    FieldRelationship(
+        "market_cap_or_log_market_cap",
+        "log_market_cap",
+        "exact_alias",
+        reason="The semantic requirement explicitly permits log market capitalization.",
+    ),
+    FieldRelationship(
+        "market_cap_or_log_market_cap",
+        "market_cap",
+        "exact_alias",
+        reason="The semantic requirement explicitly permits market capitalization.",
+    ),
+    FieldRelationship(
+        "free_float_market_cap",
+        "market_cap",
+        "proxy_substitute",
+        reason="Total market capitalization is available but free-float capitalization is not.",
+        expected_effect="Capitalization definition differs and may change weighted or controlled regression results.",
+        requires_reporting=True,
+    ),
+    FieldRelationship(
+        "sqrt_free_float_market_cap",
+        "sqrt_total_market_cap",
+        "proxy_substitute",
+        reason="Square-root total capitalization differs from square-root free-float capitalization.",
+        expected_effect="Regression weights differ from the paper definition.",
+        requires_reporting=True,
+    ),
+    FieldRelationship(
+        "sqrt_free_float_market_cap",
+        "free_float_market_cap",
+        "derived_equivalent",
+        reason="The requested weight can be derived by taking the square root.",
+        derivation={"method": "sqrt", "inputs": ["free_float_market_cap"]},
+        requires_reporting=True,
+    ),
+    FieldRelationship(
+        "sqrt_free_float_market_cap",
+        "market_cap",
+        "proxy_substitute",
+        reason="Only total capitalization is available and a square-root transform would still be required.",
+        expected_effect="Both capitalization definition and regression-weight transform differ until materialized.",
+        derivation={"method": "sqrt", "inputs": ["market_cap"]},
+        requires_reporting=True,
+    ),
+    FieldRelationship(
+        "st_or_pt_status",
+        "is_st",
+        "proxy_substitute",
+        reason="The provider flag may not encode every ST/PT distinction required by the paper.",
+        expected_effect="Universe membership may differ on affected dates.",
+        requires_reporting=True,
+    ),
+    FieldRelationship(
+        "next_day_suspension_status",
+        "next_is_suspended",
+        "exact_alias",
+        reason="The physical field uses the same next-trading-day suspension semantics.",
+    ),
+    FieldRelationship(
+        "next_day_suspension_status",
+        "is_suspended",
+        "unsupported_substitute",
+        reason="Same-day suspension cannot stand in for next-trading-day suspension without an explicit timing rule.",
+        expected_effect="Using the field would apply the universe filter on the wrong date.",
+        requires_reporting=True,
+    ),
+    FieldRelationship(
+        "suspension_status",
+        "is_suspended",
+        "exact_alias",
+        reason="The physical field represents same-day suspension status.",
+    ),
+    FieldRelationship(
+        "tradability_status",
+        "is_trading",
+        "proxy_substitute",
+        reason="A provider trading flag may not implement the paper's complete tradability rule.",
+        expected_effect="The evaluation universe may differ from the paper.",
+        requires_reporting=True,
+    ),
+    FieldRelationship(
+        "industry_classification",
+        "industry",
+        "proxy_substitute",
+        reason="The available taxonomy and point-in-time semantics may differ from the paper.",
+        expected_effect="Neutralization controls and residual factor exposures may differ.",
+        requires_reporting=True,
+    ),
+    FieldRelationship(
+        "industry_classification",
+        "industry_code",
+        "proxy_substitute",
+        reason="The available taxonomy and point-in-time semantics may differ from the paper.",
+        expected_effect="Neutralization controls and residual factor exposures may differ.",
+        requires_reporting=True,
+    ),
+    FieldRelationship("industry_or_sector", "industry", "exact_alias"),
+    FieldRelationship("industry_or_sector", "sector", "exact_alias"),
+)
 
 
 @dataclass(slots=True)
@@ -52,6 +188,7 @@ class DataProfile:
     conventions: dict[str, Any] = field(default_factory=dict)
     derived_fields: list[dict[str, Any]] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
+    field_relationships: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -65,6 +202,13 @@ class EvaluationRequirementResult:
     severity: str = "minor"
     affected_metrics: list[str] = field(default_factory=list)
     recommended_action: str = "continue_with_limitation"
+    candidate_field: str = ""
+    relationship: str = "exact_alias"
+    semantic_availability: str = "not_assessed"
+    coverage_ratio: float | None = None
+    execution_ready: bool = False
+    pipeline_blocking: bool = False
+    source_contexts: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -80,6 +224,8 @@ class EvaluationCaseSupportAssessment:
     selection_reason: str = ""
     score_components: dict[str, float] = field(default_factory=dict)
     limitations: list[str] = field(default_factory=list)
+    replacement_records: list[dict[str, Any]] = field(default_factory=list)
+    case_executable: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -151,6 +297,7 @@ def build_data_profile(
     code_column: str = "code",
     conventions: dict[str, Any] | None = None,
     derived_fields: list[dict[str, Any]] | None = None,
+    field_relationships: list[FieldRelationship | dict[str, Any]] | None = None,
 ) -> DataProfile:
     parsed_dates = pd.to_datetime(frame[date_column], errors="coerce") if date_column in frame.columns else pd.Series(dtype="datetime64[ns]")
     duplicate_count = (
@@ -204,6 +351,7 @@ def build_data_profile(
         field_coverage=field_coverage,
         conventions=resolved_conventions,
         derived_fields=derived_fields or [],
+        field_relationships=[asdict(item) if isinstance(item, FieldRelationship) else dict(item) for item in (field_relationships or [])],
         limitations=limitations,
     )
 
@@ -212,8 +360,15 @@ def assess_evaluation_case_support(
     truth_source: dict[str, Any],
     data_profile: DataProfile | dict[str, Any],
     evaluator_capabilities: dict[str, Any] | None = None,
+    *,
+    field_relationships: list[FieldRelationship | dict[str, Any]] | None = None,
 ) -> EvaluationCaseSupportAssessment:
-    profile = data_profile if isinstance(data_profile, dict) else asdict(data_profile)
+    profile = dict(data_profile) if isinstance(data_profile, dict) else asdict(data_profile)
+    if field_relationships is not None:
+        profile["field_relationships"] = [
+            asdict(item) if isinstance(item, FieldRelationship) else dict(item)
+            for item in field_relationships
+        ]
     evaluator_capabilities = evaluator_capabilities or {}
     truth_id = str(truth_source.get("truth_id", ""))
     metrics = list((truth_source.get("metrics", {}) or {}).keys())
@@ -236,6 +391,7 @@ def assess_evaluation_case_support(
                 available_value=resolved["available_value"],
                 availability=availability,
                 substitute=resolved["substitute"],
+                source_contexts=[f"required_data.{category}"],
                 severity=severity if availability != "constructible" else "minor",
                 affected_metrics=affected,
                 recommended_action=action,
@@ -330,13 +486,47 @@ def assess_evaluation_case_support(
             )
         )
 
+    requirement_results = _deduplicate_requirement_results(requirement_results)
+    for result in requirement_results:
+        _enrich_requirement_result(result, profile)
+
+    replacement_records = [
+        record
+        for result in requirement_results
+        if (record := _replacement_record(result, profile)) is not None
+    ]
+    deviations.extend(_relationship_deviations(requirement_results, replacement_records))
+    deviations = _deduplicate_deviations(deviations)
+
     missing_count = sum(1 for result in requirement_results if result.availability == "missing")
-    partial_count = sum(1 for result in requirement_results if result.availability in {"partially_available", "available_with_quality_warning"})
-    data_coverage = 1.0 if not requirement_results else max(0.0, 1.0 - missing_count / len(requirement_results) - partial_count * 0.2 / len(requirement_results))
+    partial_count = sum(
+        1
+        for result in requirement_results
+        if result.availability in {"partially_available", "available_with_quality_warning", "constructible"}
+    )
+    proxy_count = sum(1 for result in requirement_results if result.relationship == "proxy_substitute" and result.execution_ready)
+    constructible_count = sum(1 for result in requirement_results if result.semantic_availability == "constructible")
+    data_coverage = (
+        1.0
+        if not requirement_results
+        else max(
+            0.0,
+            1.0
+            - missing_count / len(requirement_results)
+            - partial_count * 0.2 / len(requirement_results)
+            - (proxy_count + constructible_count) * 0.35 / len(requirement_results),
+        )
+    )
     evaluator_coverage = 0.0 if capability_result.availability == "missing" else 1.0
     metric_coverage = 1.0 if metrics else 0.0
     support_score = round(0.45 * data_coverage + 0.35 * evaluator_coverage + 0.20 * metric_coverage, 6)
-    comparability = _comparability_from_support(missing_count, partial_count, capability_result.availability)
+    comparability = _comparability_from_support(
+        missing_count,
+        partial_count,
+        capability_result.availability,
+        proxy_count=proxy_count + constructible_count,
+    )
+    case_executable = _case_is_executable(requirement_results)
     diagnostic = sorted(
         {
             metric
@@ -363,10 +553,14 @@ def assess_evaluation_case_support(
         deviations=deviations,
         truth_match_eligible_metrics=eligible,
         diagnostic_only_metrics=diagnostic,
+        replacement_records=replacement_records,
+        case_executable=case_executable,
         score_components={
             "required_data_coverage": round(data_coverage, 6),
             "evaluator_capability_coverage": evaluator_coverage,
             "metric_coverage": metric_coverage,
+            "proxy_substitution_count": float(proxy_count),
+            "constructible_not_materialized_count": float(constructible_count),
         },
         limitations=[dev["reason"] for dev in deviations],
     )
@@ -382,8 +576,9 @@ def structured_deviation(
     affected_metrics: list[str],
     truth_matching_policy: str,
     source: str = "automatically_detected",
+    relationship: str = "",
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "category": category,
         "paper_value": paper_value,
         "resolved_value": resolved_value,
@@ -393,6 +588,9 @@ def structured_deviation(
         "truth_matching_policy": truth_matching_policy,
         "source": source,
     }
+    if relationship:
+        payload["relationship"] = relationship
+    return payload
 
 
 def _is_sorted_by_code_date(frame: pd.DataFrame, code_column: str, date_column: str) -> bool:
@@ -421,68 +619,400 @@ def _field_availability(field: str, profile: dict[str, Any]) -> str:
 
 def _resolve_requirement(field: str, profile: dict[str, Any]) -> dict[str, Any]:
     columns = set(str(column) for column in (profile.get("columns", []) or []))
-    candidates = _requirement_candidates(field)
-    for candidate in candidates:
-        if candidate in columns:
-            missing_ratio = float((profile.get("missingness", {}) or {}).get(candidate, 0.0) or 0.0)
-            if missing_ratio == 0:
-                availability = "available"
-            elif missing_ratio < 0.2:
-                availability = "available_with_quality_warning"
-            else:
-                availability = "partially_available"
-            return {
-                "availability": availability,
-                "available_value": candidate,
-                "substitute": candidate if candidate != field else None,
-            }
-    if field in columns:
-        missing_ratio = float((profile.get("missingness", {}) or {}).get(field, 0.0) or 0.0)
-        if missing_ratio == 0:
-            availability = "available"
-        elif missing_ratio < 0.2:
-            availability = "available_with_quality_warning"
-        else:
-            availability = "partially_available"
-        return {"availability": availability, "available_value": field, "substitute": None}
-    derived = profile.get("derived_fields", []) or []
-    for candidate in candidates:
-        if any(isinstance(item, dict) and item.get("field") == candidate for item in derived):
-            return {
-                "availability": "constructible",
-                "available_value": candidate,
-                "substitute": candidate if candidate != field else None,
-            }
-    return {"availability": "missing", "available_value": None, "substitute": None}
-
-
-def _requirement_candidates(field: str) -> list[str]:
-    normalized = field.strip()
-    lowered = normalized.lower()
-    candidates = [normalized]
-    aliases = {
-        "market_cap_or_log_market_cap": ["log_market_cap", "market_cap"],
-        "sqrt_free_float_market_cap": ["sqrt_free_float_market_cap", "free_float_market_cap", "market_cap"],
-        "free_float_market_cap": ["free_float_market_cap", "market_cap"],
-        "st_or_pt_status": ["is_st", "st_status", "status_code"],
-        "next_day_suspension_status": ["next_is_suspended", "is_suspended"],
-        "suspension_status": ["is_suspended", "next_is_suspended"],
-        "tradability_status": ["is_trading", "next_is_suspended"],
-        "industry_classification": ["industry", "industry_code"],
-        "industry_or_sector": ["industry", "sector"],
+    derived_fields = {
+        str(item.get("field")): dict(item)
+        for item in (profile.get("derived_fields", []) or [])
+        if isinstance(item, dict) and item.get("field")
     }
-    candidates.extend(aliases.get(lowered, []))
+    relationships = _relationships_for_requirement(field, profile)
+    custom_self_relationship = next(
+        (
+            relationship
+            for relationship in relationships
+            if relationship.physical_field == field and relationship.source != "built_in"
+        ),
+        None,
+    )
+    if field in columns and field in derived_fields and custom_self_relationship is None:
+        lineage = derived_fields[field]
+        return _available_field_resolution(
+            field,
+            profile,
+            relationship="derived_equivalent",
+            paper_field=field,
+            relationship_record=FieldRelationship(
+                field,
+                field,
+                "derived_equivalent",
+                reason=str(lineage.get("reason", "The required field was materialized from declared source fields.")),
+                derivation=lineage,
+                requires_reporting=True,
+                source=str(lineage.get("source", "data_profile")),
+            ),
+        )
+    if field in columns and custom_self_relationship is None:
+        return _available_field_resolution(
+            field,
+            profile,
+            relationship="exact_alias",
+            paper_field=field,
+        )
+
+    candidates: list[dict[str, Any]] = []
+    for relationship in relationships:
+        physical_available = relationship.physical_field in columns
+        derivation_declared = bool(relationship.derivation)
+        if relationship.relationship == "unsupported_substitute" and physical_available:
+            candidates.append(
+                _relationship_resolution(
+                    relationship,
+                    availability="missing",
+                    semantic_availability="not_assessed",
+                    execution_ready=False,
+                    profile=profile,
+                )
+            )
+        elif physical_available and derivation_declared:
+            candidates.append(
+                _relationship_resolution(
+                    relationship,
+                    availability="constructible",
+                    semantic_availability="constructible",
+                    execution_ready=False,
+                    profile=profile,
+                )
+            )
+        elif physical_available:
+            candidates.append(
+                _available_field_resolution(
+                    relationship.physical_field,
+                    profile,
+                    relationship=relationship.relationship,
+                    paper_field=field,
+                    relationship_record=relationship,
+                )
+            )
+        elif field in derived_fields or relationship.physical_field in derived_fields:
+            candidates.append(
+                _relationship_resolution(
+                    relationship,
+                    availability="constructible",
+                    semantic_availability="constructible",
+                    execution_ready=False,
+                    profile=profile,
+                )
+            )
+
+    if candidates:
+        return min(candidates, key=_resolution_priority)
+    if field in derived_fields:
+        return {
+            "availability": "constructible",
+            "semantic_availability": "constructible",
+            "available_value": None,
+            "candidate_field": field,
+            "substitute": None,
+            "relationship": "derived_equivalent",
+            "relationship_record": None,
+            "coverage_ratio": None,
+            "execution_ready": False,
+        }
+    return {
+        "availability": "missing",
+        "semantic_availability": "missing",
+        "available_value": None,
+        "candidate_field": "",
+        "substitute": None,
+        "relationship": "unsupported_substitute",
+        "relationship_record": None,
+        "coverage_ratio": 0.0,
+        "execution_ready": False,
+    }
+
+
+def _relationships_for_requirement(field: str, profile: dict[str, Any]) -> list[FieldRelationship]:
+    custom: list[FieldRelationship] = []
+    for item in profile.get("field_relationships", []) or []:
+        if isinstance(item, FieldRelationship):
+            relationship = item
+        elif isinstance(item, dict):
+            try:
+                relationship = FieldRelationship(**item)
+            except (TypeError, ValueError):
+                continue
+        else:
+            continue
+        if relationship.paper_field == field:
+            custom.append(relationship)
+
+    dynamic: list[FieldRelationship] = []
+    lowered = field.lower()
     match = re.fullmatch(r"forward_return_(\d+)d", lowered)
     if match:
-        candidates.append(f"forward_return_t{match.group(1)}")
+        dynamic.append(FieldRelationship(field, f"forward_return_t{match.group(1)}", "exact_alias"))
     match = re.fullmatch(r"forward_return_t(\d+)", lowered)
     if match:
-        candidates.append(f"forward_return_{match.group(1)}d")
-    unique: list[str] = []
-    for candidate in candidates:
-        if candidate not in unique:
-            unique.append(candidate)
-    return unique
+        dynamic.append(FieldRelationship(field, f"forward_return_{match.group(1)}d", "exact_alias"))
+
+    overridden_pairs = {(item.paper_field, item.physical_field) for item in custom}
+    built_in = [
+        item
+        for item in DEFAULT_FIELD_RELATIONSHIPS
+        if item.paper_field == field and (item.paper_field, item.physical_field) not in overridden_pairs
+    ]
+    return [*custom, *dynamic, *built_in]
+
+
+def _available_field_resolution(
+    physical_field: str,
+    profile: dict[str, Any],
+    *,
+    relationship: str,
+    paper_field: str,
+    relationship_record: FieldRelationship | None = None,
+) -> dict[str, Any]:
+    missing_ratio = float((profile.get("missingness", {}) or {}).get(physical_field, 0.0) or 0.0)
+    if missing_ratio == 0:
+        availability = "available"
+    elif missing_ratio < 0.2:
+        availability = "available_with_quality_warning"
+    else:
+        availability = "partially_available"
+    semantic_availability = (
+        "replacement_available"
+        if relationship == "proxy_substitute"
+        else "exactly_available" if missing_ratio == 0 else "available_with_missingness"
+    )
+    return {
+        "availability": availability,
+        "semantic_availability": semantic_availability,
+        "available_value": physical_field,
+        "candidate_field": physical_field,
+        "substitute": physical_field if physical_field != paper_field else None,
+        "relationship": relationship,
+        "relationship_record": relationship_record,
+        "coverage_ratio": max(0.0, 1.0 - missing_ratio),
+        "execution_ready": True,
+    }
+
+
+def _relationship_resolution(
+    relationship: FieldRelationship,
+    *,
+    availability: str,
+    semantic_availability: str,
+    execution_ready: bool,
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    missing_ratio = float((profile.get("missingness", {}) or {}).get(relationship.physical_field, 0.0) or 0.0)
+    return {
+        "availability": availability,
+        "semantic_availability": semantic_availability,
+        "available_value": relationship.physical_field if execution_ready else None,
+        "candidate_field": relationship.physical_field,
+        "substitute": relationship.physical_field,
+        "relationship": relationship.relationship,
+        "relationship_record": relationship,
+        "coverage_ratio": max(0.0, 1.0 - missing_ratio) if relationship.physical_field in set(profile.get("columns", []) or []) else None,
+        "execution_ready": execution_ready,
+    }
+
+
+def _resolution_priority(resolution: dict[str, Any]) -> tuple[int, int, str]:
+    relationship_rank = {
+        "exact_alias": 0,
+        "derived_equivalent": 1,
+        "proxy_substitute": 2,
+        "unsupported_substitute": 3,
+    }
+    return (
+        0 if resolution.get("execution_ready") else 1,
+        relationship_rank.get(str(resolution.get("relationship", "")), 4),
+        str(resolution.get("candidate_field", "")),
+    )
+
+
+def _enrich_requirement_result(result: EvaluationRequirementResult, profile: dict[str, Any]) -> None:
+    if result.category == "sample_period":
+        result.semantic_availability = _semantic_availability_from_legacy(result.availability)
+        result.execution_ready = result.availability != "missing"
+        result.source_contexts = result.source_contexts or ["truth_source.sample_period"]
+        return
+    if result.category == "evaluator_capability":
+        result.semantic_availability = "exactly_available" if result.availability == "available" else "missing"
+        result.execution_ready = result.availability == "available"
+        result.relationship = "exact_alias" if result.execution_ready else "unsupported_substitute"
+        result.source_contexts = result.source_contexts or ["evaluator_capabilities"]
+        return
+
+    resolved = _resolve_requirement(result.requirement, profile)
+    result.availability = str(resolved["availability"])
+    result.semantic_availability = str(resolved["semantic_availability"])
+    result.available_value = resolved["available_value"]
+    result.candidate_field = str(resolved.get("candidate_field", "") or "")
+    result.substitute = resolved["substitute"]
+    result.relationship = str(resolved["relationship"])
+    result.coverage_ratio = resolved.get("coverage_ratio")
+    result.execution_ready = bool(resolved["execution_ready"])
+    result.pipeline_blocking = False
+    result.source_contexts = result.source_contexts or [f"evaluation_case.{result.category}"]
+    if result.relationship in {"proxy_substitute", "unsupported_substitute"}:
+        result.severity = "material"
+    if not result.execution_ready:
+        result.recommended_action = (
+            "construct_before_execution"
+            if result.semantic_availability == "constructible"
+            else "reject_substitute_and_degrade"
+        )
+    elif result.relationship == "proxy_substitute":
+        result.recommended_action = "use_proxy_and_report_limitation"
+
+
+def _semantic_availability_from_legacy(availability: str) -> str:
+    if availability == "available":
+        return "exactly_available"
+    if availability in {"partially_available", "available_with_quality_warning"}:
+        return "available_with_missingness"
+    if availability == "constructible":
+        return "constructible"
+    if availability == "missing":
+        return "missing"
+    return "not_assessed"
+
+
+def _deduplicate_requirement_results(
+    results: list[EvaluationRequirementResult],
+) -> list[EvaluationRequirementResult]:
+    merged: dict[tuple[str, str], EvaluationRequirementResult] = {}
+    severity_rank = {"cosmetic": 0, "minor": 1, "material": 2, "fundamental": 3}
+    for result in results:
+        key = (result.category, result.requirement)
+        if key not in merged:
+            merged[key] = result
+            continue
+        current = merged[key]
+        current.affected_metrics = _dedupe_strings([*current.affected_metrics, *result.affected_metrics])
+        current.source_contexts = _dedupe_strings([*current.source_contexts, *result.source_contexts])
+        if severity_rank.get(result.severity, 0) > severity_rank.get(current.severity, 0):
+            current.severity = result.severity
+        if current.available_value is None and result.available_value is not None:
+            current.available_value = result.available_value
+        if not current.substitute and result.substitute:
+            current.substitute = result.substitute
+    return list(merged.values())
+
+
+def _replacement_record(
+    result: EvaluationRequirementResult,
+    profile: dict[str, Any],
+) -> dict[str, Any] | None:
+    if result.category in {"sample_period", "evaluator_capability"}:
+        return None
+    if result.relationship not in {"derived_equivalent", "proxy_substitute", "unsupported_substitute"}:
+        return None
+    if result.relationship == "unsupported_substitute" and not (result.candidate_field or result.substitute):
+        return None
+    resolved = _resolve_requirement(result.requirement, profile)
+    relationship = resolved.get("relationship_record")
+    if isinstance(relationship, FieldRelationship):
+        relationship_payload = asdict(relationship)
+    else:
+        relationship_payload = {}
+    if result.relationship == "proxy_substitute" and result.execution_ready:
+        status = "accepted_proxy"
+        accepted = True
+        comparability = "proxy"
+    elif result.relationship == "derived_equivalent" and result.execution_ready:
+        status = "constructed_equivalent"
+        accepted = True
+        comparability = "exact"
+    elif result.semantic_availability == "constructible":
+        status = "constructible_not_materialized"
+        accepted = False
+        comparability = "not_yet_comparable"
+    else:
+        status = "rejected_candidate"
+        accepted = False
+        comparability = "not_comparable"
+    return {
+        "required_semantic_role": result.category,
+        "paper_definition": result.requirement,
+        "replacement_field": result.available_value or result.candidate_field or result.substitute,
+        "relationship": result.relationship,
+        "status": status,
+        "accepted": accepted,
+        "execution_ready": result.execution_ready,
+        "replacement_reason": relationship_payload.get("reason", "No exact semantic field is available."),
+        "selection_basis": relationship_payload.get("source", "automatic_resolver"),
+        "expected_effect": relationship_payload.get("expected_effect", ""),
+        "derivation": relationship_payload.get("derivation", {}),
+        "comparability_after_replacement": comparability,
+        "selection_mode": relationship_payload.get("selection_mode", "automatic"),
+        "coverage_ratio": result.coverage_ratio,
+        "affected_metrics": list(result.affected_metrics),
+        "pipeline_blocking": False,
+        "source_contexts": list(result.source_contexts),
+    }
+
+
+def _relationship_deviations(
+    results: list[EvaluationRequirementResult],
+    replacements: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    result_by_key = {(item.category, item.requirement): item for item in results}
+    deviations: list[dict[str, Any]] = []
+    for replacement in replacements:
+        if replacement["status"] in {"rejected_candidate", "constructed_equivalent"}:
+            continue
+        result = result_by_key[(replacement["required_semantic_role"], replacement["paper_definition"])]
+        deviations.append(
+            structured_deviation(
+                category=result.category,
+                paper_value=result.requirement,
+                resolved_value=result.available_value,
+                reason=str(replacement["replacement_reason"]),
+                severity="material" if result.relationship == "proxy_substitute" else "minor",
+                affected_metrics=list(result.affected_metrics),
+                truth_matching_policy="proxy_or_diagnostic_only",
+                relationship=result.relationship,
+            )
+        )
+    return deviations
+
+
+def _deduplicate_deviations(deviations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for deviation in deviations:
+        key = (
+            str(deviation.get("category", "")),
+            str(deviation.get("paper_value", "")),
+            str(deviation.get("resolved_value", "")),
+            str(deviation.get("reason", "")),
+        )
+        if key not in seen:
+            seen.add(key)
+            result.append(deviation)
+    return result
+
+
+def _case_is_executable(results: list[EvaluationRequirementResult]) -> bool:
+    for result in results:
+        if result.relationship == "unsupported_substitute" and result.candidate_field:
+            return False
+        if result.category == "evaluator_capability" and not result.execution_ready:
+            return False
+        if result.category in {"evaluation", "return"} and not result.execution_ready:
+            return False
+    return True
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result
 
 
 def _affected_metrics_for_requirement(category: str, metrics: list[str]) -> list[str]:
@@ -512,6 +1042,39 @@ def _assess_evaluator_capability(
         unsupported_protocol.append(f"regression_type={regression_type}")
     if regression_type == "wls" and not (evaluation_spec.get("weight_col") or evaluation_spec.get("regression_weight")):
         unsupported_protocol.append("wls_missing_weight_col")
+    transform_spec = truth_source.get("transform_spec", {}) if isinstance(truth_source.get("transform_spec", {}), dict) else {}
+    supported_transform_steps = set(capabilities.get("transform_steps", []) or [])
+    for step in transform_spec.get("steps", []) or []:
+        if not isinstance(step, dict):
+            unsupported_protocol.append("transform_step=invalid")
+            continue
+        name = str(step.get("name", "") or "").lower()
+        method_name = canonical_transform_method(str(step.get("method") or step.get("name") or ""))
+        if name == "neutralization":
+            method_name = str(step.get("method", "") or "none").lower()
+        if method_name and method_name not in supported_transform_steps:
+            unsupported_protocol.append(f"transform_step={method_name}")
+    neutralization_spec = (
+        truth_source.get("neutralization_spec", {})
+        if isinstance(truth_source.get("neutralization_spec", {}), dict)
+        else {}
+    )
+    if neutralization_spec:
+        neutralization_method = str(neutralization_spec.get("method", "") or "").lower()
+        supported_neutralization = set(capabilities.get("neutralization_methods", []) or [])
+        if neutralization_method and neutralization_method not in supported_neutralization:
+            unsupported_protocol.append(f"neutralization_method={neutralization_method}")
+        supported_input_transforms = set(capabilities.get("input_transform_methods", []) or [])
+        for method_name in transformed_input_methods(neutralization_spec):
+            if method_name not in supported_input_transforms:
+                unsupported_protocol.append(f"input_transform={method_name}")
+        supported_encodings = set(capabilities.get("control_encodings", []) or [])
+        for control in neutralization_spec.get("controls", []) or []:
+            if not isinstance(control, dict):
+                continue
+            encoding = str(control.get("encoding", "continuous") or "continuous").lower()
+            if encoding not in supported_encodings:
+                unsupported_protocol.append(f"control_encoding={encoding}")
     available = bool(not family or family in supported_families) and not unsupported_metrics and not unsupported_protocol
     affected_metrics = unsupported_metrics
     if not affected_metrics and unsupported_protocol:
@@ -527,13 +1090,20 @@ def _assess_evaluator_capability(
         severity="material" if not available else "minor",
         affected_metrics=affected_metrics,
         recommended_action="execute_selected_case" if available else "try_alternative_truth_then_proxy",
+        source_contexts=["evaluator_capabilities"],
     )
 
 
-def _comparability_from_support(missing_count: int, partial_count: int, capability_availability: str) -> str:
+def _comparability_from_support(
+    missing_count: int,
+    partial_count: int,
+    capability_availability: str,
+    *,
+    proxy_count: int = 0,
+) -> str:
     if capability_availability == "missing":
         return "not_comparable"
-    if missing_count:
+    if missing_count or proxy_count:
         return "proxy"
     if partial_count:
         return "materially_comparable"
@@ -561,6 +1131,7 @@ def _sample_period_requirement_results(
                 availability="unknown",
                 severity="minor",
                 affected_metrics=metrics or ["*"],
+                source_contexts=["truth_source.sample_period"],
             )
         ]
     covers = data_start <= paper_start and data_end >= paper_end
@@ -584,6 +1155,7 @@ def _sample_period_requirement_results(
             severity=severity,
             affected_metrics=metrics or ["*"],
             recommended_action="use_available_overlap" if overlaps else "try_alternative_truth_then_proxy",
+            source_contexts=["truth_source.sample_period"],
         )
     ]
 
@@ -594,16 +1166,32 @@ def _universe_requirement_results(
     metrics: list[str],
 ) -> list[EvaluationRequirementResult]:
     universe = str(truth_source.get("universe", "") or "").lower()
-    if not universe:
-        return []
-    if not any(token in universe for token in ("a-share", "a share", "a股", "全a")):
-        return []
-    requirements = [
-        ("st_or_pt_status", "universe_filter"),
-        ("next_day_suspension_status", "universe_filter"),
-    ]
+    requirements: list[tuple[str, str, str]] = []
+    exclusion_declared = any(token in universe for token in ("exclude", "exclusion", "remove", "剔除", "排除", "不含"))
+    if exclusion_declared and ("st" in universe or "pt" in universe):
+        requirements.append(("st_or_pt_status", "universe_filter", "truth_source.universe"))
+    if exclusion_declared and any(token in universe for token in ("suspend", "suspension", "停牌")):
+        next_day = any(token in universe for token in ("next-day", "next day", "next trading day", "次日", "下一交易日"))
+        requirements.append(
+            (
+                "next_day_suspension_status" if next_day else "suspension_status",
+                "universe_filter",
+                "truth_source.universe",
+            )
+        )
+    universe_protocol = (
+        truth_source.get("universe_protocol", {})
+        if isinstance(truth_source.get("universe_protocol", {}), dict)
+        else {}
+    )
+    for item in universe_protocol.get("filters", []) or []:
+        if not isinstance(item, dict):
+            continue
+        requirement = str(item.get("paper_field") or item.get("field") or "")
+        if requirement:
+            requirements.append((requirement, "universe_filter", "universe_protocol.filters"))
     results: list[EvaluationRequirementResult] = []
-    for requirement, category in requirements:
+    for requirement, category, source_context in requirements:
         resolved = _resolve_requirement(requirement, profile)
         results.append(
             EvaluationRequirementResult(
@@ -616,6 +1204,7 @@ def _universe_requirement_results(
                 severity="material" if resolved["availability"] == "missing" else "minor",
                 affected_metrics=metrics or ["*"],
                 recommended_action="apply_filter" if resolved["availability"] != "missing" else "proxy_or_report_gap",
+                source_contexts=[source_context],
             )
         )
     return results
@@ -642,6 +1231,7 @@ def _evaluation_spec_requirement_results(
                 severity="material" if resolved["availability"] == "missing" else "minor",
                 affected_metrics=_affected_metrics_for_requirement("regression_weight", metrics),
                 recommended_action="use_weight" if resolved["availability"] != "missing" else "try_alternative_truth_then_proxy",
+                source_contexts=["evaluation_spec.regression_weight"],
             )
         )
     return_col = str(evaluation_spec.get("return_col") or "").strip()
@@ -661,6 +1251,7 @@ def _evaluation_spec_requirement_results(
                 severity="fundamental" if resolved["availability"] == "missing" else "minor",
                 affected_metrics=metrics or ["*"],
                 recommended_action="use_return_column" if resolved["availability"] != "missing" else "cannot_evaluate_case",
+                source_contexts=["evaluation_spec.return"],
             )
         )
     return results
@@ -692,8 +1283,37 @@ def _transform_requirement_results(
                     severity="material" if resolved["availability"] == "missing" else "minor",
                     affected_metrics=metrics or ["*"],
                     recommended_action="use_transform_control" if resolved["availability"] != "missing" else "drop_or_defer_transform_control",
+                    source_contexts=["transform_spec.neutralization.controls"],
                 )
             )
+    neutralization_spec = (
+        truth_source.get("neutralization_spec", {})
+        if isinstance(truth_source.get("neutralization_spec", {}), dict)
+        else {}
+    )
+    for control in neutralization_spec.get("controls", []) or []:
+        if not isinstance(control, dict):
+            continue
+        paper_field = str(control.get("paper_field") or control.get("field") or "")
+        if not paper_field:
+            continue
+        resolved = _resolve_requirement(paper_field, profile)
+        results.append(
+            EvaluationRequirementResult(
+                requirement=paper_field,
+                category="transform_control",
+                paper_value=paper_field,
+                available_value=resolved["available_value"],
+                availability=resolved["availability"],
+                substitute=resolved["substitute"],
+                severity="material" if resolved["availability"] == "missing" else "minor",
+                affected_metrics=metrics or ["*"],
+                recommended_action=(
+                    "transform_and_use_control" if resolved["availability"] != "missing" else "drop_or_defer_transform_control"
+                ),
+                source_contexts=["neutralization_spec.controls"],
+            )
+        )
     return results
 
 

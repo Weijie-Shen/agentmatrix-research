@@ -6,6 +6,7 @@ import pandas as pd
 
 from research_core.factor_lab.paper_reproduction.data_validation import (
     DataFrameValidationRequest,
+    FieldRelationship,
     assess_evaluation_case_support,
     build_data_profile,
     validate_input_frame,
@@ -115,6 +116,7 @@ class PaperInputDataValidationTest(unittest.TestCase):
         self.assertTrue(any(item.requirement == "free_float_market_cap" for item in assessment.requirement_results))
         self.assertTrue(assessment.deviations)
         self.assertIn("t_abs_mean", assessment.diagnostic_only_metrics)
+        self.assertEqual(assessment.replacement_records, [])
 
     def test_assess_evaluation_case_support_resolves_aliases_sample_and_universe_filters(self) -> None:
         frame = pd.DataFrame(
@@ -152,7 +154,299 @@ class PaperInputDataValidationTest(unittest.TestCase):
         self.assertEqual(results["st_or_pt_status"].available_value, "is_st")
         self.assertEqual(results["next_day_suspension_status"].available_value, "next_is_suspended")
         self.assertEqual(results["sample_period"].availability, "partially_available")
-        self.assertEqual(assessment.comparability, "materially_comparable")
+        self.assertEqual(assessment.comparability, "proxy")
+        self.assertEqual(results["st_or_pt_status"].relationship, "proxy_substitute")
+        self.assertEqual(results["next_day_suspension_status"].relationship, "exact_alias")
+
+    def test_a_share_universe_without_exclusion_text_does_not_invent_status_filters(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "date": ["2020-01-02", "2020-01-02"],
+                "code": ["AAA", "BBB"],
+                "forward_return_1d": [0.01, -0.01],
+            }
+        )
+        truth_source = {
+            "truth_id": "all_a_share_no_filter",
+            "universe": "All A-shares",
+            "evaluation_family": "ic_analysis",
+            "evaluation_method": "rank IC",
+            "evaluation_spec": {"return_col": "forward_return_1d"},
+            "metrics": {"rank_ic_mean": 0.04},
+        }
+
+        assessment = assess_evaluation_case_support(
+            truth_source,
+            build_data_profile(frame),
+            get_generic_evaluator_capabilities(),
+        )
+
+        requirements = {item.requirement for item in assessment.requirement_results}
+        self.assertNotIn("st_or_pt_status", requirements)
+        self.assertNotIn("next_day_suspension_status", requirements)
+
+    def test_proxy_substitute_is_reported_and_downgrades_only_affected_metrics(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2020-01-02", "2020-01-03"]),
+                "code": ["AAA", "AAA"],
+                "forward_return_1d": [0.01, 0.02],
+                "market_cap": [100.0, 110.0],
+            }
+        )
+        truth_source = {
+            "truth_id": "wls_proxy",
+            "evaluation_family": "ic_regression",
+            "evaluation_method": "WLS rank IC regression",
+            "evaluation_spec": {
+                "return_col": "forward_return_1d",
+                "regression_type": "wls",
+                "weight_col": "free_float_market_cap",
+            },
+            "required_data": {
+                "evaluation": ["forward_return_1d"],
+                "regression_weight": ["free_float_market_cap"],
+            },
+            "metrics": {"rank_ic_mean": 0.04, "t_abs_mean": 2.0},
+        }
+
+        assessment = assess_evaluation_case_support(
+            truth_source,
+            build_data_profile(frame),
+            get_generic_evaluator_capabilities(),
+        )
+        weights = [
+            item
+            for item in assessment.requirement_results
+            if item.category == "regression_weight" and item.requirement == "free_float_market_cap"
+        ]
+
+        self.assertEqual(len(weights), 1)
+        self.assertEqual(weights[0].source_contexts, ["required_data.regression_weight", "evaluation_spec.regression_weight"])
+        self.assertEqual(weights[0].relationship, "proxy_substitute")
+        self.assertEqual(weights[0].semantic_availability, "replacement_available")
+        self.assertEqual(weights[0].available_value, "market_cap")
+        self.assertFalse(weights[0].pipeline_blocking)
+        self.assertTrue(assessment.case_executable)
+        self.assertEqual(assessment.comparability, "proxy")
+        self.assertIn("rank_ic_mean", assessment.truth_match_eligible_metrics)
+        self.assertIn("t_abs_mean", assessment.diagnostic_only_metrics)
+        self.assertEqual(assessment.replacement_records[0]["status"], "accepted_proxy")
+        self.assertEqual(assessment.replacement_records[0]["replacement_field"], "market_cap")
+
+    def test_declared_derivation_is_constructible_but_not_an_executable_field(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "date": ["2020-01-02"],
+                "code": ["AAA"],
+                "forward_return_1d": [0.01],
+                "free_float_market_cap": [100.0],
+            }
+        )
+        truth_source = {
+            "truth_id": "derived_weight",
+            "evaluation_family": "ic_regression",
+            "evaluation_method": "WLS rank IC regression",
+            "evaluation_spec": {
+                "return_col": "forward_return_1d",
+                "regression_type": "wls",
+                "weight_col": "sqrt_free_float_market_cap",
+            },
+            "required_data": {"evaluation": ["forward_return_1d"]},
+            "metrics": {"t_abs_mean": 2.0},
+        }
+
+        assessment = assess_evaluation_case_support(
+            truth_source,
+            build_data_profile(frame),
+            get_generic_evaluator_capabilities(),
+        )
+        weight = next(item for item in assessment.requirement_results if item.category == "regression_weight")
+
+        self.assertEqual(weight.relationship, "derived_equivalent")
+        self.assertEqual(weight.semantic_availability, "constructible")
+        self.assertIsNone(weight.available_value)
+        self.assertFalse(weight.execution_ready)
+        self.assertEqual(assessment.replacement_records[0]["status"], "constructible_not_materialized")
+
+    def test_materialized_derivation_is_executable_and_keeps_lineage(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "date": ["2020-01-02"],
+                "code": ["AAA"],
+                "forward_return_1d": [0.01],
+                "sqrt_free_float_market_cap": [10.0],
+            }
+        )
+        profile = build_data_profile(
+            frame,
+            derived_fields=[
+                {
+                    "field": "sqrt_free_float_market_cap",
+                    "sources": ["free_float_market_cap"],
+                    "formula": "sqrt(free_float_market_cap)",
+                    "source": "data_profile",
+                }
+            ],
+        )
+        truth_source = {
+            "truth_id": "materialized_weight",
+            "evaluation_family": "ic_regression",
+            "evaluation_method": "WLS rank IC regression",
+            "evaluation_spec": {
+                "return_col": "forward_return_1d",
+                "regression_type": "wls",
+                "weight_col": "sqrt_free_float_market_cap",
+            },
+            "metrics": {"t_abs_mean": 2.0},
+        }
+
+        assessment = assess_evaluation_case_support(
+            truth_source,
+            profile,
+            get_generic_evaluator_capabilities(),
+        )
+        weight = next(item for item in assessment.requirement_results if item.category == "regression_weight")
+
+        self.assertTrue(weight.execution_ready)
+        self.assertEqual(weight.relationship, "derived_equivalent")
+        self.assertEqual(weight.available_value, "sqrt_free_float_market_cap")
+        self.assertEqual(assessment.comparability, "exact")
+        self.assertEqual(assessment.replacement_records[0]["status"], "constructed_equivalent")
+        self.assertEqual(assessment.replacement_records[0]["derivation"]["formula"], "sqrt(free_float_market_cap)")
+        self.assertEqual(assessment.deviations, [])
+
+    def test_unsupported_timing_substitute_is_rejected_and_case_is_not_executable(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "date": ["2020-01-02"],
+                "code": ["AAA"],
+                "forward_return_1d": [0.01],
+                "is_suspended": [False],
+            }
+        )
+        truth_source = {
+            "truth_id": "next_day_filter",
+            "evaluation_family": "ic_analysis",
+            "evaluation_method": "rank IC",
+            "required_data": {
+                "evaluation": ["forward_return_1d"],
+                "filters": ["next_day_suspension_status"],
+            },
+            "metrics": {"rank_ic_mean": 0.04},
+        }
+
+        assessment = assess_evaluation_case_support(
+            truth_source,
+            build_data_profile(frame),
+            get_generic_evaluator_capabilities(),
+        )
+        status = next(item for item in assessment.requirement_results if item.requirement == "next_day_suspension_status")
+
+        self.assertEqual(status.relationship, "unsupported_substitute")
+        self.assertIsNone(status.available_value)
+        self.assertFalse(status.execution_ready)
+        self.assertFalse(assessment.case_executable)
+        self.assertEqual(assessment.replacement_records[0]["status"], "rejected_candidate")
+
+    def test_neutralization_control_transforms_are_checked_against_evaluator_capabilities(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "date": ["2020-01-02", "2020-01-02"],
+                "code": ["AAA", "BBB"],
+                "forward_return_1d": [0.01, -0.01],
+                "market_cap": [100.0, 200.0],
+            }
+        )
+        truth_source = {
+            "truth_id": "transformed_control",
+            "evaluation_family": "ic_analysis",
+            "evaluation_method": "rank IC after size neutralization",
+            "evaluation_spec": {"return_col": "forward_return_1d"},
+            "neutralization_spec": {
+                "method": "cross_sectional_regression_residual",
+                "controls": [
+                    {
+                        "paper_field": "market_cap",
+                        "encoding": "continuous",
+                        "transforms": [
+                            {"method": "log"},
+                            {"method": "median_mad"},
+                            {"method": "cross_section_zscore"},
+                        ],
+                    }
+                ],
+            },
+            "metrics": {"rank_ic_mean": 0.04},
+        }
+
+        supported = assess_evaluation_case_support(
+            truth_source,
+            build_data_profile(frame),
+            get_generic_evaluator_capabilities(),
+        )
+
+        capability = next(item for item in supported.requirement_results if item.category == "evaluator_capability")
+        control = next(item for item in supported.requirement_results if item.category == "transform_control")
+        self.assertEqual(capability.availability, "available")
+        self.assertTrue(supported.case_executable)
+        self.assertEqual(control.available_value, "market_cap")
+
+        truth_source["neutralization_spec"]["controls"][0]["transforms"].append({"method": "quantile_normalize"})
+        unsupported = assess_evaluation_case_support(
+            truth_source,
+            build_data_profile(frame),
+            get_generic_evaluator_capabilities(),
+        )
+        unsupported_capability = next(
+            item for item in unsupported.requirement_results if item.category == "evaluator_capability"
+        )
+        self.assertEqual(unsupported_capability.availability, "missing")
+        self.assertFalse(unsupported.case_executable)
+
+    def test_profile_relationship_can_explicitly_override_conservative_proxy(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "date": ["2020-01-02"],
+                "code": ["AAA"],
+                "forward_return_1d": [0.01],
+                "market_cap": [100.0],
+            }
+        )
+        profile = build_data_profile(
+            frame,
+            field_relationships=[
+                FieldRelationship(
+                    "free_float_market_cap",
+                    "market_cap",
+                    "exact_alias",
+                    reason="Fixture provider declares market_cap to use the paper's free-float definition.",
+                    source="provider_profile",
+                )
+            ],
+        )
+        truth_source = {
+            "truth_id": "provider_semantics",
+            "evaluation_family": "ic_analysis",
+            "evaluation_method": "rank IC",
+            "required_data": {
+                "evaluation": ["forward_return_1d"],
+                "controls": ["free_float_market_cap"],
+            },
+            "metrics": {"rank_ic_mean": 0.04},
+        }
+
+        assessment = assess_evaluation_case_support(
+            truth_source,
+            profile,
+            get_generic_evaluator_capabilities(),
+        )
+        control = next(item for item in assessment.requirement_results if item.requirement == "free_float_market_cap")
+
+        self.assertEqual(control.relationship, "exact_alias")
+        self.assertEqual(control.semantic_availability, "exactly_available")
+        self.assertEqual(control.available_value, "market_cap")
+        self.assertEqual(assessment.replacement_records, [])
 
     def test_data_profile_infers_explicit_price_view_conventions(self) -> None:
         frame = pd.DataFrame(

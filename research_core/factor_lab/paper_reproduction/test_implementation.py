@@ -9,8 +9,14 @@ from pathlib import Path
 from contracts.factor_research import FactorResearchSpec, ValidationThreshold
 from research_core.factor_lab.paper_reproduction.data_validation import DataFrameValidationResult
 from research_core.factor_lab.paper_reproduction.implementation import (
+    FactorImplementationValidationError,
     build_implementation_manifest,
+    build_factor_implementation_artifact,
+    execute_factor_callable,
+    export_factor_implementation_artifact,
     export_implementation_manifest,
+    factor_specification_hash,
+    load_factor_implementation_artifact,
     write_factor_family_scaffold,
 )
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig
@@ -153,6 +159,106 @@ class PaperImplementationScaffoldTest(unittest.TestCase):
             )
             with self.assertRaises(NotImplementedError):
                 module.compute_paperdemo_factors(None)
+
+    def test_canonical_artifact_imports_probes_hashes_and_round_trips(self) -> None:
+        import pandas as pd
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            module_path = root / "factor.py"
+            module_path.write_text(
+                "import pandas as pd\n\n"
+                "def compute_factors(panel, factor_names=None):\n"
+                "    names = factor_names or ['paper_alpha_1']\n"
+                "    result = panel[['date', 'code']].copy()\n"
+                "    for name in names:\n"
+                "        result[name] = pd.to_numeric(panel['close']) * 2\n"
+                "    return result\n",
+                encoding="utf-8",
+            )
+            probe = pd.DataFrame(
+                {
+                    "date": ["2026-01-01", "2026-01-01"],
+                    "code": ["A", "B"],
+                    "close": [1.0, 2.0],
+                    "volume": [10.0, 20.0],
+                }
+            )
+
+            artifact = build_factor_implementation_artifact(
+                [self._spec()],
+                module_path=module_path,
+                callable_import_path="compute_factors",
+                probe_panel=probe,
+            )
+
+            self.assertEqual(artifact.validation_status, "completed")
+            self.assertEqual(artifact.factor_columns_by_id, {"paper_alpha_1": "paper_alpha_1"})
+            output = execute_factor_callable(artifact, probe)
+            self.assertEqual(output["paper_alpha_1"].tolist(), [2.0, 4.0])
+
+            artifact_path = export_factor_implementation_artifact(artifact, root / "artifact.json")
+            loaded = load_factor_implementation_artifact(artifact_path)
+            self.assertEqual(loaded.source_hash, artifact.source_hash)
+            self.assertEqual(loaded.factor_specification_hash, artifact.factor_specification_hash)
+
+    def test_canonical_artifact_rejects_unimplemented_scaffold(self) -> None:
+        import pandas as pd
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            module_path = Path(tmp_dir) / "factor.py"
+            module_path.write_text(
+                "def compute_factors(panel, factor_names=None):\n"
+                "    raise NotImplementedError('scaffold')\n",
+                encoding="utf-8",
+            )
+            probe = pd.DataFrame(
+                {"date": ["2026-01-01"], "code": ["A"], "close": [1.0], "volume": [10.0]}
+            )
+
+            with self.assertRaises(FactorImplementationValidationError) as caught:
+                build_factor_implementation_artifact(
+                    [self._spec()],
+                    module_path=module_path,
+                    callable_import_path="compute_factors",
+                    probe_panel=probe,
+                )
+
+            self.assertIn("unimplemented scaffold", str(caught.exception))
+
+    def test_artifact_execution_rejects_source_changed_after_certification(self) -> None:
+        import pandas as pd
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            module_path = Path(tmp_dir) / "factor.py"
+            module_path.write_text(
+                "def compute_factors(panel, factor_names=None):\n"
+                "    result = panel[['date', 'code']].copy()\n"
+                "    result['paper_alpha_1'] = panel['close']\n"
+                "    return result\n",
+                encoding="utf-8",
+            )
+            probe = pd.DataFrame(
+                {"date": ["2026-01-01"], "code": ["A"], "close": [1.0], "volume": [10.0]}
+            )
+            artifact = build_factor_implementation_artifact(
+                [self._spec()],
+                module_path=module_path,
+                callable_import_path="compute_factors",
+                probe_panel=probe,
+            )
+            module_path.write_text(module_path.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "source changed"):
+                execute_factor_callable(artifact, probe)
+
+    def test_factor_specification_hash_excludes_notes_but_changes_with_formula(self) -> None:
+        spec = self._spec()
+        original = factor_specification_hash([spec])
+        spec.notes.append("report-only note")
+        self.assertEqual(factor_specification_hash([spec]), original)
+        spec.formula = "rank(close)"
+        self.assertNotEqual(factor_specification_hash([spec]), original)
 
 
 if __name__ == "__main__":

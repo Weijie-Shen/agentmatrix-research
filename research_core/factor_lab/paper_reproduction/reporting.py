@@ -19,6 +19,7 @@ def build_paper_reproduction_report(
     specs: list[FactorResearchSpec],
     pipeline_state: PaperReproductionPipelineState | None = None,
     evaluation_plan: PaperEvaluationPlan | None = None,
+    evaluation_bundle: object | None = None,
     evaluation_report: dict[str, Any] | None = None,
     truth_results: dict[str, list[dict[str, Any]]] | None = None,
     artifacts: dict[str, str] | None = None,
@@ -30,6 +31,12 @@ def build_paper_reproduction_report(
         plan.factor_name: plan
         for plan in (evaluation_plan.factor_plans if evaluation_plan else [])
     }
+    evaluation_bundle_payload = _as_plain_dict(evaluation_bundle)
+    execution_records = [
+        record
+        for record in evaluation_bundle_payload.get("records", []) or []
+        if isinstance(record, dict)
+    ]
     factors = []
     status_counts: dict[str, int] = {}
     truth_status_counts: dict[str, int] = {}
@@ -43,6 +50,7 @@ def build_paper_reproduction_report(
             truth_status_counts[status] = truth_status_counts.get(status, 0) + 1
         selected_cases = factor_evaluation_plan.get("selected_evaluation_cases", [])
         selected_truth = selected_cases[0] if selected_cases else {}
+        data_requirement_assessments, data_replacements = _collect_data_assessments(factor_evaluation_plan)
         factor_status = str(spec_metadata.get("status", "extracted_only"))
         status_counts[factor_status] = status_counts.get(factor_status, 0) + 1
         factors.append(
@@ -66,6 +74,9 @@ def build_paper_reproduction_report(
                 "deviations": selected_truth.get("deviations", []),
                 "truth_match_eligible_metrics": selected_truth.get("truth_match_eligible_metrics", []),
                 "diagnostic_only_metrics": selected_truth.get("diagnostic_only_metrics", []),
+                "case_executable": selected_truth.get("case_executable") if selected_truth else None,
+                "data_requirement_assessments": data_requirement_assessments,
+                "data_replacements": data_replacements,
                 "requires_paper_local_evaluator": factor_evaluation_plan.get("requires_paper_local_evaluator", False),
                 "evaluator_implementation_targets": factor_evaluation_plan.get("evaluator_implementation_targets", []),
                 "defaulted_transform_assumptions": _factor_defaulted_transform_assumptions(
@@ -73,6 +84,9 @@ def build_paper_reproduction_report(
                     factor_evaluation_plan,
                 ),
                 "truth_results": factor_truth_results,
+                "evaluation_executions": [
+                    record for record in execution_records if record.get("factor_name") == factor.factor_name
+                ],
                 "spec_status": factor_status,
                 "data_requirements": spec_metadata.get("data_requirements", {}),
                 "known_limitations": spec_metadata.get("known_limitations", list(factor.known_limitations)),
@@ -84,6 +98,7 @@ def build_paper_reproduction_report(
     pipeline_payload = _pipeline_payload(pipeline_state)
     overall_status = _resolve_overall_status(pipeline_payload, status_counts, truth_status_counts)
     truth_case_counts = _truth_case_counts(factors, truth_results)
+    data_requirement_counts = _data_requirement_counts(factors)
     return {
         "job_id": job_id,
         "generated_at": now_iso(),
@@ -102,6 +117,13 @@ def build_paper_reproduction_report(
             "spec_status_counts": status_counts,
             "truth_status_counts": truth_status_counts,
             "truth_case_counts": truth_case_counts,
+            "data_requirement_counts": data_requirement_counts,
+            "data_replacement_count": sum(len(factor.get("data_replacements", [])) for factor in factors),
+            "evaluation_execution_counts": _execution_lifecycle_counts(execution_records),
+            "evaluation_filter_rows_removed": sum(
+                int((record.get("universe_diagnostics", {}) or {}).get("removed_rows", 0) or 0)
+                for record in execution_records
+            ),
             "truth_match_pass_rate": _truth_match_pass_rate(truth_case_counts),
             "pipeline_overall_status": pipeline_payload.get("overall_status"),
             "next_stage": pipeline_payload.get("next_stage"),
@@ -109,6 +131,7 @@ def build_paper_reproduction_report(
         },
         "pipeline": pipeline_payload,
         "evaluation_plan": _as_plain_dict(evaluation_plan) if evaluation_plan else {},
+        "evaluation_bundle": evaluation_bundle_payload,
         "evaluation_report": evaluation_report or {},
         "factors": factors,
         "artifacts": artifacts or {},
@@ -176,11 +199,30 @@ def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
                     f"- Match result `{result.get('truth_id', '-')}`: {result.get('status', '-')} "
                     f"({result.get('diagnostics', {}).get('quality', '-')})"
                 )
+        for execution in factor.get("evaluation_executions", []):
+            universe = execution.get("universe_diagnostics", {}) or {}
+            lines.append(
+                f"- Evaluation execution `{execution.get('execution_id', '-')}`: "
+                f"{execution.get('lifecycle_state', '-')} via "
+                f"{(execution.get('evaluator_output', {}) or {}).get('execution_mode', '-')}"
+            )
+            for applied_filter in universe.get("applied_filters", []) or []:
+                lines.append(
+                    f"  - Filter `{applied_filter.get('filter_name', '-')}` at "
+                    f"`{applied_filter.get('application_stage', '-')}` removed "
+                    f"{applied_filter.get('removed_rows', 0)} rows."
+                )
         deviations = factor.get("deviations", [])
         for deviation in deviations:
             lines.append(
                 f"- Deviation `{deviation.get('category', '-')}`: {deviation.get('paper_value', '-')} -> "
                 f"{deviation.get('resolved_value', '-')} ({deviation.get('severity', '-')})"
+            )
+        for replacement in factor.get("data_replacements", []):
+            lines.append(
+                f"- Data replacement `{replacement.get('paper_definition', '-')}` -> "
+                f"`{replacement.get('replacement_field') or '-'}`: {replacement.get('status', '-')} "
+                f"({replacement.get('relationship', '-')})"
             )
         lines.append("")
     lines.extend(["## Selected Evaluation Methods", ""])
@@ -323,6 +365,62 @@ def _collect_known_gaps(factors: list[dict[str, Any]], pipeline_payload: dict[st
     return gaps
 
 
+def _collect_data_assessments(
+    factor_evaluation_plan: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    requirements: list[dict[str, Any]] = []
+    replacements: list[dict[str, Any]] = []
+    seen_requirements: set[tuple[str, str, str]] = set()
+    seen_replacements: set[tuple[str, str, str, str]] = set()
+    cases = factor_evaluation_plan.get("assessed_evaluation_cases", []) or factor_evaluation_plan.get("selected_evaluation_cases", [])
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        truth_id = str(case.get("source_truth_id") or case.get("truth_id", ""))
+        assessment = case.get("support_assessment", {}) if isinstance(case.get("support_assessment", {}), dict) else {}
+        for item in assessment.get("requirement_results", []) or []:
+            if not isinstance(item, dict):
+                continue
+            payload = dict(item)
+            payload["truth_id"] = truth_id
+            key = (truth_id, str(payload.get("category", "")), str(payload.get("requirement", "")))
+            if key not in seen_requirements:
+                seen_requirements.add(key)
+                requirements.append(payload)
+        canonical_replacements = assessment.get("replacement_records", []) or case.get("replacement_records", []) or []
+        for item in canonical_replacements:
+            if not isinstance(item, dict):
+                continue
+            payload = dict(item)
+            payload["truth_id"] = truth_id
+            key = (
+                truth_id,
+                str(payload.get("required_semantic_role", "")),
+                str(payload.get("paper_definition", "")),
+                str(payload.get("replacement_field", "")),
+            )
+            if key not in seen_replacements:
+                seen_replacements.add(key)
+                replacements.append(payload)
+    return requirements, replacements
+
+
+def _data_requirement_counts(factors: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {
+        "exactly_available": 0,
+        "constructible": 0,
+        "available_with_missingness": 0,
+        "replacement_available": 0,
+        "missing": 0,
+        "not_assessed": 0,
+    }
+    for factor in factors:
+        for requirement in factor.get("data_requirement_assessments", []):
+            status = str(requirement.get("semantic_availability", "not_assessed"))
+            counts[status if status in counts else "not_assessed"] += 1
+    return counts
+
+
 def _truth_case_counts(factors: list[dict[str, Any]], truth_results: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
     selected = sum(len(factor.get("selected_evaluation_cases", [])) for factor in factors)
     assessed = sum(len(factor.get("assessed_evaluation_cases", [])) for factor in factors)
@@ -361,6 +459,14 @@ def _truth_match_pass_rate(counts: dict[str, int]) -> str:
     if not denominator:
         return ""
     return f"{counts.get('truth_cases_matched', 0)}/{denominator}"
+
+
+def _execution_lifecycle_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        lifecycle = str(record.get("lifecycle_state", "unknown") or "unknown")
+        counts[lifecycle] = counts.get(lifecycle, 0) + 1
+    return counts
 
 
 def _is_executed_selected_truth_result(result: dict[str, Any], selected_ids: set[str]) -> bool:

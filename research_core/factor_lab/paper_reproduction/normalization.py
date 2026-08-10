@@ -234,6 +234,11 @@ def _validation_targets_for_truth(truth_sources: Sequence[object]) -> list[Valid
 def _truth_source_payload(truth_source: object) -> dict[str, Any]:
     payload = asdict(truth_source)
     transform_spec = payload.get("transform_spec", {})
+    has_structured_neutralization = bool(payload.get("neutralization_spec"))
+    if has_structured_neutralization:
+        payload["transform_spec"] = dict(transform_spec) if isinstance(transform_spec, dict) else {}
+        payload["defaulted_transform_steps"] = []
+        return payload
     if isinstance(transform_spec, dict):
         payload["transform_spec"] = default_transform_spec(transform_spec)
         payload["defaulted_transform_steps"] = list(payload["transform_spec"].get("defaulted_transform_steps", []))

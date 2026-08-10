@@ -375,6 +375,77 @@ class PaperExtractionTest(unittest.TestCase):
         self.assertEqual(truth.transform_spec["steps"][1]["name"], "industry_market_cap_neutralization")
         self.assertEqual(truth.required_data["controls"], ["industry", "market_cap"])
 
+    def test_structured_neutralization_and_universe_protocol_validate_and_round_trip(self) -> None:
+        extraction = self._valid_extraction()
+        truth = extraction.target_factors[0].truth_sources[0]
+        truth.neutralization_spec = {
+            "method": "cross_sectional_regression_residual",
+            "source": "explicit",
+            "source_location": "Section 3.2",
+            "confidence": 1.0,
+            "dependent_variable": {
+                "field": "factor_value",
+                "source": "explicit",
+                "transforms": [{"method": "median_mad", "threshold": 5, "source": "explicit"}],
+            },
+            "controls": [
+                {
+                    "semantic_role": "size_control",
+                    "paper_field": "market_cap",
+                    "encoding": "continuous",
+                    "source": "explicit",
+                    "transforms": [
+                        {"method": "log", "source": "explicit"},
+                        {"method": "cross_section_zscore", "source": "explicit"},
+                    ],
+                }
+            ],
+            "output_transforms": [{"method": "cross_section_zscore", "source": "explicit"}],
+        }
+        truth.universe_protocol = {
+            "calculation_universe": {"description": "full valid history", "source": "defaulted"},
+            "evaluation_universe": {"description": "exclude ST/PT", "source": "explicit"},
+            "filters": [
+                {
+                    "filter_name": "exclude_st_pt",
+                    "paper_field": "st_or_pt_status",
+                    "application_stage": "factor_cross_section",
+                    "effective_date_rule": "signal_date_t",
+                    "operator": "falsy",
+                    "source": "explicit",
+                }
+            ],
+        }
+
+        validation = validate_paper_extraction(extraction)
+
+        self.assertTrue(validation.valid, validation.errors)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = FactorLabWorkspaceConfig(data_root=Path(tmp_dir) / "data", runtime_root=Path(tmp_dir) / "runtime")
+            loaded = load_paper_extraction(export_paper_extraction(extraction, config=workspace))
+        loaded_truth = loaded.target_factors[0].truth_sources[0]
+        self.assertEqual(loaded_truth.neutralization_spec["controls"][0]["transforms"][0]["method"], "log")
+        self.assertEqual(loaded_truth.universe_protocol["filters"][0]["application_stage"], "factor_cross_section")
+
+    def test_future_filter_before_calculation_requires_explicit_paper_support(self) -> None:
+        extraction = self._valid_extraction()
+        extraction.target_factors[0].truth_sources[0].universe_protocol = {
+            "filters": [
+                {
+                    "filter_name": "bad_future_filter",
+                    "paper_field": "next_day_suspension_status",
+                    "application_stage": "factor_time_series",
+                    "effective_date_rule": "t+1",
+                    "source": "defaulted",
+                }
+            ]
+        }
+
+        validation = validate_paper_extraction(extraction)
+
+        self.assertFalse(validation.valid)
+        self.assertTrue(any("future-state filter" in error for error in validation.errors))
+
 
 if __name__ == "__main__":
     unittest.main()

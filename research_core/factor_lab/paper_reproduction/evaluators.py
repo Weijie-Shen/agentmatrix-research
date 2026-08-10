@@ -5,6 +5,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from research_core.factor_lab.paper_reproduction.methodology import canonical_transform_method
+
 
 DEFAULT_DATE_COL = "date"
 DEFAULT_CODE_COL = "code"
@@ -26,10 +28,15 @@ GENERIC_EVALUATOR_CAPABILITIES: dict[str, dict[str, Any]] = {
             "standard_errors": ["classical"],
             "transform_steps": [
                 "median_mad",
+                "log",
                 "cross_sectional_regression_residual",
                 "cross_section_zscore",
                 "do_not_fill",
+                "none",
             ],
+            "neutralization_methods": ["cross_sectional_regression_residual", "none"],
+            "input_transform_methods": ["median_mad", "log", "cross_section_zscore", "do_not_fill", "none"],
+            "control_encodings": ["continuous", "categorical", "dummy"],
             "metrics": [
                 "rank_ic_mean",
                 "rank_ic_std",
@@ -80,28 +87,119 @@ def apply_transform_spec(
             raise ValueError("transform_spec steps must be dictionaries")
         name = str(step.get("name", "")).lower()
         method = str(step.get("method", "")).lower()
-        if name in {"winsorization", "winsorize"} and method == "median_mad":
-            threshold = float(step.get("threshold", 5.0))
-            result[output_col] = result.groupby(date_col, group_keys=False)[output_col].apply(
-                lambda series: _median_mad_winsorize(series, threshold=threshold)
-            )
-        elif name == "neutralization" and method == "cross_sectional_regression_residual":
+        if name == "neutralization" and method == "cross_sectional_regression_residual":
             controls = [str(control) for control in step.get("controls", [])]
             _require_columns(result, controls)
-            result[output_col] = result.groupby(date_col, group_keys=False).apply(
-                lambda group: _neutralize_group(group, value_col=output_col, controls=controls), include_groups=False
+            result[output_col] = _neutralize_by_date(
+                result,
+                date_col=date_col,
+                value_col=output_col,
+                controls=controls,
             )
-            if isinstance(result[output_col].index, pd.MultiIndex):
-                result[output_col] = result[output_col].reset_index(level=0, drop=True).sort_index()
-        elif name in {"standardization", "standardize"} and method in {"cross_section_zscore", "zscore"}:
-            result[output_col] = result.groupby(date_col, group_keys=False)[output_col].apply(_zscore)
-        elif name in {"missing_value_policy", "missing_values"} and method in {"do_not_fill", "none", ""}:
-            continue
         elif name == "neutralization" and method in {"none", ""}:
             continue
         else:
-            raise ValueError(f"Unsupported transform step: name={name!r}, method={method!r}")
+            result[output_col], _ = _apply_input_transforms(
+                result[output_col],
+                frame=result,
+                transforms=[step],
+                date_col=date_col,
+            )
     return result
+
+
+def apply_neutralization_spec(
+    frame: pd.DataFrame,
+    *,
+    value_col: str,
+    neutralization_spec: dict[str, Any] | None,
+    date_col: str = DEFAULT_DATE_COL,
+    output_col: str = PROCESSED_FACTOR_COL,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Execute ordered factor/control transforms and cross-sectional neutralization."""
+
+    _require_columns(frame, [date_col, value_col])
+    result = frame.copy()
+    result[output_col] = pd.to_numeric(result[value_col], errors="coerce")
+    spec = neutralization_spec or {}
+    diagnostics: dict[str, Any] = {
+        "method": str(spec.get("method", "") or "none"),
+        "dependent_transforms": [],
+        "control_transforms": [],
+        "output_transforms": [],
+        "used_controls": [],
+        "skipped_controls": [],
+    }
+    dependent = spec.get("dependent_variable", {}) or {}
+    dependent_transforms = dependent.get("transforms", []) if isinstance(dependent, dict) else []
+    result[output_col], applied = _apply_input_transforms(
+        result[output_col],
+        frame=result,
+        transforms=dependent_transforms or [],
+        date_col=date_col,
+    )
+    diagnostics["dependent_transforms"] = applied
+
+    working_controls: list[str] = []
+    for index, control in enumerate(spec.get("controls", []) or []):
+        if not isinstance(control, dict):
+            continue
+        paper_field = str(control.get("paper_field") or control.get("field") or f"control_{index}")
+        source_field = str(control.get("resolved_field") or control.get("field") or "")
+        if str(control.get("runtime_status", "")) == "unavailable" or not source_field or source_field not in result.columns:
+            diagnostics["skipped_controls"].append(
+                {"paper_field": paper_field, "field": source_field or None, "reason": "unavailable"}
+            )
+            continue
+        encoding = str(control.get("encoding", "continuous") or "continuous").lower()
+        internal_field = f"__neutralization_control_{index}"
+        if encoding in {"categorical", "dummy"} and not control.get("transforms"):
+            result[internal_field] = result[source_field].astype("string")
+            applied_transforms: list[str] = []
+        else:
+            base = pd.to_numeric(result[source_field], errors="coerce")
+            result[internal_field], applied_transforms = _apply_input_transforms(
+                base,
+                frame=result,
+                transforms=control.get("transforms", []) or [],
+                date_col=date_col,
+            )
+        working_controls.append(internal_field)
+        diagnostics["used_controls"].append(
+            {
+                "paper_field": paper_field,
+                "source_field": source_field,
+                "runtime_field": internal_field,
+                "encoding": encoding,
+            }
+        )
+        diagnostics["control_transforms"].append(
+            {"paper_field": paper_field, "source_field": source_field, "methods": applied_transforms}
+        )
+
+    method = str(spec.get("method", "") or "none").lower()
+    if method == "cross_sectional_regression_residual" and working_controls:
+        result[output_col] = _neutralize_by_date(
+            result,
+            date_col=date_col,
+            value_col=output_col,
+            controls=working_controls,
+        )
+    elif method in {"none", ""}:
+        pass
+    elif method == "cross_sectional_regression_residual":
+        diagnostics["neutralization_skipped_reason"] = "no_executable_controls"
+    else:
+        raise ValueError(f"Unsupported neutralization method: {method}")
+
+    result[output_col], output_applied = _apply_input_transforms(
+        result[output_col],
+        frame=result,
+        transforms=spec.get("output_transforms", []) or [],
+        date_col=date_col,
+    )
+    diagnostics["output_transforms"] = output_applied
+    return result, diagnostics
 
 
 def compute_ic_analysis(
@@ -207,7 +305,25 @@ def evaluate_paper_case(
         raise NotImplementedError(f"Generic evaluator not implemented for evaluation_family={family!r}")
     evaluator_descriptor = evaluator_capabilities_for_case(runtime_case) or get_generic_evaluator_capabilities()
     transform_spec = runtime_case.get("transform_spec") or {}
-    transformed = apply_transform_spec(frame, value_col=factor_col, transform_spec=transform_spec, date_col=date_col)
+    neutralization_spec = runtime_case.get("neutralization_spec") or {}
+    if neutralization_spec:
+        legacy_factor_spec = dict(transform_spec)
+        legacy_factor_spec["steps"] = [
+            step
+            for step in transform_spec.get("steps", []) or []
+            if not isinstance(step, dict) or str(step.get("name", "")).lower() != "neutralization"
+        ]
+        transformed = apply_transform_spec(frame, value_col=factor_col, transform_spec=legacy_factor_spec, date_col=date_col)
+        transformed, neutralization_diagnostics = apply_neutralization_spec(
+            transformed,
+            value_col=PROCESSED_FACTOR_COL,
+            neutralization_spec=neutralization_spec,
+            date_col=date_col,
+            output_col=PROCESSED_FACTOR_COL,
+        )
+    else:
+        transformed = apply_transform_spec(frame, value_col=factor_col, transform_spec=transform_spec, date_col=date_col)
+        neutralization_diagnostics = {}
     evaluation_spec = runtime_case.get("evaluation_spec") or {}
     required_data = runtime_case.get("required_data") or {}
     return_col = str(evaluation_spec.get("return_col") or _first_required(required_data, "evaluation") or "forward_return_1d")
@@ -229,6 +345,7 @@ def evaluate_paper_case(
     else:
         metrics = ic_metrics
     return {
+        "execution_mode": "low_level_noncanonical",
         "case_id": evaluation_case.get("case_id") or evaluation_case.get("truth_id", ""),
         "source_truth_id": evaluation_case.get("source_truth_id") or evaluation_case.get("truth_id", ""),
         "evaluator_id": evaluator_descriptor["evaluator_id"],
@@ -238,10 +355,12 @@ def evaluate_paper_case(
         "resolved_parameters": {
             "evaluation_spec": evaluation_spec,
             "required_data": required_data,
+            "neutralization_spec": neutralization_spec,
             "return_col": return_col,
             "date_col": date_col,
         },
-        "transform_applied": bool(transform_spec.get("steps")),
+        "transform_applied": bool(transform_spec.get("steps") or neutralization_spec),
+        "neutralization_diagnostics": neutralization_diagnostics,
         "factor_col": factor_col,
         "processed_factor_col": PROCESSED_FACTOR_COL,
         "return_col": return_col,
@@ -253,7 +372,15 @@ def _runtime_case(evaluation_case: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(resolved_protocol, dict) or not resolved_protocol:
         return evaluation_case
     runtime = dict(evaluation_case)
-    for key in ("evaluation_family", "evaluation_method", "evaluation_spec", "required_data", "transform_spec"):
+    for key in (
+        "evaluation_family",
+        "evaluation_method",
+        "evaluation_spec",
+        "required_data",
+        "transform_spec",
+        "neutralization_spec",
+        "universe_protocol",
+    ):
         if key in resolved_protocol:
             runtime[key] = resolved_protocol[key]
     return runtime
@@ -272,6 +399,37 @@ def _zscore(series: pd.Series) -> pd.Series:
     if pd.isna(std) or std == 0:
         return series * np.nan
     return (series - series.mean(skipna=True)) / std
+
+
+def _apply_input_transforms(
+    series: pd.Series,
+    *,
+    frame: pd.DataFrame,
+    transforms: list[Any],
+    date_col: str,
+) -> tuple[pd.Series, list[str]]:
+    result = series.copy()
+    applied: list[str] = []
+    for raw_transform in transforms:
+        if not isinstance(raw_transform, dict):
+            raise ValueError("input transform entries must be dictionaries")
+        method = canonical_transform_method(str(raw_transform.get("method") or raw_transform.get("name") or ""))
+        if method == "median_mad":
+            threshold = float(raw_transform.get("threshold", 5.0))
+            result = result.groupby(frame[date_col], group_keys=False).apply(
+                lambda values: _median_mad_winsorize(values, threshold=threshold)
+            )
+        elif method == "log":
+            numeric = pd.to_numeric(result, errors="coerce")
+            result = np.log(numeric.where(numeric > 0))
+        elif method == "cross_section_zscore":
+            result = result.groupby(frame[date_col], group_keys=False).apply(_zscore)
+        elif method in {"do_not_fill", "none", ""}:
+            pass
+        else:
+            raise ValueError(f"Unsupported input transform method: {method}")
+        applied.append(method)
+    return pd.Series(result, index=series.index), applied
 
 
 def _neutralize_group(group: pd.DataFrame, *, value_col: str, controls: list[str]) -> pd.Series:
@@ -294,6 +452,19 @@ def _neutralize_group(group: pd.DataFrame, *, value_col: str, controls: list[str
     except np.linalg.LinAlgError:
         return residuals
     residuals.loc[valid.index] = y - x @ beta
+    return residuals
+
+
+def _neutralize_by_date(
+    frame: pd.DataFrame,
+    *,
+    date_col: str,
+    value_col: str,
+    controls: list[str],
+) -> pd.Series:
+    residuals = pd.Series(np.nan, index=frame.index, dtype=float)
+    for _, group in frame.groupby(date_col, sort=False):
+        residuals.loc[group.index] = _neutralize_group(group, value_col=value_col, controls=controls)
     return residuals
 
 

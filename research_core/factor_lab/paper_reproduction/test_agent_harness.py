@@ -53,6 +53,12 @@ class PaperReproductionAgentHarnessTest(unittest.TestCase):
             self.assertIn("load_recommended_paper_panels(test_end_date=...)", prompt)
             self.assertIn("testing-end-anchored QFQ", prompt)
             self.assertIn("initial-baseline HFQ", prompt)
+            self.assertIn("Exact aliases, constructed equivalents, accepted proxies, and rejected substitutes", prompt)
+            self.assertIn("`FactorImplementationArtifact`", prompt)
+            self.assertIn("`execute_evaluation_plan(...)`", prompt)
+            self.assertIn("full calculation panel separate from possibly filtered evaluation inputs", prompt)
+            self.assertIn("structured neutralization specs", prompt)
+            self.assertIn("Apply ST/PT, suspension, and future-tradability masks only at their declared evaluation stage", prompt)
 
     def test_missing_skill_path_fails_before_writing_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

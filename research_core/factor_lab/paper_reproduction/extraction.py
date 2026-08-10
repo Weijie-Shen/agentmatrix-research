@@ -5,6 +5,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from research_core.factor_lab.paper_reproduction.methodology import (
+    validate_neutralization_spec,
+    validate_universe_protocol,
+)
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig
 
 TruthSourceType = Literal["evaluation_results"]
@@ -25,6 +29,8 @@ class ExtractedTruthSource:
     evaluation_family: str = ""
     evaluation_spec: dict[str, Any] = field(default_factory=dict)
     transform_spec: dict[str, Any] = field(default_factory=dict)
+    neutralization_spec: dict[str, Any] = field(default_factory=dict)
+    universe_protocol: dict[str, Any] = field(default_factory=dict)
     required_data: dict[str, list[str]] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
@@ -278,6 +284,18 @@ def _validate_truth_source(
         warnings.append(f"{prefix}.metrics has no recognized evaluation metric names")
     if not truth_source.evaluation_method.strip():
         errors.append(f"{prefix}.evaluation_method is required for evaluation_results truth")
+    neutralization_validation = validate_neutralization_spec(
+        truth_source.neutralization_spec,
+        prefix=f"{prefix}.neutralization_spec",
+    )
+    errors.extend(neutralization_validation.errors)
+    warnings.extend(neutralization_validation.warnings)
+    universe_validation = validate_universe_protocol(
+        truth_source.universe_protocol,
+        prefix=f"{prefix}.universe_protocol",
+    )
+    errors.extend(universe_validation.errors)
+    warnings.extend(universe_validation.warnings)
     return needs_human_review
 
 

@@ -367,7 +367,14 @@ def add_next_suspension_flag(status_frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_a_share_recommended_filters(panel: pd.DataFrame) -> pd.DataFrame:
-    """Apply the default all-A-share filters supported by recommended data status columns."""
+    """Build a physically filtered evaluation panel from recommended-data status columns.
+
+    This compatibility helper is for post-calculation evaluation/portfolio eligibility.
+    Do not pass its output into rolling factor calculation: deleting ST or suspended rows
+    can change historical windows, ranks, lags, and forward-return horizons. Canonical
+    paper runs should declare a universe protocol and let ``execute_evaluation_plan``
+    apply the filters after the artifact callable has used the full calculation panel.
+    """
 
     result = panel.copy()
     if "has_price_observation" in result.columns:

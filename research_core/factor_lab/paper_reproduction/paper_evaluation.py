@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -150,9 +151,12 @@ def _build_factor_evaluation_plan(
 def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]:
     raw_family = str(source.get("evaluation_family", "") or _infer_evaluation_family(source))
     family = _normalize_evaluation_family(raw_family)
+    truth_id = str(source.get("truth_id", ""))
+    universe_protocol = _universe_protocol_from_source(source)
     return {
-        "truth_id": str(source.get("truth_id", "")),
-        "source_truth_id": str(source.get("truth_id", "")),
+        "truth_case_id": truth_id,
+        "truth_id": truth_id,
+        "source_truth_id": truth_id,
         "evaluation_family": family,
         "raw_evaluation_family": raw_family,
         "evaluation_method": str(source.get("evaluation_method", "")),
@@ -161,6 +165,10 @@ def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]
         "frequency": str(source.get("frequency", "")),
         "evaluation_spec": dict(source.get("evaluation_spec", {}) if isinstance(source.get("evaluation_spec", {}), dict) else {}),
         "transform_spec": dict(source.get("transform_spec", {}) if isinstance(source.get("transform_spec", {}), dict) else {}),
+        "neutralization_spec": dict(
+            source.get("neutralization_spec", {}) if isinstance(source.get("neutralization_spec", {}), dict) else {}
+        ),
+        "universe_protocol": universe_protocol,
         "required_data": dict(source.get("required_data", {}) if isinstance(source.get("required_data", {}), dict) else {}),
         "metrics": dict(source.get("metrics", {}) if isinstance(source.get("metrics", {}), dict) else {}),
         "source_location": str(source.get("source_location", "")),
@@ -172,7 +180,67 @@ def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]
             "evaluation_spec": dict(source.get("evaluation_spec", {}) if isinstance(source.get("evaluation_spec", {}), dict) else {}),
             "required_data": dict(source.get("required_data", {}) if isinstance(source.get("required_data", {}), dict) else {}),
             "transform_spec": dict(source.get("transform_spec", {}) if isinstance(source.get("transform_spec", {}), dict) else {}),
+            "neutralization_spec": dict(
+                source.get("neutralization_spec", {}) if isinstance(source.get("neutralization_spec", {}), dict) else {}
+            ),
+            "universe_protocol": universe_protocol,
         },
+    }
+
+
+def _universe_protocol_from_source(source: dict[str, Any]) -> dict[str, Any]:
+    declared = source.get("universe_protocol", {})
+    if isinstance(declared, dict) and declared:
+        return copy.deepcopy(declared)
+    universe = str(source.get("universe", "") or "")
+    text = universe.lower()
+    exclusion_tokens = ("exclude", "exclusion", "remove", "剔除", "排除", "不含")
+    if not any(token in text for token in exclusion_tokens):
+        return {}
+    filters: list[dict[str, Any]] = []
+    if "st" in text or "pt" in text:
+        filters.append(
+            {
+                "filter_name": "exclude_st_pt",
+                "paper_field": "st_or_pt_status",
+                "application_stage": "factor_cross_section",
+                "effective_date_rule": "signal_date_t",
+                "operator": "falsy",
+                "missing_policy": "exclude",
+                "source": "inferred",
+                "confidence": 0.9,
+                "reason": "Universe text excludes ST/PT securities; apply only after factor time-series calculation.",
+            }
+        )
+    if any(token in text for token in ("suspend", "suspension", "停牌")):
+        next_day = any(token in text for token in ("next-day", "next day", "next trading day", "次日", "下一交易日"))
+        filters.append(
+            {
+                "filter_name": "exclude_next_day_suspension" if next_day else "exclude_suspension",
+                "paper_field": "next_day_suspension_status" if next_day else "suspension_status",
+                "application_stage": "factor_cross_section",
+                "effective_date_rule": "next_trading_day_t_plus_1" if next_day else "signal_date_t",
+                "operator": "falsy",
+                "missing_policy": "exclude",
+                "source": "inferred",
+                "confidence": 0.85,
+                "reason": "Universe text excludes suspended securities; apply only to evaluation eligibility.",
+            }
+        )
+    if not filters:
+        return {}
+    return {
+        "calculation_universe": {
+            "description": "retain complete valid security history for factor calculation",
+            "source": "defaulted",
+            "confidence": 1.0,
+        },
+        "evaluation_universe": {
+            "description": universe,
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+        "filters": filters,
     }
 
 
@@ -231,6 +299,8 @@ def _select_evaluation_cases_by_support(
         assessed_case["deviations"] = assessment["deviations"]
         assessed_case["truth_match_eligible_metrics"] = assessment["truth_match_eligible_metrics"]
         assessed_case["diagnostic_only_metrics"] = assessment["diagnostic_only_metrics"]
+        assessed_case["replacement_records"] = assessment.get("replacement_records", [])
+        assessed_case["case_executable"] = assessment.get("case_executable", True)
         assessed.append(assessed_case)
 
     ordered = sorted(assessed, key=_support_priority)
@@ -239,6 +309,18 @@ def _select_evaluation_cases_by_support(
     deferred: list[dict[str, Any]] = []
     targets: list[dict[str, Any]] = []
     for case in ordered:
+        if not case.get("case_executable", True):
+            capability_missing = any(
+                result.get("category") == "evaluator_capability" and not result.get("execution_ready", True)
+                for result in (case.get("support_assessment", {}).get("requirement_results", []) or [])
+                if isinstance(result, dict)
+            )
+            lifecycle = "unsupported_evaluator" if capability_missing else "insufficient_data"
+            unsupported_case = _case_with_lifecycle(case, lifecycle)
+            unsupported.append(unsupported_case)
+            if lifecycle == "unsupported_evaluator" and case.get("evaluation_family") not in GENERIC_EVALUATION_FAMILIES:
+                targets.append(_implementation_target_from_case(case))
+            continue
         if case.get("comparability") == "not_comparable":
             unsupported_case = _case_with_lifecycle(case, "unsupported_evaluator")
             unsupported.append(unsupported_case)
@@ -269,6 +351,8 @@ def _resolved_case(case: dict[str, Any], *, selection_reason: str) -> dict[str, 
     resolved_evaluation_spec = dict(payload.get("evaluation_spec", {}) or {})
     resolved_required_data = _resolved_required_data(payload)
     resolved_transform_spec = _resolved_transform_spec(payload)
+    resolved_neutralization_spec = _resolved_neutralization_spec(payload)
+    resolved_universe_protocol = _resolved_universe_protocol(payload)
     deviations = list(payload.get("deviations", []) or [])
     diagnostic_only_metrics = list(payload.get("diagnostic_only_metrics", []) or [])
     eligible_metrics = list(payload.get("truth_match_eligible_metrics", list((payload.get("metrics", {}) or {}).keys())) or [])
@@ -327,6 +411,8 @@ def _resolved_case(case: dict[str, Any], *, selection_reason: str) -> dict[str, 
         "evaluation_spec": resolved_evaluation_spec,
         "required_data": resolved_required_data,
         "transform_spec": resolved_transform_spec,
+        "neutralization_spec": resolved_neutralization_spec,
+        "universe_protocol": resolved_universe_protocol,
         "timing": {
             "signal_date": "t",
             "history_cutoff": "t",
@@ -458,6 +544,62 @@ def _resolved_transform_spec(case: dict[str, Any]) -> dict[str, Any]:
     return transform_spec
 
 
+def _resolved_neutralization_spec(case: dict[str, Any]) -> dict[str, Any]:
+    spec = copy.deepcopy(case.get("neutralization_spec", {}) or {})
+    if not isinstance(spec, dict) or not spec:
+        return {}
+    results = _support_requirement_results(case)
+    controls: list[dict[str, Any]] = []
+    executable_count = 0
+    for raw_control in spec.get("controls", []) or []:
+        if not isinstance(raw_control, dict):
+            continue
+        control = dict(raw_control)
+        paper_field = str(control.get("paper_field") or control.get("field") or "")
+        replacement = _available_value_for_requirement(results, paper_field)
+        if replacement:
+            control["resolved_field"] = replacement
+            control["runtime_status"] = "executable"
+            executable_count += 1
+        elif paper_field and not _requirement_missing(results, paper_field):
+            control["resolved_field"] = str(control.get("field") or paper_field)
+            control["runtime_status"] = "executable"
+            executable_count += 1
+        else:
+            control["resolved_field"] = None
+            control["runtime_status"] = "unavailable"
+        controls.append(control)
+    spec["controls"] = controls
+    spec["runtime_status"] = "executable" if executable_count else "no_executable_controls"
+    return spec
+
+
+def _resolved_universe_protocol(case: dict[str, Any]) -> dict[str, Any]:
+    protocol = copy.deepcopy(case.get("universe_protocol", {}) or {})
+    if not isinstance(protocol, dict) or not protocol:
+        return {}
+    results = _support_requirement_results(case)
+    filters: list[dict[str, Any]] = []
+    for raw_filter in protocol.get("filters", []) or []:
+        if not isinstance(raw_filter, dict):
+            continue
+        item = dict(raw_filter)
+        paper_field = str(item.get("paper_field") or item.get("field") or "")
+        replacement = _available_value_for_requirement(results, paper_field)
+        if replacement:
+            item["resolved_field"] = replacement
+            item["runtime_status"] = "executable"
+        elif paper_field and not _requirement_missing(results, paper_field):
+            item["resolved_field"] = str(item.get("field") or paper_field)
+            item["runtime_status"] = "executable"
+        else:
+            item["resolved_field"] = None
+            item["runtime_status"] = "unavailable"
+        filters.append(item)
+    protocol["filters"] = filters
+    return protocol
+
+
 def _resolved_controls(case: dict[str, Any]) -> list[str]:
     results = _support_requirement_results(case)
     controls: list[str] = []
@@ -483,20 +625,39 @@ def _resolved_sample_period(case: dict[str, Any]) -> str:
 
 def _available_requirement_value(case: dict[str, Any], category: str) -> str:
     for result in _support_requirement_results(case):
-        if result.get("category") == category and result.get("available_value"):
+        if (
+            result.get("category") == category
+            and result.get("available_value")
+            and _requirement_execution_ready(result)
+        ):
             return str(result["available_value"])
     return ""
 
 
 def _available_value_for_requirement(results: list[dict[str, Any]], requirement: str) -> str:
     for result in results:
-        if result.get("requirement") == requirement and result.get("availability") != "missing":
+        if (
+            result.get("requirement") == requirement
+            and result.get("availability") != "missing"
+            and result.get("available_value")
+            and _requirement_execution_ready(result)
+        ):
             return str(result.get("available_value") or requirement)
     return ""
 
 
 def _requirement_missing(results: list[dict[str, Any]], requirement: str) -> bool:
-    return any(result.get("requirement") == requirement and result.get("availability") == "missing" for result in results)
+    return any(
+        result.get("requirement") == requirement
+        and (result.get("availability") == "missing" or not _requirement_execution_ready(result))
+        for result in results
+    )
+
+
+def _requirement_execution_ready(result: dict[str, Any]) -> bool:
+    if "execution_ready" in result:
+        return bool(result.get("execution_ready"))
+    return result.get("availability") != "missing" and bool(result.get("available_value"))
 
 
 def _support_requirement_results(case: dict[str, Any]) -> list[dict[str, Any]]:

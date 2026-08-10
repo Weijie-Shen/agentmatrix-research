@@ -190,6 +190,11 @@ Paper ID:
 - Always use `load_recommended_paper_panels(test_end_date=...)` with `/Users/mac/recommended_data_v2` before Quant API v2 or declaring `blocked_by_data`; run both the testing-end-anchored QFQ view and the initial-baseline HFQ view, and do not hand-pick physical files.
 - Use Quant API v2 only when the recommended local data folder cannot satisfy the paper's required fields/date window.
 - Preserve all extracted truth sources, profile available data, select the best-supported paper truth before computing metrics, and execute only selected resolved cases.
+- Resolve semantic data fields through declared relationships. Exact aliases, constructed equivalents, accepted proxies, and rejected substitutes must remain distinct; proxies downgrade comparability and stay report-visible, while unmaterialized derivations and unsupported substitutes must not become runtime fields.
+- Certify the final factor module and callable as a `FactorImplementationArtifact` on a probe panel; an inline factor column or unimplemented scaffold is not implementation completion.
+- Run selected cases through `execute_evaluation_plan(...)`. Keep the full calculation panel separate from possibly filtered evaluation inputs, and align artifact factor output only by unique date/security keys.
+- Extract factor, control, weight, and output transformations in their stated order. Use structured neutralization specs so control transforms such as log, winsorization, and cross-sectional standardization are capability-checked and executed rather than flattened into raw column names.
+- Represent calculation and evaluation universes separately. Apply ST/PT, suspension, and future-tradability masks only at their declared evaluation stage unless the paper explicitly requires them during factor calculation.
 - Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue through documented degradation and report deviations.
 - Export extraction/spec/pipeline/report artifacts under the repo's Factor Lab runtime paths.
 

@@ -95,6 +95,7 @@ class PaperEvaluationPlanningTest(unittest.TestCase):
         plan = build_paper_evaluation_plan([spec])
 
         self.assertEqual(plan.factor_plans[0].evaluation_cases[0]["truth_id"], "table_52_ic")
+        self.assertEqual(plan.factor_plans[0].evaluation_cases[0]["truth_case_id"], "table_52_ic")
         self.assertEqual(plan.factor_plans[0].evaluation_cases[0]["evaluation_family"], "ic_regression")
         self.assertEqual(plan.factor_plans[0].evaluation_cases[0]["evaluation_spec"]["return_horizon"], 20)
         self.assertEqual(
@@ -238,6 +239,123 @@ class PaperEvaluationPlanningTest(unittest.TestCase):
         self.assertEqual(selected["resolved_protocol"]["evaluation_spec"]["regression_controls"], ["log_market_cap"])
         self.assertIn("t_abs_mean", selected["diagnostic_only_metrics"])
         self.assertIn("rank_ic_mean", selected["truth_match_eligible_metrics"])
+
+    def test_resolved_case_uses_existing_proxy_weight_with_explicit_provenance(self) -> None:
+        wls = self._case("proxy_wls", "ic_regression", {"rank_ic_mean": 0.04, "t_abs_mean": 2.0})
+        wls["evaluation_spec"] = {
+            "return_col": "forward_return_1d",
+            "regression_type": "wls",
+            "weight_col": "free_float_market_cap",
+        }
+        wls["required_data"] = {
+            "evaluation": ["forward_return_1d"],
+            "regression_weight": ["free_float_market_cap"],
+        }
+        profile = {
+            "columns": ["date", "code", "forward_return_1d", "market_cap"],
+            "missingness": {"forward_return_1d": 0.0, "market_cap": 0.0},
+        }
+
+        plan = build_paper_evaluation_plan(
+            [self._spec_with_cases([wls])],
+            data_profiles={"alpha_from_paper": profile},
+        )
+
+        selected = plan.factor_plans[0].selected_evaluation_cases[0]
+        self.assertEqual(selected["comparability"], "proxy")
+        self.assertEqual(selected["resolved_protocol"]["evaluation_spec"]["regression_type"], "wls")
+        self.assertEqual(selected["resolved_protocol"]["evaluation_spec"]["weight_col"], "market_cap")
+        self.assertEqual(selected["replacement_records"][0]["status"], "accepted_proxy")
+        self.assertIn("t_abs_mean", selected["diagnostic_only_metrics"])
+        self.assertIn("rank_ic_mean", selected["truth_match_eligible_metrics"])
+
+    def test_resolved_case_preserves_control_transform_order_and_resolves_physical_field(self) -> None:
+        case = self._case("neutralized_ic", "ic_analysis", {"rank_ic_mean": 0.04})
+        case["evaluation_spec"] = {"return_col": "forward_return_1d"}
+        case["required_data"] = {"evaluation": ["forward_return_1d"]}
+        case["neutralization_spec"] = {
+            "method": "cross_sectional_regression_residual",
+            "controls": [
+                {
+                    "semantic_role": "size_control",
+                    "paper_field": "market_cap",
+                    "encoding": "continuous",
+                    "transforms": [
+                        {"method": "log"},
+                        {"method": "median_mad", "threshold": 5},
+                        {"method": "cross_section_zscore"},
+                    ],
+                }
+            ],
+        }
+        profile = {
+            "columns": ["date", "code", "forward_return_1d", "market_cap"],
+            "missingness": {"forward_return_1d": 0.0, "market_cap": 0.0},
+        }
+
+        plan = build_paper_evaluation_plan(
+            [self._spec_with_cases([case])],
+            data_profiles={"alpha_from_paper": profile},
+        )
+
+        selected = plan.factor_plans[0].selected_evaluation_cases[0]
+        resolved_control = selected["resolved_protocol"]["neutralization_spec"]["controls"][0]
+        self.assertEqual(resolved_control["resolved_field"], "market_cap")
+        self.assertEqual(
+            [step["method"] for step in resolved_control["transforms"]],
+            ["log", "median_mad", "cross_section_zscore"],
+        )
+
+    def test_a_share_exclusion_text_infers_evaluation_stage_filters_not_calculation_filters(self) -> None:
+        case = self._case("a_share_filters", "ic_analysis", {"rank_ic_mean": 0.04})
+        case["universe"] = "All A-shares; exclude ST/PT and stocks suspended on the next trading day"
+        case["evaluation_spec"] = {"return_col": "forward_return_1d"}
+        case["required_data"] = {"evaluation": ["forward_return_1d"]}
+        profile = {
+            "columns": ["date", "code", "forward_return_1d", "is_st", "next_is_suspended"],
+            "missingness": {"forward_return_1d": 0.0, "is_st": 0.0, "next_is_suspended": 0.0},
+        }
+
+        plan = build_paper_evaluation_plan(
+            [self._spec_with_cases([case])],
+            data_profiles={"alpha_from_paper": profile},
+        )
+
+        selected = plan.factor_plans[0].selected_evaluation_cases[0]
+        protocol = selected["resolved_protocol"]["universe_protocol"]
+        self.assertEqual(
+            [item["application_stage"] for item in protocol["filters"]],
+            ["factor_cross_section", "factor_cross_section"],
+        )
+        self.assertEqual(
+            [item["resolved_field"] for item in protocol["filters"]],
+            ["is_st", "next_is_suspended"],
+        )
+        self.assertEqual(protocol["calculation_universe"]["description"], "retain complete valid security history for factor calculation")
+
+    def test_unsupported_substitute_is_not_selected_or_written_into_runtime_protocol(self) -> None:
+        case = self._case("bad_timing_alias", "ic_analysis", {"rank_ic_mean": 0.04})
+        case["required_data"] = {
+            "evaluation": ["forward_return_1d"],
+            "filters": ["next_day_suspension_status"],
+        }
+        profile = {
+            "columns": ["date", "code", "forward_return_1d", "is_suspended"],
+            "missingness": {"forward_return_1d": 0.0, "is_suspended": 0.0},
+        }
+
+        plan = build_paper_evaluation_plan(
+            [self._spec_with_cases([case])],
+            data_profiles={"alpha_from_paper": profile},
+        )
+
+        factor_plan = plan.factor_plans[0]
+        self.assertEqual(factor_plan.selected_evaluation_cases, [])
+        self.assertEqual(factor_plan.unsupported_evaluation_cases[0]["lifecycle_state"], "insufficient_data")
+        assessment = factor_plan.unsupported_evaluation_cases[0]["support_assessment"]
+        status = next(item for item in assessment["requirement_results"] if item["requirement"] == "next_day_suspension_status")
+        self.assertFalse(status["execution_ready"])
+        self.assertIsNone(status["available_value"])
 
     def _spec_with_cases(self, cases: list[dict[str, object]]) -> FactorResearchSpec:
         return FactorResearchSpec(

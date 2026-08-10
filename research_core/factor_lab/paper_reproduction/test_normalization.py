@@ -174,6 +174,34 @@ class PaperNormalizationTest(unittest.TestCase):
         self.assertIn("processed_factor", transformed.columns)
         self.assertEqual(len(transformed), len(frame))
 
+    def test_structured_neutralization_does_not_receive_duplicate_global_transform_defaults(self) -> None:
+        extraction = self._extraction()
+        truth = extraction.target_factors[0].truth_sources[0]
+        truth.transform_spec = {}
+        truth.neutralization_spec = {
+            "method": "cross_sectional_regression_residual",
+            "source": "explicit",
+            "dependent_variable": {
+                "field": "factor_value",
+                "source": "explicit",
+                "transforms": [{"method": "median_mad", "source": "explicit"}],
+            },
+            "controls": [
+                {
+                    "paper_field": "market_cap",
+                    "source": "explicit",
+                    "transforms": [{"method": "log", "source": "explicit"}],
+                }
+            ],
+            "output_transforms": [{"method": "cross_section_zscore", "source": "explicit"}],
+        }
+
+        case = normalize_extraction_to_specs(extraction)[0].metadata["evaluation_cases"][0]
+
+        self.assertEqual(case["transform_spec"], {})
+        self.assertEqual(case["defaulted_transform_steps"], [])
+        self.assertEqual(case["neutralization_spec"]["controls"][0]["transforms"][0]["method"], "log")
+
     def test_normalization_preserves_human_review_status_and_factor_ambiguities(self) -> None:
         extraction = self._extraction()
         extraction.target_factors[0].ambiguous_or_missing_information = [

@@ -6,6 +6,7 @@ import unittest
 import pandas as pd
 
 from research_core.factor_lab.paper_reproduction.evaluators import (
+    apply_neutralization_spec,
     apply_transform_spec,
     compute_cross_sectional_regression,
     compute_ic_analysis,
@@ -44,6 +45,23 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
         self.assertAlmostEqual(float(first_date.std(ddof=0)), 1.0, places=12)
         self.assertLess(float(first_date.max()), 2.0)
 
+    def test_factor_and_control_pipelines_share_log_and_standardization_methods(self) -> None:
+        frame = self._base_frame()
+        transformed = apply_transform_spec(
+            frame,
+            value_col="market_cap",
+            transform_spec={
+                "steps": [
+                    {"name": "log", "method": "log"},
+                    {"name": "standardization", "method": "cross_section_zscore"},
+                ]
+            },
+        )
+
+        for _, group in transformed.groupby("date"):
+            self.assertAlmostEqual(float(group["processed_factor"].mean()), 0.0, places=12)
+            self.assertAlmostEqual(float(group["processed_factor"].std(ddof=0)), 1.0, places=12)
+
     def test_apply_transform_spec_neutralizes_market_cap_by_date(self) -> None:
         frame = self._base_frame()
         transformed = apply_transform_spec(
@@ -63,6 +81,98 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
         for _, group in transformed.groupby("date"):
             corr = group["processed_factor"].corr(group["market_cap"])
             self.assertTrue(pd.isna(corr) or abs(float(corr)) < 1e-10)
+
+    def test_structured_neutralization_transforms_factor_and_market_cap_in_declared_order(self) -> None:
+        import numpy as np
+
+        log_cap = np.arange(1.0, 7.0)
+        frame = pd.DataFrame(
+            {
+                "date": ["2020-01-01"] * 6,
+                "code": list("ABCDEF"),
+                "factor": 2.0 * log_cap + np.array([-1.0, 1.0, -1.0, 1.0, -1.0, 1.0]),
+                "market_cap": np.exp(log_cap),
+            }
+        )
+        spec = {
+            "method": "cross_sectional_regression_residual",
+            "dependent_variable": {"transforms": [{"method": "median_mad", "threshold": 5}]},
+            "controls": [
+                {
+                    "paper_field": "market_cap",
+                    "resolved_field": "market_cap",
+                    "encoding": "continuous",
+                    "transforms": [{"method": "log"}, {"method": "cross_section_zscore"}],
+                }
+            ],
+            "output_transforms": [{"method": "cross_section_zscore"}],
+        }
+
+        transformed, diagnostics = apply_neutralization_spec(
+            frame,
+            value_col="factor",
+            neutralization_spec=spec,
+        )
+
+        runtime_control = diagnostics["used_controls"][0]["runtime_field"]
+        self.assertLess(abs(float(transformed["processed_factor"].corr(transformed[runtime_control]))), 1e-10)
+        self.assertAlmostEqual(float(transformed["processed_factor"].mean()), 0.0, places=12)
+        self.assertAlmostEqual(float(transformed["processed_factor"].std(ddof=0)), 1.0, places=12)
+        self.assertEqual(diagnostics["control_transforms"][0]["methods"], ["log", "cross_section_zscore"])
+
+    def test_evaluate_case_reports_structured_neutralization_execution(self) -> None:
+        frame = self._base_frame()
+        case = {
+            "case_id": "structured_neutralization",
+            "evaluation_family": "ic_analysis",
+            "evaluation_spec": {"return_col": "forward_return_1d"},
+            "required_data": {"evaluation": ["forward_return_1d"]},
+            "neutralization_spec": {
+                "method": "cross_sectional_regression_residual",
+                "controls": [
+                    {
+                        "paper_field": "market_cap",
+                        "resolved_field": "market_cap",
+                        "encoding": "continuous",
+                        "transforms": [{"method": "log"}],
+                    }
+                ],
+            },
+        }
+
+        result = evaluate_paper_case(case, frame, factor_col="factor")
+
+        self.assertTrue(result["transform_applied"])
+        self.assertEqual(result["neutralization_diagnostics"]["control_transforms"][0]["methods"], ["log"])
+
+    def test_numeric_categorical_control_is_dummy_encoded(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "date": ["2020-01-01"] * 4,
+                "code": list("ABCD"),
+                "factor": [1.0, 3.0, 10.0, 14.0],
+                "industry_code": [1, 1, 2, 2],
+            }
+        )
+        transformed, diagnostics = apply_neutralization_spec(
+            frame,
+            value_col="factor",
+            neutralization_spec={
+                "method": "cross_sectional_regression_residual",
+                "controls": [
+                    {
+                        "paper_field": "industry_classification",
+                        "resolved_field": "industry_code",
+                        "encoding": "dummy",
+                        "transforms": [],
+                    }
+                ],
+            },
+        )
+
+        means = transformed.groupby("industry_code")["processed_factor"].mean()
+        self.assertTrue(all(abs(float(value)) < 1e-10 for value in means))
+        self.assertEqual(diagnostics["used_controls"][0]["encoding"], "dummy")
 
     def test_compute_ic_analysis_reports_rank_ic_metrics(self) -> None:
         frame = self._base_frame()
@@ -91,6 +201,7 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
         result = evaluate_paper_case(case, frame, factor_col="factor")
 
         self.assertEqual(result["case_id"], "demo_ic")
+        self.assertEqual(result["execution_mode"], "low_level_noncanonical")
         self.assertEqual(result["evaluation_family"], "ic_analysis")
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["metrics"]["cross_section_count"], 2)

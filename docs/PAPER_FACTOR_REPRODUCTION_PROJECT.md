@@ -22,8 +22,8 @@ research_core/factor_lab/paper_reproduction/
 Current test status:
 
 ```text
-python -m unittest discover research_core/factor_lab/paper_reproduction
-76 passed
+python -m pytest research_core/factor_lab/paper_reproduction -q
+See the latest validation run; do not copy a stale fixed count into workflow decisions.
 ```
 
 Implemented capabilities:
@@ -35,10 +35,15 @@ Implemented capabilities:
 - specs/catalog export through existing Factor Lab registry
 - input dataframe validation
 - reusable data profiling and evaluation-case support assessment
+- typed semantic field relationships and reportable replacement-data provenance
 - implementation readiness manifests
 - safe unimplemented factor-family scaffolds
+- probe-validated canonical `FactorImplementationArtifact` records with source/spec hashes
+- keyed `FactorFrame` validation and one-to-one alignment diagnostics
 - support-scored paper evaluation planning with selected/resolved runtime cases
-- generic evaluator support for transform specs, IC analysis, and IC regression
+- canonical selected-case execution with separate calculation and evaluation panels
+- generic evaluator support for ordered factor/control transforms, neutralization, IC analysis, and IC regression
+- stage-aware calculation/evaluation universe protocols and post-calculation filters
 - protocol-aware paper-reported evaluation metric matching
 - final paper reproduction report generation
 - persistent pipeline-stage state tracking with separate execution and truth-validation statuses
@@ -140,7 +145,7 @@ Use `blocked_by_data` when formula-required data is unavailable after checking t
 
 Evaluation-data limitations should normally produce a resolved case with deviations, a proxy/reduced-period evaluation, a deferred unsupported case, or `not_evaluated` truth status. They should not block factor implementation.
 
-### 5. Stage 4 Starts With Readiness, Not Code
+### 5. Stage 4 Starts With Readiness and Ends With a Canonical Artifact
 
 For arbitrary papers, do not jump straight to factor implementation.
 
@@ -154,7 +159,7 @@ Stage 4A produces an implementation manifest and safe scaffold:
 - required implementation tests
 - importable factor-family scaffold that raises `NotImplementedError`
 
-Stage 4B may implement paper-specific factor logic only after extraction, normalization, and data-validation gates are clear.
+Stage 4B may implement paper-specific factor logic only after extraction, normalization, and data-validation gates are clear. Implementation is complete only when the final module/callable is probe-validated and recorded as a `FactorImplementationArtifact`; an importable scaffold or an inline factor column is not the deliverable.
 
 ### 6. Generic Evaluators Stay Limited
 
@@ -302,6 +307,14 @@ Formula-stage validation checks:
 
 Keep formula-required fields separate from evaluation-required fields.
 
+Evaluation-data resolution must distinguish `exact_alias`, `derived_equivalent`,
+`proxy_substitute`, and `unsupported_substitute`. A proxy may keep an evaluation
+case executable, but it must downgrade comparability and create a metric-scoped
+deviation/replacement record. A declared derivation is only executable after its
+output column is materialized. Unsupported substitutes are reported and never
+written into the resolved runtime protocol. These evaluation limitations do not
+block factor implementation or unrelated truth cases.
+
 Example: for Huatai Alpha3/13/15, VWAP is not a formula field. It is an evaluation/backtest execution requirement.
 
 ### Stage 4A: Implementation Readiness Manifest and Scaffold
@@ -360,6 +373,12 @@ Implementation rules:
 - keep paper-specific helpers local until reused across papers
 - add tests before marking a factor usable
 
+After the paper-family implementation passes its direct tests, create and validate
+a canonical `FactorImplementationArtifact`. It records the module/callable,
+implemented factor IDs, declared inputs/outputs, source hash, implementation-relevant
+spec hash, and probe evidence. Downstream canonical evaluation must call this
+artifact; it must not substitute an unrelated prepared factor column.
+
 For WorldQuant/Huatai-style formulas that mix cross-sectional rank and rolling operations, wide-format implementation may be appropriate:
 
 ```text
@@ -411,10 +430,15 @@ Main APIs:
 ```python
 build_paper_evaluation_plan(specs, data_profiles={...})
 apply_transform_spec(...)
+apply_neutralization_spec(...)
 compute_ic_analysis(...)
 compute_cross_sectional_regression(...)
-evaluate_paper_case(...)
+execute_evaluation_plan(plan, implementation_artifact, data_context)
 ```
+
+`evaluate_paper_case(...)` remains a backward-compatible low-level evaluator. It
+does not establish implementation identity and must not be used as canonical
+reproduction evidence by itself.
 
 Before selecting truth, profile the available data and assess every candidate evaluation case. The extracted truth source represents what the paper did and must not be mutated during execution. The planner creates a separate resolved runtime case containing:
 
@@ -428,9 +452,28 @@ Before selecting truth, profile the available data and assess every candidate ev
 - `diagnostic_only_metrics`
 - `lifecycle_state`
 
+Every semantic requirement also carries legacy availability plus canonical
+availability (`exactly_available`, `constructible`,
+`available_with_missingness`, `replacement_available`, `missing`, or
+`not_assessed`), coverage, relationship type, execution readiness, and
+pipeline-blocking scope. Repeated declarations of the same semantic requirement
+are reconciled before support scoring so schema repetition cannot inflate or
+penalize a case.
+
 Evaluation execution must consume `selected_evaluation_cases`, not loop over every extracted truth source. Unsupported, budget-deferred, or insufficient-data cases remain visible in reports but do not enter metric truth matching.
 
-Evaluation must follow the selected resolved case. Before computing metrics, apply the evaluation-case `transform_spec` in order.
+Evaluation must follow the selected resolved case. Before computing metrics, apply
+the evaluation-case factor transforms and structured neutralization in order,
+including declared transformations of continuous/categorical controls. Capability
+checks and replacement provenance decide whether each transform/control is
+executable; skipped controls remain non-blocking limitations and must be reported.
+
+Canonical execution computes factors from the complete `calculation_panel`, aligns
+the artifact output to `evaluation_inputs` by unique date/security keys, and only
+then applies the declared evaluation-universe filters. ST/PT, suspension, and future
+tradability filters therefore do not delete rolling history unless the paper
+explicitly assigns them to a calculation stage. Duplicate/ambiguous keys block the
+affected execution; ordinary unmatched keys are reported limitations.
 
 Do not assume:
 
@@ -742,10 +785,7 @@ industry_map.parquet       current industry mapping snapshot
 Daily panel helper:
 
 ```python
-from research_core.factor_lab.paper_reproduction.recommended_data import (
-    apply_a_share_recommended_filters,
-    load_recommended_paper_panels,
-)
+from research_core.factor_lab.paper_reproduction.recommended_data import load_recommended_paper_panels
 
 panels = load_recommended_paper_panels(
     test_end_date=paper_test_end,
@@ -755,9 +795,16 @@ panels = load_recommended_paper_panels(
     include_market_cap=True,
     include_industry=True,
 )
-qfq_panel = apply_a_share_recommended_filters(panels["qfq"])
-hfq_panel = apply_a_share_recommended_filters(panels["hfq"])
+qfq_calculation_panel = panels["qfq"]
+hfq_calculation_panel = panels["hfq"]
 ```
+
+Keep these calculation panels intact. Supply status/return/control columns through
+`EvaluationDataContext.evaluation_inputs` and let the resolved
+`universe_protocol` apply eligibility filters after factor calculation.
+`apply_a_share_recommended_filters(...)` is retained only as a compatibility helper
+for building a post-calculation evaluation panel; never feed its output into a
+rolling factor callable.
 
 Coverage notes:
 
@@ -767,7 +814,7 @@ Coverage notes:
 - Apply the same view multiplier to OHLC and `amount / volume` VWAP; leave volume and amount unchanged. Never mix QFQ and HFQ fields in one run.
 - `market_cap.parquet` is the canonical market-cap series and covers 2010-01-04 to 2026-07-22.
 - Use `load_recommended_paper_panels(test_end_date=...)` rather than reading or joining physical source files directly. `resolve_recommended_data_sources()` is diagnostic only.
-- Require `has_price_observation=true` for price calculations. The standard A-share filter additionally removes zero-volume provider rows, current ST rows, and next-panel-date suspensions.
+- Require `has_price_observation=true` when a factor needs an actual price observation. Treat zero-volume/tradability, ST/PT, and suspension masks as staged universe decisions; the typical all-A-share protocol applies them to evaluation eligibility after factor calculation.
 - `income_statement.parquet`, `balance_sheet.parquet`, and `dividend_yield.parquet` include data back to 2010.
 
 ## Quant API v2 Data Notes
@@ -832,14 +879,13 @@ Evaluation gaps:
 - generic `layered_portfolio_backtest`
 - generic `ic_decay`
 - exact paper-specific portfolio execution support
-- neutralization details requiring industry and market-cap data
+- paper methods whose ordered transforms exceed the declared generic evaluator capabilities
 
 Data gaps:
 
 - point-in-time industry classification aligned to each paper's taxonomy
 - complete historical free-float market capitalization/weights for paper-specific WLS protocols
 - provider anomalies in a small minority of raw VWAP and zero-volume source rows
-- ST/PT and suspension filters
 - benchmark return series for paper portfolio metrics
 
 Implementation gaps:
@@ -849,7 +895,8 @@ Implementation gaps:
 
 ## Near-Term Direction
 
-The next project step should be testing and hardening the fresh-agent loop:
+Continue testing and hardening the fresh-agent loop, while adding the remaining
+integrity contracts incrementally:
 
 1. Generate a harness packet with the bundled skill.
 2. Run a fresh AI agent in an isolated worktree.
@@ -859,5 +906,12 @@ The next project step should be testing and hardening the fresh-agent loop:
 6. Update the general workflow, not paper-specific hacks.
 7. Retest the same paper.
 8. Test a different paper to reduce overfitting.
+
+The main deferred architecture work is typed evidence-derived stage completion,
+calendar-based return labels, canonical metric lifecycle/reconciliation, and
+immutable finalization snapshots. Industry-history and free-float-market-cap
+semantics remain deferred until suitable data exists. These gaps must stay visible
+but do not invalidate the canonical artifact, alignment, neutralization, or staged
+universe capabilities already implemented.
 
 The most important missing tool is an automated or semi-automated golden comparator. It should report strict mismatches for formulas, fields, metrics, and source locations, and semantic review items for universe, sample period, transform specs, evaluation specs, and known limitations.
