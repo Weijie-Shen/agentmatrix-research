@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,7 @@ from research_core.factor_lab.paper_reproduction.data_validation import build_da
 from research_core.factor_lab.paper_reproduction.recommended_data import (
     IndustryClassificationSelection,
     RecommendedDataConfig,
+    RecommendedDataPredicatePushdownError,
     apply_a_share_recommended_filters,
     build_recommended_price_view,
     load_recommended_data_manifest,
@@ -23,10 +25,50 @@ from research_core.factor_lab.paper_reproduction.recommended_data import (
     recommended_data_available,
     resolve_recommended_industry_membership,
     resolve_recommended_data_sources,
+    _read_recommended_industry_history,
+    _read_parquet_with_filters,
 )
 
 
 class RecommendedDataHelperTest(unittest.TestCase):
+    def test_bounded_parquet_read_fails_closed_when_predicates_cannot_push_down(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "daily.parquet"
+            path.write_bytes(b"placeholder")
+            with patch("pandas.read_parquet", side_effect=RuntimeError("predicate unsupported")) as read:
+                with self.assertRaises(RecommendedDataPredicatePushdownError):
+                    _read_parquet_with_filters(
+                        path,
+                        columns=["trade_date", "symbol", "close"],
+                        date_col="trade_date",
+                        start_date="2020-01-01",
+                        end_date="2020-12-31",
+                        symbols=None,
+                    )
+            self.assertEqual(read.call_count, 1)
+            self.assertIsNotNone(read.call_args.kwargs["filters"])
+            self.assertEqual(read.call_args.kwargs["columns"], ["trade_date", "symbol", "close"])
+
+    def test_bounded_industry_read_fails_closed_with_requested_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "industry.parquet"
+            path.write_bytes(b"placeholder")
+            selection = IndustryClassificationSelection("sws", 1)
+            with patch("pandas.read_parquet", side_effect=RuntimeError("predicate unsupported")) as read:
+                with self.assertRaises(RecommendedDataPredicatePushdownError) as raised:
+                    _read_recommended_industry_history(
+                        path,
+                        selection=selection,
+                        start_date="2020-01-01",
+                        end_date="2020-12-31",
+                        symbols=["000001.SZ"],
+                    )
+
+            self.assertEqual(read.call_count, 1)
+            self.assertIn(("source", "==", "sws"), raised.exception.filters)
+            self.assertIn(("level", "==", 1), raised.exception.filters)
+            self.assertEqual(read.call_args.kwargs["columns"], list(raised.exception.columns))
+
     def test_manifest_and_availability_use_raw_rqdata_kline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

@@ -46,6 +46,25 @@ PAPER_PRICE_ADJUSTMENT_VIEWS: tuple[Literal["qfq", "hfq"], ...] = ("qfq", "hfq")
 RAW_PRICE_COLUMNS = ("open", "high", "low", "close", "limit_up", "limit_down", "prev_close")
 
 
+class RecommendedDataPredicatePushdownError(RuntimeError):
+    """A bounded recommended-data read could not enforce its parquet predicates."""
+
+    def __init__(self, *, path: Path, columns: Sequence[str], filters: Sequence[tuple[str, str, Any]], cause: Exception):
+        self.path = path
+        self.columns = tuple(columns)
+        self.filters = tuple(filters)
+        self.cause_type = type(cause).__name__
+        filter_summary = [
+            (column, operator, f"<{len(value)} values>" if operator == "in" and isinstance(value, list) else value)
+            for column, operator, value in filters
+        ]
+        super().__init__(
+            "bounded parquet predicate pushdown failed; refusing an unbounded whole-file "
+            f"fallback for {path.name} (columns={list(columns)!r}, filters={filter_summary!r}, "
+            f"cause={self.cause_type})"
+        )
+
+
 @dataclass(slots=True)
 class RecommendedDataConfig:
     data_dir: Path = DEFAULT_RECOMMENDED_DATA_DIR
@@ -776,19 +795,14 @@ def _read_recommended_industry_history(
     if symbols:
         filters.append(("symbol", "in", _symbol_filter_values(symbols)))
     try:
-        frame = pd.read_parquet(path, columns=columns, filters=filters)
-    except Exception:
-        frame = pd.read_parquet(path, columns=columns)
-        frame = normalize_recommended_industry_history_frame(frame)
-        frame = frame[(frame["source"] == selection.source) & (frame["level"] == selection.level)]
-        if start_date is not None:
-            frame = frame[frame["cancel_date"] > pd.Timestamp(start_date)]
-        if end_date is not None:
-            frame = frame[frame["start_date"] <= pd.Timestamp(end_date)]
-        if symbols:
-            frame = frame[frame["code"].isin([normalize_recommended_symbol(value) for value in symbols])]
-        frame = frame.rename(columns={"code": "symbol"})
-    return frame
+        return pd.read_parquet(path, columns=columns, filters=filters)
+    except Exception as exc:
+        raise RecommendedDataPredicatePushdownError(
+            path=path,
+            columns=columns,
+            filters=filters,
+            cause=exc,
+        ) from exc
 
 
 def _resolve_market_cap_fields(
@@ -848,16 +862,15 @@ def _read_parquet_with_filters(
         filters.append(("symbol", "in", _symbol_filter_values(symbols)))
     try:
         return pd.read_parquet(path, columns=columns, filters=filters or None)
-    except Exception:
-        frame = pd.read_parquet(path, columns=columns)
-        frame[date_col] = pd.to_datetime(frame[date_col])
-        if start_date is not None:
-            frame = frame[frame[date_col] >= pd.Timestamp(start_date)]
-        if end_date is not None:
-            frame = frame[frame[date_col] <= pd.Timestamp(end_date)]
-        if symbols:
-            frame = frame[frame["symbol"].isin(_symbol_filter_values(symbols))]
-        return frame
+    except Exception as exc:
+        if filters:
+            raise RecommendedDataPredicatePushdownError(
+                path=path,
+                columns=columns,
+                filters=filters,
+                cause=exc,
+            ) from exc
+        raise
 
 
 def _symbol_filter_values(symbols: list[str]) -> list[str]:

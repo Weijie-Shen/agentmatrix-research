@@ -6,8 +6,11 @@ import pandas as pd
 
 from research_core.factor_lab.paper_reproduction.resource_execution import (
     ResourceExecutionConfig,
+    certify_security_partition,
+    combine_partition_evaluation_rows,
     estimate_resource_preflight,
     incremental_data_hash,
+    plan_security_partitions,
 )
 
 
@@ -74,7 +77,7 @@ class ResourceExecutionTest(unittest.TestCase):
 
         self.assertEqual(result.execution_mode, "partition_required")
         self.assertTrue(result.partition_required)
-        self.assertIn("rather than shortening the sample", result.limitations[0])
+        self.assertIn("full-history security partitions", result.limitations[0])
 
     def test_incremental_hash_is_stable_and_content_sensitive(self) -> None:
         calculation, _ = self._frames()
@@ -86,6 +89,64 @@ class ResourceExecutionTest(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertNotEqual(first, incremental_data_hash([("calculation", changed)], chunk_rows=17))
+
+    def test_security_partition_plan_preserves_full_date_range_per_partition(self) -> None:
+        plan = plan_security_partitions(
+            ["S3", "S1", "S2", "S1"],
+            requested_start="2004-10-01",
+            requested_end="2017-01-31",
+            max_securities_per_partition=2,
+        )
+
+        self.assertEqual([item.securities for item in plan], [("S1", "S2"), ("S3",)])
+        self.assertEqual({item.requested_start for item in plan}, {"2004-10-01"})
+        self.assertEqual({item.requested_end for item in plan}, {"2017-01-31"})
+
+    def test_partition_certification_hashes_coverage_and_signal_only_rows(self) -> None:
+        spec = plan_security_partitions(
+            ["S1", "S2"],
+            requested_start="2026-01-01",
+            requested_end="2026-01-05",
+            max_securities_per_partition=2,
+        )[0]
+        calculation = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-05"] * 2),
+                "code": ["S1"] * 3 + ["S2"] * 3,
+                "factor": range(6),
+            }
+        )
+        signal_dates = ["2026-01-02", "2026-01-05"]
+        evaluation = combine_partition_evaluation_rows([calculation], signal_dates=signal_dates)
+
+        record = certify_security_partition(
+            spec,
+            calculation,
+            evaluation,
+            signal_dates=signal_dates,
+            source_identity={"scenario": "qfq"},
+        )
+
+        self.assertTrue(record.coverage_complete)
+        self.assertEqual(record.calculation_row_count, 6)
+        self.assertEqual(record.evaluation_row_count, 4)
+        self.assertEqual(record.signal_date_count, 2)
+        self.assertEqual(len(record.calculation_hash), 64)
+        self.assertEqual(len(record.evaluation_hash), 64)
+
+    def test_partition_certification_rejects_history_split_by_unassigned_security(self) -> None:
+        spec = plan_security_partitions(
+            ["S1"],
+            requested_start="2026-01-01",
+            requested_end="2026-01-02",
+            max_securities_per_partition=1,
+        )[0]
+        calculation = pd.DataFrame(
+            {"date": pd.to_datetime(["2026-01-01"]), "code": ["S2"], "factor": [1.0]}
+        )
+
+        with self.assertRaisesRegex(ValueError, "unassigned securities"):
+            certify_security_partition(spec, calculation, calculation.iloc[0:0], signal_dates=[])
 
 
 if __name__ == "__main__":
