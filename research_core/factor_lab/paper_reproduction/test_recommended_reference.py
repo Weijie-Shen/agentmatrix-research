@@ -16,6 +16,7 @@ from research_core.factor_lab.paper_reproduction.recommended_reference import (
     load_recommended_trading_calendar,
     load_recommended_yield_curve,
     materialize_calendar_forward_return,
+    materialize_natural_month_forward_return,
 )
 
 
@@ -37,6 +38,36 @@ class RecommendedReferenceTest(unittest.TestCase):
         profile = build_data_profile(result)
         lineage = next(item for item in profile.derived_fields if item["field"] == "forward_return_1d")
         self.assertEqual(lineage["horizon_unit"], "exchange_trading_days")
+
+    def test_natural_month_forward_return_uses_following_month_end_and_preserves_order(self) -> None:
+        calendar = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(
+                    ["2020-01-30", "2020-01-31", "2020-02-03", "2020-02-28", "2020-03-31"]
+                )
+            }
+        )
+        panel = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2020-02-28", "2020-01-31", "2020-01-31", "2020-03-31"]),
+                "code": ["B", "B", "A", "B"],
+                "close": [22.0, 20.0, 10.0, 23.0],
+            },
+            index=[9, 3, 8, 4],
+        )
+
+        result = materialize_natural_month_forward_return(panel, 1, trading_calendar=calendar)
+
+        self.assertEqual(result.index.tolist(), [9, 3, 8, 4])
+        self.assertAlmostEqual(result.loc[3, "forward_return_1m"], 0.1)
+        self.assertTrue(np.isnan(result.loc[8, "forward_return_1m"]))
+        self.assertAlmostEqual(result.loc[9, "forward_return_1m"], 23.0 / 22.0 - 1)
+        self.assertTrue(np.isnan(result.loc[4, "forward_return_1m"]))
+        self.assertEqual(
+            result.attrs["forward_return_lineage"]["target_rule"],
+            "last exchange trading date of the Nth following natural month",
+        )
+        self.assertEqual(result.attrs["forward_return_lineage"]["horizon_unit"], "natural_month")
 
     def test_loads_calendar_index_levels_constituents_and_explicit_weight_family(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

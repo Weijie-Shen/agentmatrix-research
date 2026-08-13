@@ -51,7 +51,10 @@ Each source should contain:
 - optional conflict group and notes;
 - no runtime selection or local-data binding.
 
+For reported count ratios or percentages, test whether multiple rows imply one unique integer observation denominator at the printed precision. Record that inferred denominator and compare it with the stated sample dates/schedule. If they disagree, preserve an explicit paper-evidence gap or conflict; do not silently let execution coverage choose the denominator.
+
 Keep paper protocol immutable. Do not rewrite WLS as OLS, a paper sample as local coverage, or an unavailable field as a proxy during extraction.
+Encode the paper's return interval semantically. “Following whole natural month” is a natural-month horizon, not a conventional 20/21-trading-day approximation.
 
 Extract all relevant IC alternatives, including raw versus neutralized, different preprocessing for different factor groups, different horizons, and different samples. Do not extract only the most data-intensive variant when a raw IC case also carries valid numeric truth. Stage 3 assesses local semantic/data support and Stage 6 selects exactly one unconflicted truth source per factor without looking at metric closeness.
 

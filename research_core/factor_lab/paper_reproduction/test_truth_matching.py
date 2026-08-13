@@ -137,6 +137,38 @@ class PaperTruthMatchingTest(unittest.TestCase):
         self.assertFalse(result.passed)
         self.assertEqual(result.status, "directionally_consistent")
 
+    def test_materially_comparable_large_failure_is_inconsistent(self) -> None:
+        truth = ExtractedTruthSource(
+            truth_id="table_material_eval",
+            truth_type="evaluation_results",
+            metrics={"rank_ic_mean": 0.04},
+        )
+
+        result = compare_evaluation_metrics_to_paper_truth(
+            {"rank_ic_mean": 0.01},
+            truth,
+            comparability="materially_comparable",
+        )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.status, "inconsistent")
+
+    def test_proxy_large_failure_remains_inconclusive(self) -> None:
+        truth = ExtractedTruthSource(
+            truth_id="table_proxy_eval",
+            truth_type="evaluation_results",
+            metrics={"rank_ic_mean": 0.04},
+        )
+
+        result = compare_evaluation_metrics_to_paper_truth(
+            {"rank_ic_mean": 0.01},
+            truth,
+            comparability="proxy",
+        )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.status, "inconclusive_due_to_protocol_gap")
+
     def test_truth_quality_interpreter_separates_passed_acceptable_and_failed(self) -> None:
         self.assertEqual(interpret_truth_match_quality(True, {}), "exact_match")
         self.assertEqual(

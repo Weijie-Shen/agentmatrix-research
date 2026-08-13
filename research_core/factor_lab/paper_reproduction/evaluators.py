@@ -24,7 +24,7 @@ GENERIC_EVALUATOR_CAPABILITIES: dict[str, dict[str, Any]] = {
             "categorical_controls": True,
             "continuous_controls": True,
             "weighting": True,
-            "return_horizon_units": ["trading_day"],
+            "return_horizon_units": ["trading_day", "natural_month"],
             "standard_errors": ["classical"],
             "transform_steps": [
                 "median_mad",

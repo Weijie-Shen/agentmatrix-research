@@ -383,7 +383,10 @@ def _project_v2_truth_source_for_factor(
 ) -> dict[str, Any]:
     compiled = _compile_v2_operation_pipeline(pipeline, semantic_by_id=semantic_by_id)
     horizon = int(protocol.forward_horizon_trading_days)
-    return_field = f"forward_return_{horizon}d"
+    horizon_unit = str(protocol.attributes.get("forward_horizon_unit") or "trading_day").strip().lower()
+    if horizon_unit == "calendar_month":
+        horizon_unit = "natural_month"
+    return_field = f"forward_return_{horizon}{'m' if horizon_unit == 'natural_month' else 'd'}"
     controls = list(compiled["required_controls"])
     filter_fields = [
         str(item.get("paper_field", ""))
@@ -427,7 +430,7 @@ def _project_v2_truth_source_for_factor(
         "evaluation_family": "ic_analysis",
         "evaluation_spec": {
             "return_horizon": horizon,
-            "return_horizon_unit": "trading_day",
+            "return_horizon_unit": horizon_unit,
             "return_col": return_field,
             "ic_type": ic_type,
             "ic_ir_convention": ic_ir_convention,

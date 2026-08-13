@@ -139,7 +139,7 @@ def interpret_truth_match_quality(
         if comparability in {"proxy", "directional_only"}:
             return "directionally_consistent"
         return "approximately_consistent"
-    if comparability in {"proxy", "directional_only", "materially_comparable"} and matched_metrics:
+    if comparability in {"proxy", "directional_only"} and matched_metrics:
         return "inconclusive_due_to_protocol_gap"
     return "inconsistent"
 

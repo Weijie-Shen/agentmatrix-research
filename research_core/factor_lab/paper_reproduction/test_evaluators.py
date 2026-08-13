@@ -11,6 +11,7 @@ from research_core.factor_lab.paper_reproduction.evaluators import (
     compute_cross_sectional_regression,
     compute_ic_analysis,
     evaluate_paper_case,
+    get_generic_evaluator_capabilities,
 )
 
 
@@ -26,6 +27,11 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
                 "market_cap": [10.0, 20.0, 10.0, 20.0] * 2,
             }
         )
+
+    def test_generic_evaluator_advertises_natural_month_return_support(self) -> None:
+        capabilities = get_generic_evaluator_capabilities()["capabilities"]
+
+        self.assertIn("natural_month", capabilities["return_horizon_units"])
 
     def test_apply_transform_spec_winsorizes_and_zscores_by_date(self) -> None:
         frame = self._base_frame()

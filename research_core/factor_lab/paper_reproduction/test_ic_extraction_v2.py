@@ -30,6 +30,7 @@ from research_core.factor_lab.paper_reproduction.evaluation_execution import (
 )
 from research_core.factor_lab.paper_reproduction.data_validation import assess_evaluation_case_support
 from research_core.factor_lab.paper_reproduction.evaluators import get_generic_evaluator_capabilities
+from research_core.factor_lab.paper_reproduction.extraction import infer_reported_ratio_denominator
 
 
 def ic_v2_fixture() -> ICAnalysisPaperExtraction:
@@ -208,6 +209,13 @@ def ic_v2_fixture() -> ICAnalysisPaperExtraction:
 
 
 class ICAnalysisExtractionV2Test(unittest.TestCase):
+    def test_infers_unique_shared_observation_denominator_from_printed_ratios(self) -> None:
+        self.assertEqual(
+            infer_reported_ratio_denominator([0.2671, 0.1781, 0.1644, 0.1575]),
+            146,
+        )
+        self.assertIsNone(infer_reported_ratio_denominator([0.25, 0.50]))
+
     def test_validates_round_trips_and_keeps_shared_registries(self) -> None:
         extraction = ic_v2_fixture()
         validation = validate_paper_extraction(extraction)
@@ -284,6 +292,16 @@ class ICAnalysisExtractionV2Test(unittest.TestCase):
         controls = neutral_case["neutralization_spec"]["controls"]
         self.assertEqual([item["paper_field"] for item in controls], ["industry_citic_level_1", "total_company_market_cap_close"])
         self.assertEqual(controls[1]["transforms"][0]["method"], "log")
+
+    def test_stage2_honors_natural_month_protocol_attribute(self) -> None:
+        extraction = ic_v2_fixture()
+        extraction.ic_protocols[0].attributes["forward_horizon_unit"] = "natural_month"
+
+        case = normalize_extraction_to_specs(extraction, version="v2")[0].metadata["truth_sources"][0]
+
+        self.assertEqual(case["evaluation_spec"]["return_horizon_unit"], "natural_month")
+        self.assertEqual(case["evaluation_spec"]["return_col"], "forward_return_20m")
+        self.assertEqual(case["required_data"]["evaluation"], ["forward_return_20m"])
 
     def test_stage2_preserves_explicit_zero_fill_and_absolute_ir_semantics(self) -> None:
         extraction = ic_v2_fixture()

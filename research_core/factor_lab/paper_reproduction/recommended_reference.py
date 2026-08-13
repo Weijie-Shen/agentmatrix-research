@@ -103,6 +103,91 @@ def materialize_calendar_forward_return(
     return result
 
 
+def materialize_natural_month_forward_return(
+    frame: pd.DataFrame,
+    horizon: int,
+    *,
+    trading_calendar: pd.DataFrame | Sequence[object],
+    price_col: str = "close",
+    output_col: str | None = None,
+    date_col: str = "date",
+    security_col: str = "code",
+    copy: bool = True,
+) -> pd.DataFrame:
+    """Materialize returns to the last exchange date of a following natural month.
+
+    ``horizon=1`` maps every formation date in month ``M`` to the final
+    exchange trading date in month ``M + 1``. Target dates come from the
+    supplied exchange calendar, never from a security's surviving prices, so
+    a missing target price remains missing.
+    """
+
+    if horizon <= 0:
+        raise ValueError("horizon must be a positive integer")
+    missing = [column for column in (date_col, security_col, price_col) if column not in frame.columns]
+    if missing:
+        raise ValueError(f"natural-month forward return inputs are missing columns: {missing}")
+
+    calendar_dates = _calendar_dates(trading_calendar)
+    calendar_months = calendar_dates.to_period("M")
+    month_ends = (
+        pd.DataFrame({"__calendar_month": calendar_months, "__target_date": calendar_dates})
+        .groupby("__calendar_month", sort=False, as_index=False)["__target_date"]
+        .max()
+    )
+    mapping = pd.DataFrame(
+        {
+            "__formation_date": calendar_dates,
+            "__target_month": calendar_months + horizon,
+        }
+    ).merge(
+        month_ends,
+        left_on="__target_month",
+        right_on="__calendar_month",
+        how="left",
+        validate="many_to_one",
+    )
+
+    result = frame.copy() if copy else frame
+    row_order_col = "__paper_reproduction_row_order__"
+    while row_order_col in result.columns:
+        row_order_col += "_"
+    formation_date_col = "__paper_reproduction_formation_date__"
+    while formation_date_col in result.columns:
+        formation_date_col += "_"
+    result[row_order_col] = np.arange(len(result))
+    result[formation_date_col] = pd.to_datetime(result[date_col], errors="coerce")
+    working = result.merge(
+        mapping[["__formation_date", "__target_date"]],
+        left_on=formation_date_col,
+        right_on="__formation_date",
+        how="left",
+        validate="many_to_one",
+    )
+    future = result[[security_col, formation_date_col, price_col]].rename(
+        columns={formation_date_col: "__target_date", price_col: "__future_price"}
+    )
+    working = working.merge(future, on=[security_col, "__target_date"], how="left", validate="many_to_one")
+    column = output_col or f"forward_return_{horizon}m"
+    working[column] = pd.to_numeric(working["__future_price"], errors="coerce").div(
+        pd.to_numeric(working[price_col], errors="coerce")
+    ).sub(1)
+    working = working.sort_values(row_order_col, kind="stable")
+    result[column] = working[column].to_numpy()
+    result.drop(columns=[row_order_col, formation_date_col], inplace=True)
+    result.attrs["forward_return_lineage"] = {
+        "field": column,
+        "horizon": horizon,
+        "horizon_unit": "natural_month",
+        "target_rule": "last exchange trading date of the Nth following natural month",
+        "price_col": price_col,
+        "calendar_date_count": len(calendar_dates),
+        "calendar_date_range": [calendar_dates[0].date().isoformat(), calendar_dates[-1].date().isoformat()],
+        "missing_target_price_policy": "remain_missing",
+    }
+    return result
+
+
 def load_recommended_index_levels(
     *,
     index_ids: Sequence[str],

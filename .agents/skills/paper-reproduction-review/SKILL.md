@@ -53,6 +53,9 @@ For truth matching verify:
 - every explicit missing-value operation survives normalization and execution in the same order;
 - signed and absolute metric conventions are reconciled before comparison;
 - any companion formula source is authorized, hashed, and distinct from the selected evaluation-truth paper.
+- ratio/percentage rows have been checked for an implied observation denominator and any conflict with the stated sample schedule is explicit;
+- natural-month labels were not silently approximated by a fixed trading-day count;
+- inferred/defaulted operations appear as structured deviations and downgrade comparability.
 
 ## Produce the report
 

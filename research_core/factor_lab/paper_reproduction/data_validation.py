@@ -469,7 +469,8 @@ def assess_evaluation_case_support(
     truth_id = str(truth_source.get("truth_id", ""))
     metrics = list((truth_source.get("metrics", {}) or {}).keys())
     requirement_results: list[EvaluationRequirementResult] = []
-    deviations: list[dict[str, Any]] = []
+    methodology_deviations = _methodology_uncertainty_deviations(truth_source, metrics)
+    deviations: list[dict[str, Any]] = list(methodology_deviations)
     semantic_definitions = {
         str(item.get("semantic_field_id")): dict(item)
         for item in truth_source.get("semantic_requirements", []) or []
@@ -670,6 +671,7 @@ def assess_evaluation_case_support(
         if result.availability in {"partially_available", "available_with_quality_warning", "constructible"}
     )
     proxy_count = sum(1 for result in requirement_results if result.relationship == "proxy_substitute" and result.execution_ready)
+    methodology_proxy_count = len(methodology_deviations)
     constructible_count = sum(1 for result in requirement_results if result.semantic_availability == "constructible")
     data_coverage = (
         1.0
@@ -679,7 +681,7 @@ def assess_evaluation_case_support(
             1.0
             - missing_count / len(requirement_results)
             - partial_count * 0.2 / len(requirement_results)
-            - (proxy_count + constructible_count) * 0.35 / len(requirement_results),
+            - (proxy_count + constructible_count + methodology_proxy_count) * 0.35 / max(len(requirement_results), 1),
         )
     )
     evaluator_coverage = 0.0 if capability_result.availability == "missing" else 1.0
@@ -689,7 +691,7 @@ def assess_evaluation_case_support(
         missing_count,
         partial_count,
         capability_result.availability,
-        proxy_count=proxy_count + constructible_count,
+        proxy_count=proxy_count + constructible_count + methodology_proxy_count,
     )
     case_executable = _case_is_executable(requirement_results)
     diagnostic = sorted(
@@ -740,6 +742,7 @@ def assess_evaluation_case_support(
             "evaluator_capability_coverage": evaluator_coverage,
             "metric_coverage": metric_coverage,
             "proxy_substitution_count": float(proxy_count),
+            "inferred_methodology_count": float(methodology_proxy_count),
             "constructible_not_materialized_count": float(constructible_count),
         },
         limitations=[dev["reason"] for dev in deviations],
@@ -771,6 +774,39 @@ def structured_deviation(
     if relationship:
         payload["relationship"] = relationship
     return payload
+
+
+def _methodology_uncertainty_deviations(
+    truth_source: dict[str, Any],
+    metrics: list[str],
+) -> list[dict[str, Any]]:
+    pipeline = truth_source.get("operation_pipeline", {}) or {}
+    operations = pipeline.get("operations", []) if isinstance(pipeline, dict) else []
+    deviations: list[dict[str, Any]] = []
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        source = str(operation.get("source", "")).strip().lower()
+        if source not in {"inferred", "default_assumed", "defaulted", "not_specified"}:
+            continue
+        operation_type = str(operation.get("type", "operation") or "operation")
+        method = str(operation.get("method", "") or "unspecified")
+        deviations.append(
+            structured_deviation(
+                category="methodology_inference",
+                paper_value={"operation_type": operation_type, "method": "not_explicitly_stated"},
+                resolved_value={"operation_type": operation_type, "method": method},
+                reason=(
+                    f"{operation_type} method {method} is {source} rather than explicit paper methodology"
+                ),
+                severity="material",
+                affected_metrics=metrics or ["*"],
+                truth_matching_policy="proxy_or_partial_period",
+                source="paper_operation_pipeline",
+                relationship="proxy_substitute",
+            )
+        )
+    return deviations
 
 
 def _is_sorted_by_code_date(frame: pd.DataFrame, code_column: str, date_column: str) -> bool:
@@ -1372,6 +1408,10 @@ def _assess_evaluator_capability(
         unsupported_protocol.append(f"regression_type={regression_type}")
     if regression_type == "wls" and not (evaluation_spec.get("weight_col") or evaluation_spec.get("regression_weight")):
         unsupported_protocol.append("wls_missing_weight_col")
+    return_horizon_unit = str(evaluation_spec.get("return_horizon_unit") or "").lower()
+    supported_horizon_units = set(capabilities.get("return_horizon_units", []) or [])
+    if return_horizon_unit and return_horizon_unit not in supported_horizon_units:
+        unsupported_protocol.append(f"return_horizon_unit={return_horizon_unit}")
     transform_spec = truth_source.get("transform_spec", {}) if isinstance(truth_source.get("transform_spec", {}), dict) else {}
     supported_transform_steps = set(capabilities.get("transform_steps", []) or [])
     for step in transform_spec.get("steps", []) or []:
@@ -1567,7 +1607,9 @@ def _evaluation_spec_requirement_results(
     return_col = str(evaluation_spec.get("return_col") or "").strip()
     horizon = evaluation_spec.get("return_horizon")
     if not return_col and horizon:
-        return_col = f"forward_return_{horizon}d"
+        unit = str(evaluation_spec.get("return_horizon_unit") or "trading_day").strip().lower()
+        suffix = "m" if unit == "natural_month" else "d"
+        return_col = f"forward_return_{horizon}{suffix}"
     if return_col:
         resolved = _resolve_requirement(return_col, profile)
         results.append(

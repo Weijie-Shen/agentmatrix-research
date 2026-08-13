@@ -82,6 +82,8 @@ An executed case exists only when it is present in the unmodified `evaluation_bu
 - Keep stock price adjustment isolated from capitalization, statements, valuation ratios, benchmark levels, index weights, and rates.
 - Never shorten the requested sample, reduce the universe, drop controls, or recode categorical controls only to fit resources.
 - Compute forward returns with forward alignment. Keep the factor-calculation panel separate from evaluation filtering. In particular, do not remove ST/PT or next-day-suspended securities from rolling factor history when the extracted universe protocol places those masks at evaluation eligibility.
+- Preserve the paper's horizon unit: security observations, exact exchange trading days, and following whole natural months are distinct label contracts.
+- Check printed count ratios for an implied observation denominator and carry any disagreement with the stated sample schedule into extraction gaps, comparability, and the report.
 - Run QFQ and HFQ as independent price-view scenarios when price adjustment is relevant; never mix views in one run.
 - Never retain multiple full price-view panels. Profile and release each view during Stage 3; during Stage 6 reload, execute, persist, and release one view before loading the next.
 - A resource deferral must come from the actual requested panel under a genuine runtime budget. A probe frame paired with full-period metadata or a deliberately tiny budget is invalid evidence.

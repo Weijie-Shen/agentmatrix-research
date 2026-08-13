@@ -238,8 +238,15 @@ def _canonical_runtime_evaluation_inputs(
         horizon_int = 0
     if horizon_int > 0:
         runtime_spec["return_horizon"] = horizon_int
-        runtime_spec.setdefault("return_horizon_unit", "trading_day")
-        runtime_spec.setdefault("return_col", f"forward_return_{horizon_int}d")
+        unit = str(runtime_spec.get("forward_horizon_unit") or runtime_spec.get("return_horizon_unit") or "trading_day")
+        unit = unit.strip().lower()
+        if unit == "calendar_month":
+            unit = "natural_month"
+        runtime_spec["return_horizon_unit"] = unit
+        runtime_spec.setdefault(
+            "return_col",
+            f"forward_return_{horizon_int}{'m' if unit == 'natural_month' else 'd'}",
+        )
     return_col = str(runtime_spec.get("return_col", "") or "")
     if return_col:
         evaluation_fields = runtime_required.get("evaluation", []) or []

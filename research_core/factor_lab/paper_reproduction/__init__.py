@@ -178,6 +178,7 @@ from research_core.factor_lab.paper_reproduction.recommended_reference import (
     load_recommended_trading_calendar,
     load_recommended_yield_curve,
     materialize_calendar_forward_return,
+    materialize_natural_month_forward_return,
 )
 from research_core.factor_lab.paper_reproduction.reporting import (
     build_paper_reproduction_report,
@@ -319,6 +320,7 @@ __all__ = [
     "load_recommended_valuation_panel",
     "load_recommended_yield_curve",
     "materialize_calendar_forward_return",
+    "materialize_natural_month_forward_return",
     "incremental_data_hash",
     "normalize_extraction_to_specs",
     "normalize_quant_daily_kline_frame",

@@ -86,6 +86,8 @@ Before building the profile used for evaluation planning, materialize runtime la
 
 When the paper defines `T+h` in market trading days, load the exchange calendar with `load_recommended_trading_calendar(...)` including the required look-ahead and use `materialize_calendar_forward_return(...)`. Do not approximate an exchange-calendar horizon with each security's next surviving observations.
 
+When the paper defines the following whole natural month, use `materialize_natural_month_forward_return(...)` with the exchange calendar so the target is that month's last trading day. Do not replace a natural-month interval with 20 or 21 trading observations. Persist the target-date rule and any missing target prices in label lineage.
+
 Evaluation-only gaps include forward-return labels, controls, weights, industry, market cap, benchmark, historical index membership, index-weight convention, risk-free rate/tenor, execution price, ST/PT, suspension, and future-tradability masks. Record them as case-level limitations, replacements, or unsupported requirements.
 
 For point-in-time financial fields, enforce the paper evaluation date as the announcement cutoff before choosing a filing version. Record fields, cutoff, version policy, flow/stock semantics, and any standalone-quarter derivation. For valuations and dividends, preserve provider-versus-paper definitions and units.

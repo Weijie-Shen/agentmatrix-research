@@ -33,6 +33,8 @@ The v2 workflow has only the `ic_analysis` evaluator type. Rank-IC mean, ICIR, I
 
 Keep paper requirements and runtime decisions side by side. Preserve shared protocol, universe, operation-pipeline, metric, and semantic-requirement IDs in `paper_protocol`; place only local bindings and substitutions in `resolved_protocol`. For substitutions record semantic relationship, reason, expected effect, affected metrics, selection mode, and downgraded comparability.
 
+Treat every inferred/defaulted/not-specified operation in the selected paper pipeline as a reportable methodology deviation. It may execute as a proxy, but it cannot inherit exact comparability merely because the local evaluator supports it.
+
 Do not silently:
 
 - replace WLS with OLS;
@@ -59,7 +61,7 @@ Keep the full calculation panel separate from evaluation inputs. Join certified 
 
 ## Return and metric correctness
 
-Use forward alignment for future returns. Use `materialize_forward_return(...)` only for security-observation horizons; use `materialize_calendar_forward_return(...)` for exact exchange-trading-day `T+h` horizons. Do not compute past returns or let suspension/missing observations redefine the paper horizon.
+Use forward alignment for future returns. Use `materialize_forward_return(...)` only for security-observation horizons; use `materialize_calendar_forward_return(...)` for exact exchange-trading-day `T+h` horizons; use `materialize_natural_month_forward_return(...)` for following-whole-natural-month intervals. Do not compute past returns or let suspension/missing observations redefine the paper horizon.
 
 Respect frequency: `t+1` means the next relevant period, not automatically the next trading day. Build timing from the extracted signal date, status-filter effective dates, exchange-calendar `T+h` target, and paper-defined return interval; do not hardcode every case to an entry at `t+1`. Preserve Pearson-versus-Spearman IC type, horizon, preprocessing/control order, missing-exposure policy, and sign conventions. Apply a paper-declared absolute ICIR convention before truth matching; do not compare signed evaluator IR to an absolute paper statistic.
 
@@ -87,6 +89,8 @@ Assign:
 - `inconclusive_due_to_protocol_gap` when comparison cannot support positive or negative evidence;
 - `inconsistent` only when sufficiently comparable results materially disagree;
 - `not_evaluated` for unsupported, deferred, or unexecuted cases.
+
+For a materially comparable case, a material eligible-metric miss is `inconsistent`, not `inconclusive_due_to_protocol_gap`. Reserve `inconclusive_due_to_protocol_gap` for proxy/directional cases whose protocol gap prevents positive or negative evidence.
 
 Missing diagnostic-only metrics and unsupported cases are coverage gaps, not failed metric comparisons. Report numerator and denominator explicitly.
 

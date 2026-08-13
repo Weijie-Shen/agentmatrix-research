@@ -131,6 +131,38 @@ class PaperInputDataValidationTest(unittest.TestCase):
         self.assertIn("t_abs_mean", assessment.diagnostic_only_metrics)
         self.assertEqual(assessment.replacement_records, [])
 
+    def test_inferred_operation_is_disclosed_and_downgrades_comparability(self) -> None:
+        profile = build_data_profile(materialize_forward_return(self._valid_frame(), 1), source_id="unit_panel")
+        truth_source = {
+            "truth_id": "table_inferred_method",
+            "evaluation_family": "ic_analysis",
+            "evaluation_method": "Pearson IC",
+            "required_data": {"evaluation": ["forward_return_1d"]},
+            "operation_pipeline": {
+                "operations": [
+                    {
+                        "order": 1,
+                        "type": "transform",
+                        "target": "market_cap",
+                        "method": "log",
+                        "source": "inferred",
+                    }
+                ]
+            },
+            "metrics": {"ic_mean": 0.04},
+        }
+
+        assessment = assess_evaluation_case_support(
+            truth_source,
+            profile,
+            get_generic_evaluator_capabilities(),
+        )
+
+        self.assertEqual(assessment.comparability, "proxy")
+        self.assertEqual(assessment.score_components["inferred_methodology_count"], 1.0)
+        self.assertTrue(any(item["category"] == "methodology_inference" for item in assessment.deviations))
+        self.assertIn("ic_mean", assessment.truth_match_eligible_metrics)
+
     def test_assess_evaluation_case_support_resolves_aliases_sample_and_universe_filters(self) -> None:
         frame = pd.DataFrame(
             {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -616,6 +617,8 @@ def _validate_ic_analysis_extraction(extraction: ICAnalysisPaperExtraction) -> E
             )
 
     factors_with_truth: set[str] = set()
+    metric_by_id = {metric.metric_id: metric for metric in extraction.metric_definitions}
+    implied_observation_denominators: list[dict[str, Any]] = []
     for index, truth in enumerate(extraction.truth_sources):
         prefix = f"truth_sources[{index}]"
         if truth.protocol_id not in protocol_ids:
@@ -635,6 +638,33 @@ def _validate_ic_analysis_extraction(extraction: ICAnalysisPaperExtraction) -> E
             if set(results) != set(truth.reported_metric_ids):
                 errors.append(
                     f"{prefix}.reported_results[{factor_id!r}] metric ids must exactly match reported_metric_ids"
+                )
+        for metric_id in truth.reported_metric_ids:
+            metric = metric_by_id.get(metric_id)
+            if metric is None or not _looks_like_count_ratio_metric(metric):
+                continue
+            denominator = infer_reported_ratio_denominator(
+                [results.get(metric_id) for results in truth.reported_results.values()]
+            )
+            if denominator is None:
+                continue
+            implied_observation_denominators.append(
+                {
+                    "truth_source_id": truth.truth_source_id,
+                    "metric_id": metric_id,
+                    "implied_observation_count": denominator,
+                }
+            )
+            conflict_recorded = any(
+                truth.truth_source_id in set(item.get("truth_source_ids", []) or [])
+                for item in extraction.paper_evidence_conflicts
+                if isinstance(item, dict)
+            )
+            note_text = " ".join(truth.notes).lower()
+            if not conflict_recorded and str(denominator) not in note_text:
+                warnings.append(
+                    f"{prefix}.{metric_id} implies {denominator} observations; reconcile it with the "
+                    "stated sample schedule in truth notes or paper_evidence_conflicts"
                 )
     missing_truth = sorted(factor_ids - factors_with_truth)
     if missing_truth:
@@ -687,6 +717,7 @@ def _validate_ic_analysis_extraction(extraction: ICAnalysisPaperExtraction) -> E
             "protocol_count": len(protocol_ids),
             "truth_source_count": len(truth_ids),
             "result_row_count": sum(len(source.reported_results) for source in extraction.truth_sources),
+            "implied_observation_denominators": implied_observation_denominators,
             "unresolved_conflict_count": sum(
                 1
                 for item in extraction.paper_evidence_conflicts
@@ -694,6 +725,47 @@ def _validate_ic_analysis_extraction(extraction: ICAnalysisPaperExtraction) -> E
             ),
         },
     )
+
+
+def infer_reported_ratio_denominator(
+    values: list[Any],
+    *,
+    minimum_rows: int = 3,
+    maximum_denominator: int = 1000,
+) -> int | None:
+    """Infer one unique integer denominator shared by printed count ratios."""
+
+    decimals: list[Decimal] = []
+    precisions: list[int] = []
+    for value in values:
+        try:
+            decimal_value = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            continue
+        if not decimal_value.is_finite() or decimal_value < 0 or decimal_value > 1:
+            continue
+        decimals.append(decimal_value)
+        precisions.append(max(0, -decimal_value.as_tuple().exponent))
+    if len(decimals) < minimum_rows or not precisions:
+        return None
+    tolerance = Decimal(5).scaleb(-max(precisions) - 1)
+    candidates: list[int] = []
+    for denominator in range(2, maximum_denominator + 1):
+        numeric = Decimal(denominator)
+        if all(
+            abs(value - (value * numeric).to_integral_value() / numeric) <= tolerance
+            for value in decimals
+        ):
+            candidates.append(denominator)
+    if not candidates:
+        return None
+    fundamental = candidates[0]
+    return fundamental if all(candidate % fundamental == 0 for candidate in candidates) else None
+
+
+def _looks_like_count_ratio_metric(metric: ExtractedMetricDefinition) -> bool:
+    text = " ".join((metric.metric_id, metric.paper_label, metric.definition, metric.stored_unit)).lower()
+    return any(token in text for token in ("ratio", "share", "fraction", "占比", "比例"))
 
 
 def _v2_paper_id(extraction: ICAnalysisPaperExtraction) -> str:

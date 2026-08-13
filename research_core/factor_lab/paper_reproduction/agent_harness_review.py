@@ -334,6 +334,15 @@ def _deep_completion_defects(
     has_unresolved_ambiguities = any(bool(items) for items in ambiguity_groups.values())
     if extraction_validation == "needs_human_review" and (has_extraction_errors or has_unresolved_ambiguities):
         defects.append("[extraction] extraction validation still requires human review")
+    denominator_warnings = [
+        str(item)
+        for item in extraction_diagnostics.get("warnings", []) or []
+        if "observations; reconcile" in str(item)
+    ]
+    if denominator_warnings:
+        defects.append(
+            "[extraction] printed count ratios have an unreconciled implied observation denominator"
+        )
 
     if not specs_path:
         defects.append("[specs] no standalone normalized-spec JSON was found")
