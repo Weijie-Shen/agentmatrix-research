@@ -35,6 +35,7 @@ class EvaluationDataContext:
 
     calculation_panel: pd.DataFrame = field(repr=False)
     evaluation_inputs: pd.DataFrame | None = field(default=None, repr=False)
+    precomputed_factor_frame: pd.DataFrame | None = field(default=None, repr=False)
     scenario_id: str = "base"
     data_snapshot_hash: str = ""
     source_identity: dict[str, Any] = field(default_factory=dict)
@@ -159,7 +160,11 @@ def execute_evaluation_plan(
         source_identity=data_context.source_identity,
     )
 
-    factor_frame = execute_factor_callable(implementation_artifact, calculation_panel, copy_input=False)
+    factor_frame = (
+        data_context.precomputed_factor_frame.copy(deep=False)
+        if data_context.precomputed_factor_frame is not None
+        else execute_factor_callable(implementation_artifact, calculation_panel, copy_input=False)
+    )
     factor_validation = validate_factor_frame(
         factor_frame,
         key_columns=implementation_artifact.output_key_columns,

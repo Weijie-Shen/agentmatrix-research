@@ -301,6 +301,14 @@ class ICAnalysisExtractionV2Test(unittest.TestCase):
 
         self.assertTrue(all(case["evaluation_spec"]["ic_type"] == "pearson_ic" for case in cases))
 
+    def test_stage2_treats_explicitly_negated_rank_reference_as_pearson(self) -> None:
+        extraction = ic_v2_fixture()
+        extraction.ic_analysis_contract["cross_sectional_statistic"] = "ordinary correlation; not rank IC"
+
+        cases = normalize_extraction_to_specs(extraction, version="v2")[0].metadata["truth_sources"]
+
+        self.assertTrue(all(case["evaluation_spec"]["ic_type"] == "pearson_ic" for case in cases))
+
     def test_stage2_honors_natural_month_protocol_attribute(self) -> None:
         extraction = ic_v2_fixture()
         extraction.ic_protocols[0].attributes["forward_horizon_unit"] = "natural_month"

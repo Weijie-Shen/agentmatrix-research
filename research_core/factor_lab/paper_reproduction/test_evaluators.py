@@ -220,6 +220,8 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
         )
 
         self.assertEqual(result["cross_section_count"], 2)
+        self.assertEqual(result["ic_dates"], ["2020-01-01T00:00:00", "2020-01-02T00:00:00"])
+        self.assertEqual(len(result["ic_dates"]), len(result["ic_values"]))
         self.assertAlmostEqual(result["rank_ic_mean"], 0.0, places=12)
         self.assertAlmostEqual(result["rank_ic_std"], math.sqrt(2), places=12)
         self.assertAlmostEqual(result["ic_positive_ratio"], 0.5, places=12)

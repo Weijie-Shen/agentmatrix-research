@@ -45,6 +45,7 @@ GENERIC_EVALUATOR_CAPABILITIES: dict[str, dict[str, Any]] = {
                 "ic_std",
                 "ic_ir",
                 "ic_positive_ratio",
+                "ic_abs_gt_002_ratio",
                 "rank_ic_positive_ratio",
                 "factor_return_mean",
                 "t_abs_mean",
@@ -217,7 +218,8 @@ def compute_ic_analysis(
 
     _require_columns(frame, [date_col, factor_col, return_col])
     ic_values: list[float] = []
-    for _, group in frame[[date_col, factor_col, return_col]].dropna().groupby(date_col):
+    ic_dates: list[str] = []
+    for date, group in frame[[date_col, factor_col, return_col]].dropna().groupby(date_col):
         if len(group) < 2:
             continue
         factor = group[factor_col]
@@ -230,9 +232,11 @@ def compute_ic_analysis(
             raise ValueError(f"Unsupported IC method: {method}")
         if pd.notna(value):
             ic_values.append(float(value))
+            ic_dates.append(pd.Timestamp(date).isoformat())
     mean = _mean_or_nan(ic_values)
     std = _std_or_nan(ic_values)
     positive_ratio = float(sum(value > 0 for value in ic_values) / len(ic_values)) if ic_values else float("nan")
+    absolute_gt_002_ratio = float(sum(abs(value) > 0.02 for value in ic_values) / len(ic_values)) if ic_values else float("nan")
     if ic_ir_convention not in {"signed", "absolute"}:
         raise ValueError(f"Unsupported IC IR convention: {ic_ir_convention}")
     signed_ir = float(mean / std) if pd.notna(mean) and pd.notna(std) and std != 0 else float("nan")
@@ -241,8 +245,10 @@ def compute_ic_analysis(
         "rank_ic_std" if method in {"spearman", "rank_ic", "spearman_rank_ic"} else "ic_std": std,
         "ic_ir": abs(signed_ir) if ic_ir_convention == "absolute" else signed_ir,
         "ic_positive_ratio": positive_ratio,
+        "ic_abs_gt_002_ratio": absolute_gt_002_ratio,
         "cross_section_count": len(ic_values),
         "ic_values": ic_values,
+        "ic_dates": ic_dates,
     }
     if method in {"spearman", "rank_ic", "spearman_rank_ic"}:
         result["rank_ic_positive_ratio"] = positive_ratio

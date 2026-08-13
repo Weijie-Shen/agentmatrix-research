@@ -1431,16 +1431,23 @@ def _find_implementation_artifact(runtime_root: Path) -> tuple[Path | None, dict
 
 
 def _formula_requirement_defects(factor_records: list[dict[str, Any]]) -> list[str]:
+    semantic_tokens = {
+        "close": {"close", "price", "return", "returns"},
+        "volume": {"volume", "turnover"},
+    }
     defects: list[str] = []
     for record in factor_records:
         formula_tokens = {
             token.lower() for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(record.get("formula", "")))
         }
-        extras = sorted(
-            str(field)
-            for field in record.get("required_fields", []) or []
-            if str(field).lower() in STANDARD_FORMULA_FIELDS and str(field).lower() not in formula_tokens
-        )
+        extras = []
+        for required_field in record.get("required_fields", []) or []:
+            normalized = str(required_field).lower()
+            if normalized not in STANDARD_FORMULA_FIELDS:
+                continue
+            if not (formula_tokens & semantic_tokens.get(normalized, {normalized})):
+                extras.append(str(required_field))
+        extras.sort()
         if extras:
             defects.append(
                 f"[extraction] factor {record.get('factor_name', '')} has formula-unrelated standard required fields: {extras}"

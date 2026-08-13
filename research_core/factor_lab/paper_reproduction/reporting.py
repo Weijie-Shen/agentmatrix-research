@@ -231,6 +231,12 @@ def _validate_stage3_support_consistency(
         )
 
 
+def _display_author(author: Any) -> str:
+    if isinstance(author, dict):
+        return str(author.get("name") or author.get("author") or author.get("display_name") or "-")
+    return str(author)
+
+
 def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
     paper = report["paper"]
     summary = report["summary"]
@@ -241,7 +247,7 @@ def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:
         f"- Generated at: {report['generated_at']}",
         f"- Paper: {paper['title']}",
         f"- Paper ID: {paper['paper_id']}",
-        f"- Authors: {', '.join(paper['authors']) if paper['authors'] else '-'}",
+        f"- Authors: {', '.join(_display_author(author) for author in paper['authors']) if paper['authors'] else '-'}",
         f"- Source: {paper.get('source') or '-'}",
         f"- Year: {paper.get('year') or '-'}",
         f"- Factor family: {paper['factor_family_name']}",

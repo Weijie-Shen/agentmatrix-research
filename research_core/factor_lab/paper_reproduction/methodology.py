@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 import pandas as pd
@@ -27,7 +28,8 @@ def canonical_ic_type(statistic: Any) -> str:
     """
 
     normalized = str(statistic or "").strip().lower().replace("-", "_")
-    if "spearman" in normalized or "rank" in normalized:
+    positive_rank_evidence = bool(re.search(r"(?<!not\s)(?<!non\s)(?<!非)(spearman|rank)", normalized))
+    if positive_rank_evidence:
         return "spearman_rank_ic"
     return "pearson_ic"
 
