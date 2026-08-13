@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 from uuid import uuid4
 
-from research_core.factor_lab.paper_reproduction.extraction import PaperExtraction
+from research_core.factor_lab.paper_reproduction.extraction import ICAnalysisPaperExtraction, PaperExtraction
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig, now_iso
 
 
@@ -68,13 +68,18 @@ class PaperReproductionPipelineState:
     @classmethod
     def from_extraction(
         cls,
-        extraction: PaperExtraction,
+        extraction: PaperExtraction | ICAnalysisPaperExtraction,
         *,
         job_id: str | None = None,
     ) -> PaperReproductionPipelineState:
+        paper_id = (
+            extraction.paper_id
+            if isinstance(extraction, PaperExtraction)
+            else str(extraction.paper.get("paper_id") or extraction.artifact_id)
+        )
         return cls(
             job_id=job_id or f"paper-{uuid4().hex[:12]}",
-            paper_id=extraction.paper_id,
+            paper_id=paper_id,
             family_name=extraction.factor_family_name,
             stages=[PaperReproductionStageState(name=stage.value) for stage in PaperReproductionStage],
         )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -129,6 +130,16 @@ def _metadata_payload(
     skill_bundle_sha256: str,
 ) -> dict[str, Any]:
     payload = asdict(request)
+    gate_output_path = root_dir / "worker_pre_return_assessment.json"
+    gate_arguments = " ".join(
+        [
+            "python -m research_core.factor_lab.paper_reproduction.agent_harness_review",
+            shlex.quote(request.working_directory),
+            *(f"--factor {shlex.quote(factor)}" for factor in request.selected_factors),
+            f"--harness-id {shlex.quote(request.harness_id)}",
+            f"--output {shlex.quote(str(gate_output_path))}",
+        ]
+    )
     payload.update(
         {
             "created_at": now_iso(),
@@ -146,6 +157,9 @@ def _metadata_payload(
             "required_price_adjustment_views": ["qfq", "hfq"],
             "qfq_anchor_policy": "per-security cumulative factor at the paper testing-period end",
             "hfq_anchor_policy": "RQData initial cumulative-factor baseline",
+            "deterministic_gate_command": gate_arguments,
+            "deterministic_gate_output_path": str(gate_output_path),
+            "deterministic_gate_max_repair_passes": 3,
         }
     )
     return payload
@@ -212,20 +226,21 @@ Paper ID:
 
 ## Instructions
 
-- Use paper-reported `evaluation_results` only as truth.
+- Use paper-reported `evaluation_results` only as truth; for new jobs these are IC-analysis results. Create new Stage-1 artifacts as `paper_extraction.ic_analysis.v2`; legacy extraction is compatibility input only.
 - Do not use paper factor-value truth matching.
-- Keep raw factor definitions separate from evaluation-case transforms, neutralization, return horizons, portfolio rules, and evaluation-required data.
+- Build shared factor-definition, semantic-requirement, universe/sample/operation/metric/IC-protocol, and truth-source registries. Keep Stage 1 immutable: no local physical-field bindings and no selected truth IDs.
+- Keep raw factor definitions separate from evaluation-case transforms, neutralization, return horizons, portfolio rules, and evaluation-required data. Treat Rank-IC mean, ICIR, IC standard deviation, and positive ratio as co-reported metrics of the single `ic_analysis` evaluator type.
 - Use `load_recommended_daily_panel(..., price_view="qfq", adjustment_end_date=test_end)` and `price_view="hfq"` sequentially with `/Users/mac/recommended_data_v2` before Quant API v2 or declaring `blocked_by_data`. Run the testing-end-anchored QFQ and initial-baseline HFQ views independently. Complete, persist, and release one scenario before loading the next; do not hand-pick physical files or keep both full views resident by default.
 - Read the recommended-data README before Stage 3. Resolve total/A-share/circulating-A/free-float capitalization from paper wording and request it with `market_cap_fields`. Resolve industry taxonomy source and level from paper evidence and pass `IndustryClassificationSelection`; interval history must use `start_date <= evaluation_or_formation_date < cancel_date`. Do not apply QFQ/HFQ multipliers to capitalization, treat industry codes as continuous, or silently choose a taxonomy.
 - Use repository loaders for PIT financial statements, valuations/dividends, benchmark levels, historical index constituents/weights, the China exchange calendar, and the government yield curve. Apply `ann_date <= T` before filing-version selection; specify monthly versus daily index weights and yield tenor explicitly; use exchange-calendar `T+h` labels when the paper defines trading-day horizons. Use `$rqdata-fetch-reference` only when the canonical local reference bundle cannot satisfy the exact request.
 - Use Quant API v2 only when the recommended local data folder cannot satisfy the paper's required fields/date window.
-- Preserve all extracted truth sources, profile available data, select the best-supported paper truth before computing metrics, and execute only selected resolved cases.
+- Preserve all extracted truth sources. Stage 2 must project shared references without selecting truth or inventing transform defaults. Stage 3 must assess every candidate from semantic/data support without inspecting metric closeness. Stage 6 requires that assessment and selects exactly one unconflicted IC truth source per factor before computing metrics; all alternatives remain lifecycle-visible.
 - Resolve semantic data fields through declared relationships. Exact aliases, constructed equivalents, accepted proxies, and rejected substitutes must remain distinct; proxies downgrade comparability and stay report-visible, while unmaterialized derivations and unsupported substitutes must not become runtime fields.
 - Certify the final factor module and callable as a `FactorImplementationArtifact` on a probe panel; an inline factor column or unimplemented scaffold is not implementation completion.
 - Run selected cases through `execute_evaluation_plan(...)`. Keep the full calculation panel separate from possibly filtered evaluation inputs, and align artifact factor output only by unique date/security keys.
 - Configure `EvaluationDataContext.resource_config` for full-period runs. Honor resource preflight, required-column projection, incremental hashing, and sequential cases; if projected execution still exceeds budget, require verified partitions instead of silently shortening dates, reducing the universe, or dropping controls.
 - Extract factor, control, weight, and output transformations in their stated order. Use structured neutralization specs so control transforms such as log, winsorization, and cross-sectional standardization are capability-checked and executed rather than flattened into raw column names.
-- Represent calculation and evaluation universes separately. Apply ST/PT, suspension, and future-tradability masks only at their declared evaluation stage unless the paper explicitly requires them during factor calculation.
+- Represent calculation and evaluation universes separately. Retain full otherwise-valid security history for rolling factor calculation. Apply ST/PT, suspension, and future-tradability masks only at their declared evaluation stage unless the paper explicitly requires them during factor calculation. Preserve the status date rule, including next-evaluation-day suspension semantics.
 - Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue through documented degradation and report deviations.
 - Export extraction/spec/pipeline/report artifacts under the repo's Factor Lab runtime paths.
 - Use the repository-scoped Codex stage skills routed by `$paper-factor-reproduction`; keep one coordinator responsible for pipeline state and final integration.
@@ -235,6 +250,11 @@ Paper ID:
 - Do not retain full QFQ and HFQ frames together. Profile and release each view during data readiness; during evaluation reload, execute, persist, and release one view before loading the next.
 - Run long full-panel evaluations in a persistent command session. When a command yields a session or cell identifier, poll that same process with the continuation tool until exit; a tool-call yield deadline is not process termination and must not trigger a restart or deferral.
 - This automated test is successful only when every selected factor has a durable `executed` evaluation record and a paper-truth result; deferred records alone are not completion.
+- Before returning, run the deterministic completion gate below. Persist its output, inspect `earliest_invalid_stage`, `defects`, and `repair_actions`, repair from the earliest invalid gate, and rerun dependent stages plus the deterministic check. You may make up to {metadata["deterministic_gate_max_repair_passes"]} correction passes inside this same attempt. Do not alter the paper protocol or formulas merely to silence a defect. If the gate still fails after the allowed passes or a genuine hard blocker prevents repair, return `incomplete` with the persisted gate output; never return a completion claim while `complete=false`.
+
+```text
+{metadata["deterministic_gate_command"]}
+```
 
 Required price views recorded by this harness: `{", ".join(metadata["required_price_adjustment_views"])}`.
 

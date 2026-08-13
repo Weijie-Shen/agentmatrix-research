@@ -25,6 +25,9 @@ class FactorResearchSpec:
     frequency: str = "day"
     sample_scope: str = ""
     required_fields: list[str] = field(default_factory=list)
+    semantic_required_fields: list[str] = field(default_factory=list)
+    paper_evidence_ref: dict[str, Any] = field(default_factory=dict)
+    evaluation_case_refs: list[str] = field(default_factory=list)
     parameters: dict[str, Any] = field(default_factory=dict)
     preprocessing: list[str] = field(default_factory=list)
     neutralization: list[str] = field(default_factory=list)

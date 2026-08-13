@@ -18,7 +18,6 @@ from research_core.factor_lab.paper_reproduction.recommended_data import (
     load_recommended_daily_panel,
     load_recommended_paper_panels,
     normalize_recommended_daily_kline_frame,
-    normalize_recommended_industry_history_frame,
     normalize_recommended_market_cap_frame,
     normalize_recommended_symbol,
     recommended_data_available,

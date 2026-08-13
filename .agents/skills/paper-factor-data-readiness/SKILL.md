@@ -41,6 +41,8 @@ For industry controls, resolve both taxonomy source and level from paper evidenc
 
 ## Build semantic requirements
 
+Consume the Stage-1 `semantic_requirements` registry and the Stage-2 factor/truth-source projections. Resolve each semantic ID to local data once per data scenario, then reuse that relationship across every candidate protocol that references it. Never write a resolved column or selected truth ID back into the immutable extraction.
+
 Translate paper fields into semantic roles before choosing physical columns. Record:
 
 - paper name and definition;
@@ -51,6 +53,8 @@ Translate paper fields into semantic roles before choosing physical columns. Rec
 - acceptable and rejected relationships.
 
 For capitalization record the selected basis, physical source field, unit, unadjusted price basis, any construction, and transform timing. For industry record paper wording, resolved source, level, effective-date rule, membership file, taxonomy file, and whether the selection is exact, inferred, proxy, or unsupported.
+
+Treat industry source/version/level and capitalization basis as typed semantics. For example, SWS and CITIC/CITICS are different relationships, as are total-company, A-share, circulating-A, and free-float capitalization. The fact that a generic `industry` or `market_cap` column exists does not satisfy a differently specified requirement.
 
 Classify each relationship as `exact_alias`, `derived_equivalent`, `proxy_substitute`, or `unsupported_substitute`. Never materialize a proxy as an exact alias.
 
@@ -74,7 +78,9 @@ Stop implementation only for unavailable formula-required inputs, invalid panel 
 
 ## Profile evaluation support
 
-Use `build_data_profile(...)` and `assess_evaluation_case_support(...)` for every candidate truth source. Keep support assessment independent of computed metric closeness.
+Use `build_data_profile(...)` and `assess_evaluation_case_support(...)` for every candidate truth source. Keep support assessment independent of computed metric closeness. Score formula support, label/calendar support, universe-mask support, every referenced semantic requirement, and every ordered-operation capability. An unresolved paper-evidence conflict has no eligible truth metrics even if its local fields are present.
+
+Persist an assessment for every candidate. Stage 3 ranks semantic/data support but does not use paper-reported values or locally calculated IC values as a tie-breaker. Stage 6 consumes these assessments and chooses exactly one unconflicted IC truth source per factor; richer co-reported metric coverage may break an otherwise equal support tie, but metric values may not.
 
 Before building the profile used for evaluation planning, materialize runtime labels required by the candidate cases. For ordinary trading-observation horizons use `materialize_forward_return(...)`, then record the derived field and lineage in the profile. Prose such as “20-day forward return” or a raw `close` field is not an executable `return_col`.
 
@@ -88,7 +94,7 @@ Resolve exact benchmark/index identifiers. Keep monthly weights, reconstructed d
 
 Compute rolling factor values before joining capitalization or interval-resolving industry unless the paper explicitly makes them part of factor calculation or the calculation universe. Join capitalization on security/date and industry at the declared evaluation or formation date. A physically present `industry` or `market_cap` column is not semantic proof: attach explicit `FieldRelationship` records when the paper taxonomy or capitalization basis is matched or differs.
 
-Apply universe masks only at the stage declared by the paper. Keep the full calculation panel separate from filtered evaluation inputs. Do not filter factor history before rolling calculations unless the factor definition requires it.
+Apply universe masks only at the stage declared by the paper. Keep the full calculation panel separate from filtered evaluation inputs. Materialize rolling factors on retained valid security history, then join the factor by unique date/security keys to the evaluation panel. Apply ST/PT and next-evaluation-day suspension masks at `factor_cross_section` or the explicitly extracted evaluation stage. Do not filter factor history before rolling calculations unless the factor definition requires it.
 
 ## Resource integrity
 
@@ -113,4 +119,5 @@ Resource limitations may defer a case, but they cannot mutate paper protocol.
 - benchmark identifiers, constituent/weight family, calendar-horizon, and yield-tenor lineage where applicable;
 - QFQ/HFQ scenario metadata where applicable;
 - evaluation-case support assessments;
+- one explicit local relationship per referenced semantic requirement, including status-mask timing;
 - Stage 3 pipeline update with blockers, deviations, and limitations.

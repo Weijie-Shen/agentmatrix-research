@@ -13,6 +13,14 @@ from research_core.factor_lab.paper_reproduction.methodology import (
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig
 
 TruthSourceType = Literal["evaluation_results"]
+IC_EXTRACTION_SCHEMA_VERSION = "paper_extraction.ic_analysis.v2"
+IC_EVALUATOR_TYPE = "ic_analysis"
+FORBIDDEN_EXTRACTION_BINDING_KEYS = {
+    "local_column",
+    "physical_field",
+    "resolved_field",
+    "selected_truth_source_ids",
+}
 STANDARD_FORMULA_FIELDS = {
     "open",
     "high",
@@ -79,6 +87,121 @@ class PaperExtraction:
 
 
 @dataclass(slots=True)
+class ExtractedFactorDefinition:
+    """One immutable paper formula, independent of evaluation preprocessing."""
+
+    factor_id: str
+    paper_label: str
+    formula: str
+    required_semantic_fields: list[str]
+    native_frequency: str = ""
+    parameters: dict[str, Any] = field(default_factory=dict)
+    direction: str = ""
+    description: str = ""
+    evidence: dict[str, Any] = field(default_factory=dict)
+    formula_gap_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ExtractedSemanticRequirement:
+    """Paper meaning for a field; never a local physical-data selection."""
+
+    semantic_field_id: str
+    kind: str
+    concept: str
+    attributes: dict[str, Any] = field(default_factory=dict)
+    evidence: Any = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExtractedUniverseProtocol:
+    """Separate factor history from staged evaluation eligibility."""
+
+    universe_protocol_id: str
+    calculation_universe: dict[str, Any]
+    evaluation_universe: dict[str, Any]
+    filters: list[dict[str, Any]] = field(default_factory=list)
+    evidence: Any = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExtractedOperationPipeline:
+    operation_pipeline_id: str
+    paper_label: str
+    operations: list[dict[str, Any]] = field(default_factory=list)
+    attributes: dict[str, Any] = field(default_factory=dict)
+    evidence: Any = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExtractedICProtocol:
+    protocol_id: str
+    sample_period_id: str
+    operation_pipeline_id: str
+    forward_horizon_trading_days: int
+    universe_protocol_id: str = ""
+    evaluator_contract_id: str = ""
+    attributes: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExtractedMetricDefinition:
+    metric_id: str
+    paper_label: str
+    definition: str
+    stored_unit: str
+    attributes: dict[str, Any] = field(default_factory=dict)
+    evidence: Any = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExtractedICTruthSource:
+    """One narrow paper result block under exactly one semantic IC protocol."""
+
+    truth_source_id: str
+    protocol_id: str
+    source: dict[str, Any]
+    reported_metric_ids: list[str]
+    reported_results: dict[str, dict[str, Any]]
+    conflict_group_id: str = ""
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ICAnalysisPaperExtraction:
+    """Canonical Stage-1 artifact for the IC-analysis-only workflow.
+
+    Generic evaluator rules, semantic inputs, operation pipelines, protocols,
+    and result blocks are paper-level registries.  Factor rows refer to these
+    registries instead of duplicating the same protocol for every factor.
+    """
+
+    artifact_id: str
+    paper: dict[str, Any]
+    factor_family_name: str
+    factor_definitions: list[ExtractedFactorDefinition]
+    semantic_requirements: list[ExtractedSemanticRequirement]
+    universe_protocols: list[ExtractedUniverseProtocol]
+    sample_periods: list[dict[str, Any]]
+    operation_pipelines: list[ExtractedOperationPipeline]
+    metric_definitions: list[ExtractedMetricDefinition]
+    ic_analysis_contract: dict[str, Any]
+    ic_protocols: list[ExtractedICProtocol]
+    truth_sources: list[ExtractedICTruthSource]
+    truth_selection_policy: dict[str, Any]
+    schema_version: str = IC_EXTRACTION_SCHEMA_VERSION
+    artifact_role: str = "immutable_paper_evidence"
+    created_on: str = ""
+    scope: dict[str, Any] = field(default_factory=dict)
+    operator_semantics: list[dict[str, Any]] = field(default_factory=list)
+    paper_evidence_conflicts: list[dict[str, Any]] = field(default_factory=list)
+    known_gaps: list[dict[str, Any]] = field(default_factory=list)
+    stage_contract: dict[str, Any] = field(default_factory=dict)
+    evidence_conventions: dict[str, Any] = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class ExtractionValidationResult:
     valid: bool
     status: str
@@ -87,7 +210,11 @@ class ExtractionValidationResult:
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
-def validate_paper_extraction(extraction: PaperExtraction) -> ExtractionValidationResult:
+def validate_paper_extraction(
+    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+) -> ExtractionValidationResult:
+    if isinstance(extraction, ICAnalysisPaperExtraction):
+        return _validate_ic_analysis_extraction(extraction)
     errors: list[str] = []
     warnings: list[str] = []
     ambiguities_by_category: dict[str, list[str]] = {
@@ -136,7 +263,7 @@ def validate_paper_extraction(extraction: PaperExtraction) -> ExtractionValidati
 
 
 def export_paper_extraction(
-    extraction: PaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction,
     *,
     config: FactorLabWorkspaceConfig | None = None,
 ) -> Path:
@@ -144,13 +271,16 @@ def export_paper_extraction(
     workspace.ensure_directories()
     output_dir = workspace.runtime_root / "paper_specs"
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{extraction.paper_id}_extracted.json"
+    paper_id = extraction.paper_id if isinstance(extraction, PaperExtraction) else _v2_paper_id(extraction)
+    path = output_dir / f"{paper_id}_extracted.json"
     path.write_text(json.dumps(asdict(extraction), ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
-def load_paper_extraction(path: str | Path) -> PaperExtraction:
+def load_paper_extraction(path: str | Path) -> PaperExtraction | ICAnalysisPaperExtraction:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if str(payload.get("schema_version", "")) == IC_EXTRACTION_SCHEMA_VERSION:
+        return _ic_analysis_extraction_from_payload(payload)
     factors = [_factor_from_payload(item) for item in payload.pop("target_factors")]
     return PaperExtraction(target_factors=factors, **payload)
 
@@ -366,3 +496,358 @@ def _require_text(value: str, field_name: str, errors: list[str]) -> None:
 
 def _mentions_frequency_gap(items: list[str]) -> bool:
     return "frequency" in "\n".join(items).lower()
+
+
+def _validate_ic_analysis_extraction(extraction: ICAnalysisPaperExtraction) -> ExtractionValidationResult:
+    errors: list[str] = []
+    warnings: list[str] = []
+    _require_text(extraction.artifact_id, "artifact_id", errors)
+    _require_text(extraction.factor_family_name, "factor_family_name", errors)
+    if extraction.schema_version != IC_EXTRACTION_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {IC_EXTRACTION_SCHEMA_VERSION!r}")
+    if extraction.artifact_role != "immutable_paper_evidence":
+        errors.append("artifact_role must be 'immutable_paper_evidence'")
+
+    paper_id = _v2_paper_id(extraction)
+    _require_text(paper_id, "paper.paper_id", errors)
+    _require_text(str(extraction.paper.get("title", "")), "paper.title", errors)
+    authors = extraction.paper.get("authors", []) or []
+    if not isinstance(authors, list) or not authors:
+        errors.append("paper.authors must not be empty")
+
+    evaluator_types = extraction.scope.get("supported_evaluator_types", []) or []
+    if evaluator_types != [IC_EVALUATOR_TYPE]:
+        errors.append("scope.supported_evaluator_types must contain only 'ic_analysis'")
+    if str(extraction.ic_analysis_contract.get("evaluator_type", "")) != IC_EVALUATOR_TYPE:
+        errors.append("ic_analysis_contract.evaluator_type must be 'ic_analysis'")
+
+    factor_ids = _unique_registry_ids(
+        extraction.factor_definitions,
+        "factor_id",
+        "factor_definitions",
+        errors,
+    )
+    semantic_ids = _unique_registry_ids(
+        extraction.semantic_requirements,
+        "semantic_field_id",
+        "semantic_requirements",
+        errors,
+    )
+    universe_ids = _unique_registry_ids(
+        extraction.universe_protocols,
+        "universe_protocol_id",
+        "universe_protocols",
+        errors,
+    )
+    pipeline_ids = _unique_registry_ids(
+        extraction.operation_pipelines,
+        "operation_pipeline_id",
+        "operation_pipelines",
+        errors,
+    )
+    metric_ids = _unique_registry_ids(
+        extraction.metric_definitions,
+        "metric_id",
+        "metric_definitions",
+        errors,
+    )
+    protocol_ids = _unique_registry_ids(extraction.ic_protocols, "protocol_id", "ic_protocols", errors)
+    truth_ids = _unique_registry_ids(extraction.truth_sources, "truth_source_id", "truth_sources", errors)
+
+    if not factor_ids:
+        errors.append("factor_definitions must not be empty")
+    if not extraction.truth_sources:
+        errors.append("truth_sources must not be empty")
+    declared_scope_ids = set(str(item) for item in extraction.scope.get("factor_ids", []) or [])
+    if declared_scope_ids and declared_scope_ids != factor_ids:
+        errors.append("scope.factor_ids must exactly match factor_definitions")
+
+    for index, factor in enumerate(extraction.factor_definitions):
+        prefix = f"factor_definitions[{index}]"
+        _require_text(factor.formula, f"{prefix}.formula", errors)
+        _require_text(factor.native_frequency, f"{prefix}.native_frequency", errors)
+        if not factor.required_semantic_fields:
+            errors.append(f"{prefix}.required_semantic_fields must not be empty")
+        unknown = sorted(set(factor.required_semantic_fields) - semantic_ids)
+        if unknown:
+            errors.append(f"{prefix}.required_semantic_fields contains unknown ids: {unknown}")
+
+    sample_ids = _unique_mapping_ids(extraction.sample_periods, "sample_period_id", "sample_periods", errors)
+    for index, protocol in enumerate(extraction.ic_protocols):
+        prefix = f"ic_protocols[{index}]"
+        if protocol.sample_period_id not in sample_ids:
+            errors.append(f"{prefix}.sample_period_id is unknown: {protocol.sample_period_id}")
+        if protocol.operation_pipeline_id not in pipeline_ids:
+            errors.append(f"{prefix}.operation_pipeline_id is unknown: {protocol.operation_pipeline_id}")
+        if protocol.universe_protocol_id and protocol.universe_protocol_id not in universe_ids:
+            errors.append(f"{prefix}.universe_protocol_id is unknown: {protocol.universe_protocol_id}")
+        if protocol.forward_horizon_trading_days <= 0:
+            errors.append(f"{prefix}.forward_horizon_trading_days must be positive")
+
+    for index, pipeline in enumerate(extraction.operation_pipelines):
+        operations = pipeline.operations
+        if not operations:
+            warnings.append(f"operation_pipelines[{index}].operations is empty")
+            continue
+        orders = [item.get("order") for item in operations if isinstance(item, dict)]
+        if orders != list(range(1, len(operations) + 1)):
+            errors.append(f"operation_pipelines[{index}].operations must have contiguous one-based order")
+
+    for index, universe in enumerate(extraction.universe_protocols):
+        payload = {
+            "calculation_universe": universe.calculation_universe,
+            "evaluation_universe": universe.evaluation_universe,
+            "filters": universe.filters,
+        }
+        result = validate_universe_protocol(payload, prefix=f"universe_protocols[{index}]")
+        errors.extend(result.errors)
+        warnings.extend(result.warnings)
+        calculation_filter_names = {
+            str(item.get("filter_name", ""))
+            for item in universe.filters
+            if isinstance(item, dict)
+            and str(item.get("application_stage", "")) in {"raw_data", "factor_time_series"}
+        }
+        retained = bool(universe.calculation_universe.get("retain_full_valid_security_history", False))
+        if retained and calculation_filter_names:
+            errors.append(
+                f"universe_protocols[{index}] declares full calculation history but also calculation-stage filters: "
+                f"{sorted(calculation_filter_names)}"
+            )
+
+    factors_with_truth: set[str] = set()
+    for index, truth in enumerate(extraction.truth_sources):
+        prefix = f"truth_sources[{index}]"
+        if truth.protocol_id not in protocol_ids:
+            errors.append(f"{prefix}.protocol_id is unknown: {truth.protocol_id}")
+        if not truth.source:
+            warnings.append(f"{prefix}.source is missing")
+        if not truth.reported_metric_ids:
+            errors.append(f"{prefix}.reported_metric_ids must not be empty")
+        unknown_metrics = sorted(set(truth.reported_metric_ids) - metric_ids)
+        if unknown_metrics:
+            errors.append(f"{prefix}.reported_metric_ids contains unknown ids: {unknown_metrics}")
+        for factor_id, results in truth.reported_results.items():
+            if factor_id not in factor_ids:
+                errors.append(f"{prefix}.reported_results contains unknown factor: {factor_id}")
+                continue
+            factors_with_truth.add(factor_id)
+            if set(results) != set(truth.reported_metric_ids):
+                errors.append(
+                    f"{prefix}.reported_results[{factor_id!r}] metric ids must exactly match reported_metric_ids"
+                )
+    missing_truth = sorted(factor_ids - factors_with_truth)
+    if missing_truth:
+        errors.append(f"factors have no reported IC truth: {missing_truth}")
+
+    conflict_ids = {
+        str(item.get("conflict_group_id", ""))
+        for item in extraction.paper_evidence_conflicts
+        if isinstance(item, dict) and item.get("conflict_group_id")
+    }
+    for index, truth in enumerate(extraction.truth_sources):
+        if truth.conflict_group_id and truth.conflict_group_id not in conflict_ids:
+            errors.append(
+                f"truth_sources[{index}].conflict_group_id is unknown: {truth.conflict_group_id}"
+            )
+    for index, conflict in enumerate(extraction.paper_evidence_conflicts):
+        referenced = set(str(item) for item in conflict.get("truth_source_ids", []) or [])
+        unknown = sorted(referenced - truth_ids)
+        if unknown:
+            errors.append(f"paper_evidence_conflicts[{index}] contains unknown truth_source_ids: {unknown}")
+        if str(conflict.get("resolution_status", "")) == "unresolved_paper_internal_conflict":
+            warnings.append(
+                f"paper_evidence_conflicts[{index}] is unresolved; affected truth sources are not exact-match eligible"
+            )
+
+    support_stage = extraction.truth_selection_policy.get("support_assessment_stage")
+    if support_stage not in {3, "stage_3", "data_readiness"}:
+        errors.append("truth_selection_policy.support_assessment_stage must be Stage 3")
+    selection_stage = extraction.truth_selection_policy.get("selection_stage")
+    if selection_stage not in {6, "stage_6", "evaluation_planning"}:
+        errors.append("truth_selection_policy.selection_stage must be Stage 6 evaluation planning")
+    forbidden_selection = " ".join(
+        str(item).lower() for item in extraction.truth_selection_policy.get("forbidden_selection_evidence", []) or []
+    )
+    if not any(token in forbidden_selection for token in ("closeness", "reproduced ic", "reported metric")):
+        errors.append("truth_selection_policy must forbid selection by reproduced metric closeness")
+
+    binding_hits: list[str] = []
+    _find_forbidden_binding_keys(asdict(extraction), path="$", hits=binding_hits)
+    errors.extend(binding_hits)
+    status = "needs_human_review" if errors or warnings else "implemented"
+    return ExtractionValidationResult(
+        valid=not errors,
+        status=status,
+        errors=errors,
+        warnings=warnings,
+        diagnostics={
+            "schema_version": extraction.schema_version,
+            "factor_count": len(factor_ids),
+            "protocol_count": len(protocol_ids),
+            "truth_source_count": len(truth_ids),
+            "result_row_count": sum(len(source.reported_results) for source in extraction.truth_sources),
+            "unresolved_conflict_count": sum(
+                1
+                for item in extraction.paper_evidence_conflicts
+                if item.get("resolution_status") == "unresolved_paper_internal_conflict"
+            ),
+        },
+    )
+
+
+def _v2_paper_id(extraction: ICAnalysisPaperExtraction) -> str:
+    return str(extraction.paper.get("paper_id") or extraction.artifact_id).strip()
+
+
+def _unique_registry_ids(
+    values: list[Any],
+    attribute: str,
+    label: str,
+    errors: list[str],
+) -> set[str]:
+    ids = [str(getattr(item, attribute, "")).strip() for item in values]
+    for index, value in enumerate(ids):
+        if not value:
+            errors.append(f"{label}[{index}].{attribute} is required")
+    duplicates = sorted({value for value in ids if value and ids.count(value) > 1})
+    for value in duplicates:
+        errors.append(f"{label} contains duplicated {attribute}: {value}")
+    return {value for value in ids if value}
+
+
+def _unique_mapping_ids(
+    values: list[dict[str, Any]],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> set[str]:
+    ids = [str(item.get(key, "")).strip() for item in values if isinstance(item, dict)]
+    if len(ids) != len(values):
+        errors.append(f"{label} entries must be objects")
+    for index, value in enumerate(ids):
+        if not value:
+            errors.append(f"{label}[{index}].{key} is required")
+    duplicates = sorted({value for value in ids if value and ids.count(value) > 1})
+    for value in duplicates:
+        errors.append(f"{label} contains duplicated {key}: {value}")
+    return {value for value in ids if value}
+
+
+def _find_forbidden_binding_keys(value: Any, *, path: str, hits: list[str]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in FORBIDDEN_EXTRACTION_BINDING_KEYS:
+                hits.append(f"{path}.{key} is a Stage-3/runtime binding and is forbidden in extraction")
+            _find_forbidden_binding_keys(child, path=f"{path}.{key}", hits=hits)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _find_forbidden_binding_keys(child, path=f"{path}[{index}]", hits=hits)
+
+
+def _ic_analysis_extraction_from_payload(payload: dict[str, Any]) -> ICAnalysisPaperExtraction:
+    raw = dict(payload)
+    factors = [ExtractedFactorDefinition(**item) for item in raw.pop("factor_definitions", [])]
+    semantics = [_semantic_requirement_from_payload(item) for item in raw.pop("semantic_requirements", [])]
+    universes = [_universe_protocol_from_payload(item) for item in raw.pop("universe_protocols", [])]
+    pipelines = [_operation_pipeline_from_payload(item) for item in raw.pop("operation_pipelines", [])]
+    metrics = [_metric_definition_from_payload(item) for item in raw.pop("metric_definitions", [])]
+    protocols = [_ic_protocol_from_payload(item) for item in raw.pop("ic_protocols", [])]
+    truth_sources = [ExtractedICTruthSource(**item) for item in raw.pop("truth_sources", [])]
+    allowed = {field_.name for field_ in ICAnalysisPaperExtraction.__dataclass_fields__.values()}
+    constructor = {key: value for key, value in raw.items() if key in allowed}
+    ignored = {key: value for key, value in raw.items() if key not in allowed}
+    notes = list(constructor.get("notes", []) or [])
+    if ignored:
+        notes.append(f"Unmodeled top-level extraction fields preserved by source JSON only: {sorted(ignored)}")
+    constructor["notes"] = notes
+    return ICAnalysisPaperExtraction(
+        factor_definitions=factors,
+        semantic_requirements=semantics,
+        universe_protocols=universes,
+        operation_pipelines=pipelines,
+        metric_definitions=metrics,
+        ic_protocols=protocols,
+        truth_sources=truth_sources,
+        **constructor,
+    )
+
+
+def _semantic_requirement_from_payload(payload: dict[str, Any]) -> ExtractedSemanticRequirement:
+    raw = dict(payload)
+    core = {key: raw.pop(key) for key in ("semantic_field_id", "kind", "concept")}
+    evidence = raw.pop("evidence", {})
+    attributes = _extensible_attributes_from_payload(raw)
+    return ExtractedSemanticRequirement(**core, attributes=attributes, evidence=evidence)
+
+
+def _universe_protocol_from_payload(payload: dict[str, Any]) -> ExtractedUniverseProtocol:
+    raw = dict(payload)
+    protocol_id = str(raw.pop("universe_protocol_id"))
+    calculation = raw.pop("calculation_universe", None)
+    evaluation = raw.pop("evaluation_universe", None)
+    base_universe = raw.pop("base_universe", "")
+    if not isinstance(calculation, dict):
+        calculation = {
+            "base_universe": base_universe,
+            "retain_full_valid_security_history": True,
+            "source": "inferred",
+        }
+    if not isinstance(evaluation, dict):
+        evaluation = {"base_universe": base_universe, "source": "explicit"}
+    filters = list(raw.pop("filters", []) or [])
+    evidence = raw.pop("evidence", {})
+    return ExtractedUniverseProtocol(
+        universe_protocol_id=protocol_id,
+        calculation_universe=calculation,
+        evaluation_universe=evaluation,
+        filters=filters,
+        evidence=evidence,
+    )
+
+
+def _operation_pipeline_from_payload(payload: dict[str, Any]) -> ExtractedOperationPipeline:
+    raw = dict(payload)
+    pipeline_id = str(raw.pop("operation_pipeline_id"))
+    label = str(raw.pop("paper_label", ""))
+    operations = list(raw.pop("operations", []) or [])
+    evidence = raw.pop("evidence", {})
+    attributes = _extensible_attributes_from_payload(raw)
+    return ExtractedOperationPipeline(pipeline_id, label, operations, attributes, evidence)
+
+
+def _metric_definition_from_payload(payload: dict[str, Any]) -> ExtractedMetricDefinition:
+    raw = dict(payload)
+    core = {key: raw.pop(key) for key in ("metric_id", "paper_label", "definition", "stored_unit")}
+    evidence = raw.pop("evidence", {})
+    attributes = _extensible_attributes_from_payload(raw)
+    return ExtractedMetricDefinition(**core, attributes=attributes, evidence=evidence)
+
+
+def _ic_protocol_from_payload(payload: dict[str, Any]) -> ExtractedICProtocol:
+    raw = dict(payload)
+    core_keys = (
+        "protocol_id",
+        "sample_period_id",
+        "operation_pipeline_id",
+        "forward_horizon_trading_days",
+    )
+    core = {key: raw.pop(key) for key in core_keys}
+    universe_protocol_id = str(raw.pop("universe_protocol_id", ""))
+    evaluator_contract_id = str(raw.pop("evaluator_contract_id", ""))
+    attributes = _extensible_attributes_from_payload(raw)
+    return ExtractedICProtocol(
+        **core,
+        universe_protocol_id=universe_protocol_id,
+        evaluator_contract_id=evaluator_contract_id,
+        attributes=attributes,
+    )
+
+
+def _extensible_attributes_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Load canonical nested attributes while accepting legacy flat extensions."""
+
+    nested = payload.pop("attributes", {})
+    attributes = dict(nested) if isinstance(nested, dict) else {}
+    attributes.update(payload)
+    return attributes

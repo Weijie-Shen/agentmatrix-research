@@ -15,7 +15,7 @@ Coordinate the repository's existing Factor Lab workflow. Do not create a parall
 4. Create or load one persistent `PaperReproductionPipelineState`. Treat it as the only authority for gate status.
 5. Keep paper evidence immutable. Put runtime substitutions and degradation in separate resolved records.
 
-Use paper-reported `evaluation_results` as paper truth. Do not add paper factor-value truth matching.
+Use paper-reported IC-analysis `evaluation_results` as paper truth. New jobs use `paper_extraction.ic_analysis.v2`; the legacy extraction schema is compatibility input only. Do not add paper factor-value truth matching.
 
 ## Route work to stage skills
 
@@ -46,7 +46,7 @@ Before a stage, call `execution_decision(stage_name)`. After it, persist its art
 
 Execution statuses are `pending`, `running`, `completed`, `completed_with_limitations`, and `failed`. Truth statuses are `exact_match`, `approximately_consistent`, `directionally_consistent`, `inconclusive_due_to_protocol_gap`, `inconsistent`, and `not_evaluated`.
 
-Only a genuine hard failure may stop dependent work. Missing evaluation-only fields, unsupported secondary evaluators, proxy controls, partial source coverage, and protocol differences normally produce structured deviations and `completed_with_limitations`, not an abandoned run.
+Only a genuine hard failure may stop dependent work. Missing evaluation-only fields, unsupported alternative IC protocols, proxy controls, partial source coverage, and protocol differences normally produce structured deviations and `completed_with_limitations`, not an abandoned run.
 
 ## Multi-agent operating model
 
@@ -65,6 +65,9 @@ After interruption or resource termination, inventory persisted stage and scenar
 
 ## Cross-paper invariants
 
+- Stage 1 is immutable shared paper evidence: factor definitions, semantic requirements, universe/sample/operation/metric/IC protocol registries, and factor-keyed truth result blocks. It contains neither local column bindings nor selected truth IDs.
+- The evaluator type is `ic_analysis`; Rank-IC mean, ICIR, IC standard deviation, and positive-ratio statistics are co-reported metrics, not separate evaluator types.
+- Stage 2 preserves registry references and projects candidates without choosing truth or adding transform defaults. Stage 3 resolves typed local semantics and assesses every candidate without metric-value peeking. Stage 6 requires those assessments and selects exactly one unconflicted IC truth source per factor.
 - Keep raw factor definitions separate from transforms, universes, return horizons, controls, weights, portfolio rules, and evaluation data.
 - Preserve narrow source locations and provenance for formulas, transforms, methods, and metrics.
 - Distinguish exact data, constructed equivalents, proxies, rejected substitutes, and missing requirements.
@@ -74,7 +77,7 @@ After interruption or resource termination, inventory persisted stage and scenar
 - Resolve exact benchmark/index identifiers, constituent effective dates, monthly-versus-daily weight convention, exchange-calendar horizons, and government-curve tenor. Never substitute a current universe, another index, another weight family, or another tenor silently.
 - Keep stock price adjustment isolated from capitalization, statements, valuation ratios, benchmark levels, index weights, and rates.
 - Never shorten the requested sample, reduce the universe, drop controls, or recode categorical controls only to fit resources.
-- Compute forward returns with forward alignment. Keep the factor-calculation panel separate from evaluation filtering.
+- Compute forward returns with forward alignment. Keep the factor-calculation panel separate from evaluation filtering. In particular, do not remove ST/PT or next-day-suspended securities from rolling factor history when the extracted universe protocol places those masks at evaluation eligibility.
 - Run QFQ and HFQ as independent price-view scenarios when price adjustment is relevant; never mix views in one run.
 - Never retain multiple full price-view panels. Profile and release each view during Stage 3; during Stage 6 reload, execute, persist, and release one view before loading the next.
 - A resource deferral must come from the actual requested panel under a genuine runtime budget. A probe frame paired with full-period metadata or a deliberately tiny budget is invalid evidence.
@@ -87,13 +90,18 @@ After interruption or resource termination, inventory persisted stage and scenar
 The run is complete only when:
 
 - all selected factors have exported extraction and normalized specs;
+- the extraction validates as `paper_extraction.ic_analysis.v2`, has no dangling registry references or runtime bindings, and every candidate result block has one IC protocol;
 - formula-required data passed validation or has an explicit hard blocker;
 - implemented factors are backed by importable `FactorImplementationArtifact` records and passing implementation tests;
+- formula-focused tests cover every selected factor and their machine-readable results are persisted under `runtime/factor_lab/test_results`;
+- the resolved evaluation plan is persisted under `runtime/factor_lab/evaluation_plans`, with non-empty assessed cases and exactly one selected unconflicted IC case for every executable selected factor;
 - every selected evaluation case has a lifecycle outcome and selected executable cases ran through the framework executor;
 - every selected factor has at least one durable `executed` evaluation record for an automated reproduction-success verdict; deferred records document limitations but do not satisfy execution completion;
 - paper truth matching uses only eligible metrics and correct denominators;
 - all eight pipeline stages have persisted outcomes;
 - both JSON and Markdown final reports exist and accurately state implementations, deviations, tests, comparisons, and unresolved gaps.
+
+When a generated agent harness provides a deterministic pre-return command, run it before claiming completion. Repair from its `earliest_invalid_stage`, regenerate dependent artifacts, and rerun the check. Do not overwrite a scientific mismatch by changing paper formulas or protocols merely to make the gate pass.
 
 A report that merely describes planned work is not completion. An unimplemented scaffold is not a factor implementation. Inline factor columns without a certified module/callable are not implementation completion.
 

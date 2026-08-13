@@ -10,13 +10,18 @@ runtime/factor_lab/paper_autotest/<batch_id>/
   selections/<paper_id>.json
   <paper_id>/attempt-01/
     run_state.json
+    worker_completion_gate.json
+    worker_gate_assessments/
     worker_stop.json
     harvest_manifest.json
+    worktree_ownership.json
     git_status.txt
     worker_changes.patch
     artifacts/
     deterministic_assessment.json
+    reviewer_assignment.json
     independent_review.json
+    reviewer_completion.json
   batch_summary.json
   batch_summary.md
 ```
@@ -25,11 +30,25 @@ runtime/factor_lab/paper_autotest/<batch_id>/
 
 ```text
 planned -> worktree_ready -> ready_for_worker -> running -> worker_stopped
-        -> harvested -> deterministic_reviewed -> independently_reviewed
+        -> harvested -> deterministic_reviewed -> reviewer_running -> independently_reviewed
         -> complete | complete_with_limitations | incomplete -> cleaned
 ```
 
-Never mark `complete` from agent prose. The deterministic utilities refresh `run_state.json` and its append-only `state_history` after worktree preparation, harness creation, worker start/stop, harvesting, each review record, the final verdict, and cleanup. A writer crash becomes `worker_stopped` and is harvested before retry decisions.
+Never mark `complete` from agent prose. The deterministic utilities refresh `run_state.json`, the matching run in `batch_manifest.json`, and append-only `state_history` after worktree preparation, harness creation, worker gate passes, worker start/stop, harvesting, reviewer assignment, each review record, the final verdict, and cleanup. A writer crash becomes `worker_stopped` and is harvested before retry decisions.
+
+## Worker completion gate
+
+The fresh-agent harness gives the worker an exact `agent_harness_review` command and a durable output path. Before returning, the worker gets up to three correction passes in the same task/worktree. Each pass starts at `earliest_invalid_stage`; dependent artifacts and executions must then be rebuilt rather than relabeled.
+
+The control plane independently reruns the same assessment when `record_worker_stopped(..., outcome="completed")` is requested. Failed assessments are saved under `worker_gate_assessments/`, the plan remains `running`, and the same worker receives the defect list plus `repair_actions`. Only `complete=true` permits a completed stop. Hard blockers use a failed/interrupted stop and are still harvested and reviewed.
+
+The deterministic gate validates persisted artifact families, extraction/spec scope, Stage 3 profiles and sample bounds, certified source hashes, per-factor test coverage and durable test results, assessed→selected→executed lineage, QFQ/HFQ scenario evidence, skipped transforms/controls/filters, truth eligibility denominators, pipeline/report consistency, and—after harvest—durability. For `paper_extraction.ic_analysis.v2`, it also validates shared registry references, absence of runtime bindings in Stage 1, and exactly one selected extracted IC truth source per executable factor. It is intentionally stricter than checking stage labels or record counts.
+
+## Harvest contract
+
+`harvest_manifest.json` must inventory required scientific families, not merely files under a short allowlist. Required families are pipeline state, extraction, normalized specs, Stage 3 profiles, implementation certification, formula-test source and durable test output, evaluation plan and bundles, truth match, and both report formats. Worker runners under `scripts/` and tests under `tests/` are retained. Python bytecode and cache directories are excluded.
+
+The manifest records copied-file hash verification separately from scientific review readiness. `omitted_files`, `missing_required_artifact_families`, and `review_ready` must make gaps explicit. An empty `omitted_files` list does not imply that the run is review-ready.
 
 ## Worker assignment
 
@@ -65,6 +84,8 @@ Use integer scores from zero through five:
 A selected factor needs formula clarity and within-paper performance strength of at least three. The paper's explicit final recommendation takes priority over cross-factor diversity or compute convenience. Use total score only to order candidates inside the same paper when the paper recommends more than ten or provides no final list.
 
 ## Review contract
+
+Persist `reviewer_assignment.json` before reviewer dispatch using the orchestrator-observed task ID. The reviewer task must differ from the writer and every task already used by another run in the batch. Requested model, actual-runtime-model evidence, and model-verification status are separate fields; never treat reviewer-authored JSON as identity or model proof. Persist `reviewer_completion.json` with hashes of the assignment and final review.
 
 The independent review must cite artifact paths and check:
 

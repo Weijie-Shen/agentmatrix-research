@@ -5,7 +5,10 @@ from typing import Any
 
 import pandas as pd
 
-from research_core.factor_lab.paper_reproduction.extraction import ExtractedTruthSource
+from research_core.factor_lab.paper_reproduction.extraction import (
+    ICAnalysisPaperExtraction,
+    ExtractedTruthSource,
+)
 from research_core.factor_lab.paper_reproduction.evaluation_execution import EvaluationBundle
 from research_core.factor_lab.paper_reproduction.extraction import PaperExtraction
 
@@ -143,22 +146,16 @@ def interpret_truth_match_quality(
 
 def compare_evaluation_bundle_to_paper_truth(
     bundle: EvaluationBundle,
-    extraction: PaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction,
 ) -> dict[str, list[PaperTruthMatchResult]]:
     """Truth-match every executed durable record using its preserved case policy."""
 
-    factors = {factor.factor_name: factor for factor in extraction.target_factors}
-    results: dict[str, list[PaperTruthMatchResult]] = {name: [] for name in factors}
+    truth_by_factor = _truth_sources_by_factor(extraction)
+    results: dict[str, list[PaperTruthMatchResult]] = {name: [] for name in truth_by_factor}
     for record in bundle.records:
         if record.lifecycle_state != "executed":
             continue
-        factor = factors.get(record.factor_name)
-        if factor is None:
-            continue
-        truth = next(
-            (source for source in factor.truth_sources if source.truth_id == record.source_truth_id),
-            None,
-        )
+        truth = truth_by_factor.get(record.factor_name, {}).get(record.source_truth_id)
         if truth is None:
             continue
         metrics = _record_metrics(record.evaluator_output)
@@ -172,6 +169,35 @@ def compare_evaluation_bundle_to_paper_truth(
             )
         )
     return results
+
+
+def _truth_sources_by_factor(
+    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+) -> dict[str, dict[str, ExtractedTruthSource]]:
+    if isinstance(extraction, PaperExtraction):
+        return {
+            factor.factor_name: {source.truth_id: source for source in factor.truth_sources}
+            for factor in extraction.target_factors
+        }
+
+    result: dict[str, dict[str, ExtractedTruthSource]] = {
+        factor.factor_id: {} for factor in extraction.factor_definitions
+    }
+    for source in extraction.truth_sources:
+        location = ", ".join(
+            f"{key}={value}" for key, value in source.source.items() if value not in (None, "")
+        )
+        for factor_id, metrics in source.reported_results.items():
+            result.setdefault(factor_id, {})[source.truth_source_id] = ExtractedTruthSource(
+                truth_id=source.truth_source_id,
+                description="IC-analysis paper result block",
+                source_location=location,
+                evaluation_method="ic_analysis",
+                evaluation_family="ic_analysis",
+                metrics=dict(metrics),
+                notes=list(source.notes),
+            )
+    return result
 
 
 def _record_metrics(evaluator_output: dict[str, Any]) -> dict[str, Any]:

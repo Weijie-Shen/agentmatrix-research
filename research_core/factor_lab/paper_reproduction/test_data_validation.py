@@ -102,7 +102,6 @@ class PaperInputDataValidationTest(unittest.TestCase):
         result = materialize_forward_return(frame, 1)
 
         self.assertEqual(result[["date", "code"]].to_dict("records"), frame[["date", "code"]].to_dict("records"))
-        returns = dict(zip(result["code"], result["forward_return_1d"]))
         first_a = result.loc[(result["code"] == "AAA") & (result["date"] == pd.Timestamp("2020-01-01")), "forward_return_1d"].iloc[0]
         first_b = result.loc[(result["code"] == "BBB") & (result["date"] == pd.Timestamp("2020-01-01")), "forward_return_1d"].iloc[0]
         self.assertAlmostEqual(first_a, 10.0 / 10.1 - 1)

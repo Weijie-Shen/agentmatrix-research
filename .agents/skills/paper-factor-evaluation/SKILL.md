@@ -1,6 +1,6 @@
 ---
 name: paper-factor-evaluation
-description: Plan, execute, and truth-match paper-aware factor evaluations in AgentMatrix Factor Lab. Use for Stages 6-7, resolved evaluation cases, ordered transforms and neutralization, resource-bounded execution, IC/regression or paper-local evaluators, metric eligibility, comparability, and paper-reported evaluation-result matching.
+description: Plan, execute, and truth-match paper-aware IC evaluations in AgentMatrix Factor Lab. Use for Stages 6-7, resolved IC truth sources, ordered transforms and neutralization, resource-bounded execution, metric eligibility, comparability, and paper-reported evaluation-result matching.
 ---
 
 # Paper Factor Evaluation
@@ -9,17 +9,17 @@ Evaluate the implemented factor under the paper's protocol or an explicitly reso
 
 ## Plan before computing
 
-Read candidate evaluation truth, data profiles, support assessments, implementation artifacts, and evaluator capabilities. Use `build_paper_evaluation_plan(...)` to:
+Read candidate IC truth, data profiles, Stage-3 support assessments, implementation artifacts, and evaluator capabilities. For `paper_extraction.ic_analysis.v2`, a persisted Stage-3 data profile is mandatory: Stage 6 must not select a case from paper evidence alone. Use `build_paper_evaluation_plan(...)` to:
 
 1. assess every candidate truth source;
-2. select the highest-supported truth without looking at metric closeness;
+2. select exactly one highest-supported, unconflicted IC truth source per factor without looking at metric closeness;
 3. preserve `paper_protocol`;
 4. create separate `resolved_protocol` records;
 5. record structured deviations and affected metrics;
 6. assign comparability and metric eligibility;
 7. execute only selected cases.
 
-Every truth case needs one lifecycle outcome: `selected`, `executed`, `deferred_by_budget`, `unsupported_evaluator`, `insufficient_data`, `superseded_by_better_supported_truth`, or `evaluation_error`.
+Every truth case needs one lifecycle outcome: `selected`, `executed`, `deferred_by_budget`, `unsupported_evaluator`, `insufficient_data`, `paper_truth_conflict`, `superseded_by_better_supported_truth`, or `evaluation_error`.
 
 Do not complete Stage 6 with zero selected cases merely because the first extracted case is data-heavy. Revisit alternative extracted truth, materialize constructible labels, and resolve accepted proxies first. Defer all cases only after those general recovery paths are exhausted and recorded.
 
@@ -27,11 +27,11 @@ If support assessment marks a case executable, Stage 6 requires an actual canoni
 
 Resource evidence must describe the actual requested panel. Never substitute a probe or reduced frame while declaring a full-period request, and never choose an artificially tiny memory budget to manufacture a deferral. Set `memory_budget_bytes` from a real runtime limit when one is known; otherwise leave it unset and let the actual execution establish whether the environment can complete it.
 
-Prefer at most two evaluation methods per run unless the user requires more. Unsupported secondary cases remain report-visible and do not count as failed comparisons. If no generic method supports the primary case, implement a tested paper-local evaluator inside the family rather than adding one-off behavior to generic evaluators.
+The v2 workflow has only the `ic_analysis` evaluator type. Rank-IC mean, ICIR, IC standard deviation, and positive-ratio measures printed in the selected result block are computed together and compared together when eligible. Alternative raw/neutralized/horizon/sample protocols remain report-visible as superseded, conflicted, or unsupported cases; they are not additional selected methods.
 
 ## Resolve protocol safely
 
-Keep paper requirements and runtime decisions side by side. For substitutions record semantic relationship, reason, expected effect, affected metrics, selection mode, and downgraded comparability.
+Keep paper requirements and runtime decisions side by side. Preserve shared protocol, universe, operation-pipeline, metric, and semantic-requirement IDs in `paper_protocol`; place only local bindings and substitutions in `resolved_protocol`. For substitutions record semantic relationship, reason, expected effect, affected metrics, selection mode, and downgraded comparability.
 
 Do not silently:
 
@@ -55,13 +55,13 @@ Apply the resolved `transform_spec` exactly in order. Preserve structured transf
 
 Distinguish explicit `none`, inferred method, project default, and unknown. Never override explicit `none`. Do not flatten transformed controls into raw column names.
 
-Keep the full calculation panel separate from evaluation inputs. Join certified factor output only by unique date/security keys. Apply ST/PT, suspension, future-tradability, and portfolio eligibility masks only at their declared evaluation stage.
+Keep the full calculation panel separate from evaluation inputs. Join certified factor output only by unique date/security keys. Apply ST/PT, suspension, future-tradability, and portfolio eligibility masks only at their declared evaluation stage. In the common all-A protocol, factor history includes ST and suspended observations when otherwise valid; the evaluation cross-section removes ST/PT at the signal date and securities suspended on the extracted next-evaluation date.
 
 ## Return and metric correctness
 
 Use forward alignment for future returns. Use `materialize_forward_return(...)` only for security-observation horizons; use `materialize_calendar_forward_return(...)` for exact exchange-trading-day `T+h` horizons. Do not compute past returns or let suspension/missing observations redefine the paper horizon.
 
-Respect frequency: `t+1` means the next relevant period, not automatically the next trading day. Preserve IC type, horizon, regression controls/weights, fees, benchmark, layers, and sign conventions.
+Respect frequency: `t+1` means the next relevant period, not automatically the next trading day. Build timing from the extracted signal date, status-filter effective dates, exchange-calendar `T+h` target, and paper-defined return interval; do not hardcode every case to an entry at `t+1`. Preserve IC rank type, horizon, preprocessing/control order, and sign conventions.
 
 Run selected cases through `execute_evaluation_plan(...)` with `EvaluationDataContext.resource_config` for full-period work. Honor resource preflight, column projection, sequential execution, and verified partitions.
 
@@ -73,7 +73,7 @@ Persist each completed scenario immediately with `export_evaluation_bundle(...)`
 
 ## Truth matching
 
-Use `compare_evaluation_metrics_to_paper_truth(...)` only on paper-reported `evaluation_results` and metrics marked truth-match eligible.
+Use `compare_evaluation_metrics_to_paper_truth(...)` only on metrics reported by the selected IC truth source and marked truth-match eligible. Never use the resulting distance to revisit truth-source selection.
 
 For persisted scenario bundles, use `compare_evaluation_bundle_to_paper_truth(...)` so comparability and metric-eligibility policy comes from each execution record rather than being reconstructed after interruption.
 

@@ -5,7 +5,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from research_core.factor_lab.paper_reproduction.agent_harness_review import AgentHarnessRunAssessment
 from research_core.factor_lab.paper_reproduction.paper_autotest import (
     FactorSelectionEvidence,
     PaperSelectionArtifact,
@@ -17,6 +19,7 @@ from research_core.factor_lab.paper_reproduction.paper_autotest import (
     prepare_test_worktree,
     record_deterministic_assessment,
     record_independent_review,
+    record_reviewer_started,
     record_worker_started,
     record_worker_stopped,
     validate_selection,
@@ -126,7 +129,7 @@ class PaperAutotestTest(unittest.TestCase):
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(json.dumps({"paper_id": "demo"}), encoding="utf-8")
             record_worker_started(plan, worker_task_id="terra-worker-1")
-            record_worker_stopped(plan, outcome="completed", details={"message": "fixture done"})
+            record_worker_stopped(plan, outcome="failed", details={"message": "fixture done"})
 
             harvest_path = harvest_run_artifacts(plan)
             harvest = json.loads(harvest_path.read_text(encoding="utf-8"))
@@ -138,9 +141,34 @@ class PaperAutotestTest(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "both persisted reviews"):
                 cleanup_test_worktree(plan)
             record_deterministic_assessment(plan, {"complete": False, "defects": ["fixture"]})
+            record_reviewer_started(
+                plan,
+                reviewer_task_id="sol-reviewer-1",
+                runtime_model_evidence={
+                    "actual_model": "gpt-5.6-sol",
+                    "source": "test dispatcher fixture",
+                },
+            )
+            with self.assertRaisesRegex(ValueError, "complete deterministic assessment"):
+                record_independent_review(
+                    plan,
+                    {
+                        "verdict": "complete",
+                        "blocking_defects": [],
+                        "limitations": [],
+                        "cited_artifact_paths": [str(harvest_path)],
+                    },
+                )
             record_independent_review(
                 plan,
-                {"verdict": "incomplete", "blocking_defects": ["fixture"], "limitations": []},
+                {
+                    "reviewer_task_id": "sol-reviewer-1",
+                    "requested_model": "gpt-5.6-sol",
+                    "verdict": "incomplete",
+                    "blocking_defects": ["fixture"],
+                    "limitations": [],
+                    "cited_artifact_paths": [str(harvest_path)],
+                },
             )
 
             cleanup_test_worktree(plan)
@@ -156,6 +184,7 @@ class PaperAutotestTest(unittest.TestCase):
                     "worker_stopped",
                     "harvested",
                     "deterministic_reviewed",
+                    "reviewer_running",
                     "independently_reviewed",
                     "incomplete",
                     "cleaned",
@@ -165,6 +194,213 @@ class PaperAutotestTest(unittest.TestCase):
                 ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{plan.branch}"], cwd=repo, check=False
             )
             self.assertNotEqual(branch_check.returncode, 0)
+
+            batch = json.loads((Path(plan.control_root).parents[1] / "batch_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(batch["status"], "incomplete")
+            self.assertEqual(batch["runs"][0]["review_verdict"], "incomplete")
+
+    def test_harvest_captures_required_scientific_families_scripts_and_ignores_bytecode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            papers = root / "papers"
+            worktrees = root / "worktrees"
+            repo.mkdir()
+            papers.mkdir()
+            (papers / "Demo Paper.pdf").write_bytes(b"paper")
+            self._init_framework_repo(repo)
+            selection = PaperSelectionArtifact(
+                paper=discover_test_papers(papers)[0],
+                selected_factors=[self._factor("FactorA")],
+            )
+            plan = create_batch_manifest(
+                batch_id="harvest-families",
+                papers_root=papers,
+                repository_root=repo,
+                base_ref="HEAD",
+                selections=[selection],
+                worktree_root=worktrees,
+            ).runs[0]
+            worktree = prepare_test_worktree(plan)
+            prepare_run_harness(plan)
+            fixture_files = {
+                "runtime/factor_lab/paper_jobs/job.json": "{}",
+                "runtime/factor_lab/paper_specs/extraction.json": "{}",
+                "runtime/factor_lab/specs/specs.json": "{}",
+                "runtime/factor_lab/data_profiles/qfq.json": "{}",
+                "runtime/factor_lab/implementation_artifacts/implementation.json": "{}",
+                "runtime/factor_lab/test_results/pytest.txt": "2 passed",
+                "runtime/factor_lab/evaluation_plans/plan.json": "{}",
+                "runtime/factor_lab/evaluation_bundles/qfq.json": "{}",
+                "runtime/factor_lab/truth_matches/matches.json": "{}",
+                "runtime/factor_lab/reports/report.json": "{}",
+                "runtime/factor_lab/reports/report.md": "# report",
+                "research_core/factor_lab/libraries/demo/test_factors.py": "def test_factor(): pass\n",
+                "research_core/factor_lab/libraries/demo/__pycache__/test_factors.pyc": "bytecode",
+                "scripts/run_demo.py": "print(1)\n",
+            }
+            for relative, content in fixture_files.items():
+                path = worktree / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            record_worker_started(plan, worker_task_id="terra-worker-harvest")
+            record_worker_stopped(plan, outcome="failed")
+
+            manifest = json.loads(harvest_run_artifacts(plan).read_text(encoding="utf-8"))
+            paths = {item["path"] for item in manifest["files"]}
+
+            self.assertTrue(manifest["review_ready"])
+            self.assertEqual(manifest["missing_required_artifact_families"], [])
+            self.assertIn("runtime/factor_lab/data_profiles/qfq.json", paths)
+            self.assertIn("runtime/factor_lab/implementation_artifacts/implementation.json", paths)
+            self.assertIn("runtime/factor_lab/truth_matches/matches.json", paths)
+            self.assertIn("scripts/run_demo.py", paths)
+            self.assertNotIn("research_core/factor_lab/libraries/demo/__pycache__/test_factors.pyc", paths)
+            self.assertEqual(manifest["observed_git_head"], plan.base_commit)
+            self.assertTrue(Path(manifest["worktree_ownership_path"]).is_file())
+
+            assessment_path = record_deterministic_assessment(plan, {"complete": True})
+            assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+            self.assertFalse(assessment["complete"])
+            self.assertFalse(assessment["diagnostics"]["submitted_assessment_agreed"])
+
+    def test_reviewer_provenance_is_control_plane_owned_and_requires_fresh_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            papers = root / "papers"
+            worktrees = root / "worktrees"
+            repo.mkdir()
+            papers.mkdir()
+            (papers / "Demo Paper.pdf").write_bytes(b"paper")
+            self._init_framework_repo(repo)
+            plan = create_batch_manifest(
+                batch_id="reviewer-provenance",
+                papers_root=papers,
+                repository_root=repo,
+                base_ref="HEAD",
+                selections=[
+                    PaperSelectionArtifact(
+                        paper=discover_test_papers(papers)[0],
+                        selected_factors=[self._factor("FactorA")],
+                    )
+                ],
+                worktree_root=worktrees,
+            ).runs[0]
+            prepare_test_worktree(plan)
+            prepare_run_harness(plan)
+            record_worker_started(plan, worker_task_id="terra-worker-1")
+            record_worker_stopped(plan, outcome="failed")
+            harvest_path = harvest_run_artifacts(plan)
+            record_deterministic_assessment(plan, {"complete": False})
+
+            with self.assertRaisesRegex(ValueError, "differ from the worker"):
+                record_reviewer_started(plan, reviewer_task_id="terra-worker-1")
+            with self.assertRaisesRegex(ValueError, "must match the run plan"):
+                record_reviewer_started(
+                    plan,
+                    reviewer_task_id="sol-reviewer-1",
+                    requested_model="gpt-5.6-terra",
+                )
+            manifest_path = Path(plan.control_root).parents[1] / "batch_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            reused = dict(manifest["runs"][0])
+            reused["run_id"] = "another-run"
+            reused["worker_task_id"] = "previous-terra-task"
+            manifest["runs"].append(reused)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not fresh within the batch"):
+                record_reviewer_started(plan, reviewer_task_id="previous-terra-task")
+            assignment_path = record_reviewer_started(plan, reviewer_task_id="sol-reviewer-1")
+            assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+            self.assertEqual(assignment["actual_model_status"], "unverified")
+            self.assertTrue(assignment["independence_checks"]["different_from_worker"])
+            self.assertTrue(assignment["review_inputs"])
+
+            with self.assertRaisesRegex(ValueError, "conflicts"):
+                record_independent_review(
+                    plan,
+                    {
+                        "reviewer_task_id": "wrong-reviewer",
+                        "verdict": "incomplete",
+                        "blocking_defects": ["fixture"],
+                        "limitations": [],
+                        "cited_artifact_paths": [str(harvest_path)],
+                    },
+                )
+            review_path = record_independent_review(
+                plan,
+                {
+                    "verdict": "incomplete",
+                    "blocking_defects": ["fixture"],
+                    "limitations": [],
+                    "cited_artifact_paths": [str(harvest_path)],
+                },
+            )
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            completion = json.loads(
+                (Path(plan.control_root) / "reviewer_completion.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(review["reviewer_task_id"], "sol-reviewer-1")
+            self.assertEqual(review["provenance"]["actual_model_status"], "unverified")
+            self.assertEqual(completion["reviewer_task_id"], "sol-reviewer-1")
+            self.assertEqual(completion["review_sha256"], __import__("hashlib").sha256(review_path.read_bytes()).hexdigest())
+
+    def test_completed_worker_is_kept_running_until_fresh_gate_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            papers = root / "papers"
+            worktrees = root / "worktrees"
+            repo.mkdir()
+            papers.mkdir()
+            (papers / "Demo Paper.pdf").write_bytes(b"paper")
+            self._init_framework_repo(repo)
+            plan = create_batch_manifest(
+                batch_id="worker-gate",
+                papers_root=papers,
+                repository_root=repo,
+                base_ref="HEAD",
+                selections=[
+                    PaperSelectionArtifact(
+                        paper=discover_test_papers(papers)[0],
+                        selected_factors=[self._factor("FactorA")],
+                    )
+                ],
+                worktree_root=worktrees,
+            ).runs[0]
+            prepare_test_worktree(plan)
+            prepare_run_harness(plan)
+            record_worker_started(plan, worker_task_id="terra-worker-gated")
+            failed = AgentHarnessRunAssessment(
+                complete=False,
+                worktree=plan.worktree,
+                expected_factors=["FactorA"],
+                defects=["[tests] missing formula coverage"],
+                earliest_invalid_stage="implementation_tests",
+                repair_actions=["Add tests."],
+            )
+            passed = AgentHarnessRunAssessment(
+                complete=True,
+                worktree=plan.worktree,
+                expected_factors=["FactorA"],
+            )
+            with patch(
+                "research_core.factor_lab.paper_reproduction.agent_harness_review.assess_agent_harness_run",
+                side_effect=[failed, passed],
+            ):
+                with self.assertRaisesRegex(ValueError, "keep the worker active"):
+                    record_worker_stopped(plan, outcome="completed")
+                self.assertEqual(plan.status, "running")
+                self.assertEqual(plan.worker_gate_pass_count, 1)
+                record_worker_stopped(plan, outcome="completed")
+
+            self.assertEqual(plan.status, "worker_stopped")
+            self.assertEqual(plan.worker_gate_pass_count, 2)
+            gate_history = sorted((Path(plan.control_root) / "worker_gate_assessments").glob("*.json"))
+            self.assertEqual(len(gate_history), 2)
+            latest = json.loads((Path(plan.control_root) / "worker_completion_gate.json").read_text(encoding="utf-8"))
+            self.assertTrue(latest["complete"])
 
     def _init_framework_repo(self, repo: Path) -> None:
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)

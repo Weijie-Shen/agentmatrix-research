@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from contracts.factor_research import FactorResearchSpec
-from research_core.factor_lab.paper_reproduction.extraction import PaperExtraction
+from research_core.factor_lab.paper_reproduction.extraction import ICAnalysisPaperExtraction, PaperExtraction
 from research_core.factor_lab.paper_reproduction.paper_evaluation import PaperEvaluationPlan
 from research_core.factor_lab.paper_reproduction.pipeline import (
     PaperReproductionPipelineState,
@@ -20,7 +20,7 @@ from research_core.factor_lab.runtime import FactorLabWorkspaceConfig, now_iso
 def build_paper_reproduction_report(
     *,
     job_id: str,
-    extraction: PaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction,
     specs: list[FactorResearchSpec],
     pipeline_state: PaperReproductionPipelineState | None = None,
     evaluation_plan: PaperEvaluationPlan | None = None,
@@ -50,11 +50,12 @@ def build_paper_reproduction_report(
     factors = []
     status_counts: dict[str, int] = {}
     truth_status_counts: dict[str, int] = {}
-    for factor in extraction.target_factors:
-        spec = spec_by_name.get(factor.factor_name)
+    for factor in _extraction_factor_views(extraction, specs):
+        factor_name = str(factor["factor_name"])
+        spec = spec_by_name.get(factor_name)
         spec_metadata = dict(spec.metadata) if spec else {}
-        factor_evaluation_plan = _as_plain_dict(evaluation_plan_by_name.get(factor.factor_name))
-        factor_truth_results = truth_results.get(factor.factor_name, [])
+        factor_evaluation_plan = _as_plain_dict(evaluation_plan_by_name.get(factor_name))
+        factor_truth_results = truth_results.get(factor_name, [])
         for item in factor_truth_results:
             status = str(item.get("status", "unknown"))
             truth_status_counts[status] = truth_status_counts.get(status, 0) + 1
@@ -63,16 +64,16 @@ def build_paper_reproduction_report(
         selected_truth_id = str(
             selected_truth.get("source_truth_id")
             or selected_truth.get("truth_id")
-            or (factor.selected_truth_source_ids[0] if factor.selected_truth_source_ids else "")
+            or (factor["selected_truth_source_ids"][0] if factor["selected_truth_source_ids"] else "")
         )
         selected_truth_reason = str(
-            selected_truth.get("selection_reason") or factor.truth_selection_rule or ""
+            selected_truth.get("selection_reason") or factor["truth_selection_rule"] or ""
         )
         selected_truth_source = next(
             (
-                _as_plain_dict(source)
-                for source in factor.truth_sources
-                if source.truth_id == selected_truth_id
+                source
+                for source in factor["truth_sources"]
+                if str(source.get("truth_source_id") or source.get("truth_id", "")) == selected_truth_id
             ),
             {},
         )
@@ -81,14 +82,14 @@ def build_paper_reproduction_report(
         status_counts[factor_status] = status_counts.get(factor_status, 0) + 1
         factors.append(
             {
-                "factor_name": factor.factor_name,
-                "formula": factor.formula,
-                "required_fields": list(factor.required_fields),
-                "frequency": factor.frequency,
-                "sample_period": factor.sample_period,
-                "universe": factor.universe,
-                "truth_sources": [_as_plain_dict(source) for source in factor.truth_sources],
-                "evaluation_cases": [_as_plain_dict(source) for source in factor.truth_sources],
+                "factor_name": factor_name,
+                "formula": factor["formula"],
+                "required_fields": list(factor["required_fields"]),
+                "frequency": factor["frequency"],
+                "sample_period": factor["sample_period"],
+                "universe": factor["universe"],
+                "truth_sources": list(factor["truth_sources"]),
+                "evaluation_cases": list(factor["truth_sources"]),
                 "assessed_evaluation_cases": factor_evaluation_plan.get("assessed_evaluation_cases", []),
                 "selected_evaluation_cases": selected_cases,
                 "skipped_evaluation_cases": factor_evaluation_plan.get("skipped_evaluation_cases", []),
@@ -112,11 +113,11 @@ def build_paper_reproduction_report(
                 ),
                 "truth_results": factor_truth_results,
                 "evaluation_executions": [
-                    record for record in execution_records if record.get("factor_name") == factor.factor_name
+                    record for record in execution_records if record.get("factor_name") == factor_name
                 ],
                 "spec_status": factor_status,
                 "data_requirements": spec_metadata.get("data_requirements", {}),
-                "known_limitations": spec_metadata.get("known_limitations", list(factor.known_limitations)),
+                "known_limitations": spec_metadata.get("known_limitations", list(factor["known_limitations"])),
                 "spec_metadata": spec_metadata,
                 "ambiguities": spec_metadata.get("factor_ambiguities_by_category", {}),
             }
@@ -136,15 +137,7 @@ def build_paper_reproduction_report(
     return {
         "job_id": job_id,
         "generated_at": now_iso(),
-        "paper": {
-            "paper_id": extraction.paper_id,
-            "title": extraction.title,
-            "authors": list(extraction.authors),
-            "source": extraction.source,
-            "year": extraction.year,
-            "factor_family_name": extraction.factor_family_name,
-            "extraction_scope": extraction.extraction_scope,
-        },
+        "paper": _paper_report_metadata(extraction),
         "summary": {
             "overall_status": overall_status,
             "factor_count": len(factors),
@@ -723,7 +716,20 @@ def _truth_case_counts(factors: list[dict[str, Any]], truth_results: dict[str, l
     selected = sum(len(factor.get("selected_evaluation_cases", [])) for factor in factors)
     assessed = sum(len(factor.get("assessed_evaluation_cases", [])) for factor in factors)
     extracted = sum(len(factor.get("truth_sources", [])) for factor in factors)
-    deferred = sum(len(factor.get("deferred_evaluation_cases", [])) + len(factor.get("unsupported_evaluation_cases", [])) for factor in factors)
+    lifecycle_counts: dict[str, int] = {}
+    for factor in factors:
+        for collection in (
+            "skipped_evaluation_cases",
+            "unsupported_evaluation_cases",
+            "deferred_evaluation_cases",
+        ):
+            for case in factor.get(collection, []):
+                lifecycle = str(case.get("lifecycle_state", "unknown") or "unknown")
+                lifecycle_counts[lifecycle] = lifecycle_counts.get(lifecycle, 0) + 1
+    deferred = sum(
+        lifecycle_counts.get(state, 0)
+        for state in ("deferred_by_budget", "unsupported_evaluator", "insufficient_data")
+    )
     selected_by_factor = {
         factor["factor_name"]: {
             str(case.get("source_truth_id") or case.get("truth_id", ""))
@@ -749,6 +755,8 @@ def _truth_case_counts(factors: list[dict[str, Any]], truth_results: dict[str, l
         "truth_cases_matched": sum(1 for result in executed_results if result.get("status") in matched_statuses),
         "truth_cases_inconsistent": sum(1 for result in executed_results if result.get("status") == "inconsistent"),
         "truth_cases_deferred": deferred,
+        "truth_cases_conflicted": lifecycle_counts.get("paper_truth_conflict", 0),
+        "truth_cases_superseded": lifecycle_counts.get("superseded_by_better_supported_truth", 0),
     }
 
 
@@ -773,9 +781,97 @@ def _is_executed_selected_truth_result(result: dict[str, Any], selected_ids: set
         return False
     if result.get("lifecycle_state") and result.get("lifecycle_state") != "executed":
         return False
-    if result.get("status") in {"not_evaluated", "unsupported_evaluator", "deferred_by_budget", "insufficient_data"}:
+    if result.get("status") in {
+        "not_evaluated",
+        "unsupported_evaluator",
+        "deferred_by_budget",
+        "insufficient_data",
+        "paper_truth_conflict",
+        "superseded_by_better_supported_truth",
+    }:
         return False
     return bool(truth_id)
+
+
+def _extraction_factor_views(
+    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+    specs: list[FactorResearchSpec],
+) -> list[dict[str, Any]]:
+    """Return a report-facing view without mutating or denormalizing Stage-1 evidence."""
+
+    if isinstance(extraction, PaperExtraction):
+        return [
+            {
+                "factor_name": factor.factor_name,
+                "formula": factor.formula,
+                "required_fields": list(factor.required_fields),
+                "frequency": factor.frequency,
+                "sample_period": factor.sample_period,
+                "universe": factor.universe,
+                "truth_sources": [asdict(source) for source in factor.truth_sources],
+                "selected_truth_source_ids": list(factor.selected_truth_source_ids),
+                "truth_selection_rule": factor.truth_selection_rule,
+                "known_limitations": list(factor.known_limitations),
+            }
+            for factor in extraction.target_factors
+        ]
+
+    spec_by_name = {spec.factor_name: spec for spec in specs}
+    views: list[dict[str, Any]] = []
+    for factor in extraction.factor_definitions:
+        spec = spec_by_name.get(factor.factor_id)
+        metadata = dict(spec.metadata) if spec else {}
+        truth_sources = list(metadata.get("truth_sources", []) or [])
+        sample_periods = list(
+            dict.fromkeys(str(source.get("sample_period", "")) for source in truth_sources if source.get("sample_period"))
+        )
+        universes = list(
+            dict.fromkeys(str(source.get("universe", "")) for source in truth_sources if source.get("universe"))
+        )
+        views.append(
+            {
+                "factor_name": factor.factor_id,
+                "formula": factor.formula,
+                "required_fields": list(spec.required_fields) if spec else list(factor.required_semantic_fields),
+                "frequency": factor.native_frequency,
+                "sample_period": "; ".join(sample_periods),
+                "universe": "; ".join(universes),
+                "truth_sources": truth_sources,
+                # Selection is deliberately absent from immutable Stage 1 and is
+                # populated only from the Stage-6 evaluation plan above.
+                "selected_truth_source_ids": [],
+                "truth_selection_rule": str(extraction.truth_selection_policy.get("rule", "")),
+                "known_limitations": list(metadata.get("known_limitations", []) or []),
+            }
+        )
+    return views
+
+
+def _paper_report_metadata(
+    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+) -> dict[str, Any]:
+    if isinstance(extraction, PaperExtraction):
+        return {
+            "paper_id": extraction.paper_id,
+            "title": extraction.title,
+            "authors": list(extraction.authors),
+            "source": extraction.source,
+            "year": extraction.year,
+            "factor_family_name": extraction.factor_family_name,
+            "extraction_scope": extraction.extraction_scope,
+        }
+    publication = extraction.paper.get("publication", {}) or {}
+    return {
+        "paper_id": extraction.paper.get("paper_id") or extraction.artifact_id,
+        "title": extraction.paper.get("title", ""),
+        "authors": list(extraction.paper.get("authors", []) or []),
+        "source": extraction.paper.get("publisher") or extraction.paper.get("source", ""),
+        "year": publication.get("year") or extraction.paper.get("year"),
+        "factor_family_name": extraction.factor_family_name,
+        "extraction_scope": extraction.scope,
+        "extraction_schema_version": extraction.schema_version,
+        "artifact_role": extraction.artifact_role,
+    }
 
 
 def _as_plain_dict(value: Any) -> dict[str, Any]:

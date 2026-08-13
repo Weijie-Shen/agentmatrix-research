@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from research_core.factor_lab.paper_reproduction.extraction import ExtractedFactor
+from research_core.factor_lab.paper_reproduction.extraction import ExtractedFactor, ExtractedFactorDefinition
 from research_core.factor_lab.paper_reproduction.methodology import canonical_transform_method, transformed_input_methods
 
 
@@ -163,7 +163,14 @@ class DataFrameValidationRequest:
     code_column: str = "code"
 
     @classmethod
-    def from_factor(cls, factor: ExtractedFactor) -> DataFrameValidationRequest:
+    def from_factor(cls, factor: ExtractedFactor | ExtractedFactorDefinition) -> DataFrameValidationRequest:
+        if isinstance(factor, ExtractedFactorDefinition):
+            return cls(
+                factor_name=factor.factor_id,
+                required_columns=["date", "code", *[_canonical_formula_field_id(item) for item in factor.required_semantic_fields]],
+                frequency=factor.native_frequency,
+                required_lookback=_infer_required_lookback(factor.parameters),
+            )
         return cls(
             factor_name=factor.factor_name,
             required_columns=["date", "code", *factor.required_fields],
@@ -217,6 +224,7 @@ class EvaluationRequirementResult:
     execution_ready: bool = False
     pipeline_blocking: bool = False
     source_contexts: list[str] = field(default_factory=list)
+    semantic_definition: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -462,12 +470,22 @@ def assess_evaluation_case_support(
     metrics = list((truth_source.get("metrics", {}) or {}).keys())
     requirement_results: list[EvaluationRequirementResult] = []
     deviations: list[dict[str, Any]] = []
+    semantic_definitions = {
+        str(item.get("semantic_field_id")): dict(item)
+        for item in truth_source.get("semantic_requirements", []) or []
+        if isinstance(item, dict) and item.get("semantic_field_id")
+    }
 
     required_data = truth_source.get("required_data", {}) if isinstance(truth_source.get("required_data", {}), dict) else {}
     for category, raw_requirements in required_data.items():
         requirements = raw_requirements if isinstance(raw_requirements, list) else [raw_requirements]
         for requirement in [str(value) for value in requirements if str(value)]:
-            resolved = _resolve_requirement(requirement, profile)
+            semantic_definition = semantic_definitions.get(requirement, {})
+            resolved = (
+                _resolve_semantic_requirement(semantic_definition, profile)
+                if semantic_definition
+                else _resolve_requirement(requirement, profile)
+            )
             availability = resolved["availability"]
             severity = "material" if availability == "missing" else "minor"
             action = "try_alternative_truth_then_proxy" if availability == "missing" else "use_requested_field"
@@ -483,6 +501,7 @@ def assess_evaluation_case_support(
                 severity=severity if availability != "constructible" else "minor",
                 affected_metrics=affected,
                 recommended_action=action,
+                semantic_definition=semantic_definition,
             )
             requirement_results.append(result)
             if availability == "missing":
@@ -497,6 +516,29 @@ def assess_evaluation_case_support(
                         truth_matching_policy="proxy_or_diagnostic_only",
                     )
                 )
+
+    referenced_requirements = {
+        result.requirement for result in requirement_results
+    }
+    for semantic_id, definition in semantic_definitions.items():
+        if semantic_id in referenced_requirements or str(definition.get("kind", "")) == "evaluation_input":
+            continue
+        resolved = _resolve_semantic_requirement(definition, profile)
+        requirement_results.append(
+            EvaluationRequirementResult(
+                requirement=semantic_id,
+                category="formula_semantic" if str(definition.get("kind", "")) == "market_data" else str(definition.get("kind", "semantic_input")),
+                paper_value=definition,
+                available_value=resolved["available_value"],
+                availability=resolved["availability"],
+                substitute=resolved["substitute"],
+                severity="material" if resolved["relationship"] in {"proxy_substitute", "unsupported_substitute"} else "minor",
+                affected_metrics=metrics or ["*"],
+                recommended_action="use_requested_field" if resolved["execution_ready"] else "resolve_semantic_requirement",
+                semantic_definition=definition,
+                source_contexts=["semantic_requirements"],
+            )
+        )
 
     for result in _sample_period_requirement_results(truth_source, profile, metrics):
         requirement_results.append(result)
@@ -574,6 +616,41 @@ def assess_evaluation_case_support(
             )
         )
 
+    supported_operation_capabilities = set(
+        evaluator_capabilities.get("capabilities", {}).get("operation_pipeline_capabilities", []) or []
+    )
+    for capability in truth_source.get("operation_capability_requirements", []) or []:
+        available = str(capability) in supported_operation_capabilities
+        requirement_results.append(
+            EvaluationRequirementResult(
+                requirement=str(capability),
+                category="operation_capability",
+                paper_value=str(capability),
+                available_value=str(capability) if available else None,
+                availability="available" if available else "missing",
+                severity="fundamental" if not available else "minor",
+                affected_metrics=metrics or ["*"],
+                recommended_action="execute" if available else "paper_local_joint_evaluator_or_select_alternative_truth",
+                relationship="exact_alias" if available else "unsupported_substitute",
+                semantic_availability="exactly_available" if available else "missing",
+                execution_ready=available,
+                pipeline_blocking=False,
+                source_contexts=["operation_capability_requirements"],
+            )
+        )
+        if not available:
+            deviations.append(
+                structured_deviation(
+                    category="operation_capability",
+                    paper_value=str(capability),
+                    resolved_value=None,
+                    reason="The generic evaluator cannot execute this joint operation pipeline.",
+                    severity="fundamental",
+                    affected_metrics=metrics or ["*"],
+                    truth_matching_policy="not_evaluated",
+                )
+            )
+
     requirement_results = _deduplicate_requirement_results(requirement_results)
     for result in requirement_results:
         _enrich_requirement_result(result, profile)
@@ -633,6 +710,21 @@ def assess_evaluation_case_support(
     }:
         eligible = [] if comparability in {"not_comparable", "directional_only"} else eligible
         diagnostic = metrics
+    if truth_source.get("paper_truth_conflict"):
+        eligible = []
+        diagnostic = list(metrics)
+        deviations.append(
+            structured_deviation(
+                category="paper_truth_conflict",
+                paper_value=truth_source.get("conflict_group_id"),
+                resolved_value=None,
+                reason="Conflicting paper result blocks share this semantic protocol; extraction review has not established precedence.",
+                severity="fundamental",
+                affected_metrics=metrics or ["*"],
+                truth_matching_policy="not_evaluated",
+                source="paper_extraction_review",
+            )
+        )
     return EvaluationCaseSupportAssessment(
         truth_id=truth_id,
         support_score=support_score,
@@ -703,6 +795,148 @@ def _infer_required_lookback(parameters: dict[str, Any]) -> int:
 
 def _field_availability(field: str, profile: dict[str, Any]) -> str:
     return _resolve_requirement(field, profile)["availability"]
+
+
+def _resolve_semantic_requirement(definition: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    semantic_id = str(definition.get("semantic_field_id", ""))
+    kind = str(definition.get("kind", ""))
+    concept = str(definition.get("concept", ""))
+    columns = set(str(column) for column in profile.get("columns", []) or [])
+    conventions = profile.get("conventions", {}) if isinstance(profile.get("conventions", {}), dict) else {}
+
+    if kind == "classification":
+        physical = "industry" if "industry" in columns else "industry_code" if "industry_code" in columns else ""
+        if not physical:
+            return _missing_semantic_resolution()
+        selected = conventions.get("industry_classification", {}) or {}
+        selected_source = str(selected.get("source", "")).lower()
+        selected_level = selected.get("level")
+        expected_family = str(definition.get("taxonomy_family", "")).lower()
+        expected_level = definition.get("taxonomy_level")
+        expected_revision = str(definition.get("taxonomy_revision", "not_specified")).lower()
+        family_match = (
+            expected_family == "citic" and selected_source in {"citics", "citics_2019"}
+        ) or expected_family in {"", selected_source}
+        level_match = expected_level in (None, "") or int(selected_level or -1) == int(expected_level)
+        revision_match = (
+            expected_revision in {"", "not_specified"}
+            or ("2019" in expected_revision and selected_source == "citics_2019")
+            or ("2019" not in expected_revision and selected_source == "citics")
+        )
+        interval_rule = str(selected.get("interval_rule", ""))
+        timing_match = not interval_rule or interval_rule == "start_date <= date < cancel_date"
+        exact = family_match and level_match and revision_match and timing_match
+        relationship = FieldRelationship(
+            semantic_id,
+            physical,
+            "exact_alias" if exact else "proxy_substitute",
+            reason=(
+                "Local point-in-time industry source, level, and interval timing match the paper semantic requirement."
+                if exact
+                else "Local industry taxonomy source, revision, level, or effective-date semantics differ from the paper requirement."
+            ),
+            expected_effect="Industry residualization cross-sections may differ." if not exact else "",
+            requires_reporting=not exact,
+            source="semantic_requirement_resolver",
+        )
+        return _available_field_resolution(
+            physical,
+            profile,
+            relationship=relationship.relationship,
+            paper_field=semantic_id,
+            relationship_record=relationship,
+        )
+
+    if kind == "capitalization":
+        basis = str(definition.get("cap_basis", ""))
+        physical_by_basis = {
+            "total_company": "market_cap",
+            "total_a_share": "a_share_market_cap",
+            "circulating_a": "circulating_market_cap",
+            "free_float": "free_float_market_cap",
+        }
+        physical = physical_by_basis.get(basis, "")
+        if not physical or physical not in columns:
+            return _missing_semantic_resolution(candidate_field=physical)
+        relationship = FieldRelationship(
+            semantic_id,
+            physical,
+            "exact_alias",
+            reason=f"Local capitalization field preserves the paper's {basis} basis.",
+            source="semantic_requirement_resolver",
+        )
+        return _available_field_resolution(
+            physical,
+            profile,
+            relationship="exact_alias",
+            paper_field=semantic_id,
+            relationship_record=relationship,
+        )
+
+    if kind in {"market_data", "derived_style_control"}:
+        physical = _canonical_semantic_physical_field(semantic_id, concept)
+        if physical in columns:
+            relationship = FieldRelationship(
+                semantic_id,
+                physical,
+                "exact_alias",
+                reason="Canonical local field matches the extracted semantic concept.",
+                source="semantic_requirement_resolver",
+            )
+            return _available_field_resolution(
+                physical,
+                profile,
+                relationship="exact_alias",
+                paper_field=semantic_id,
+                relationship_record=relationship,
+            )
+        return _missing_semantic_resolution(candidate_field=physical)
+
+    if kind == "evaluation_universe_filter":
+        return _resolve_requirement(semantic_id, profile)
+
+    return _resolve_requirement(semantic_id, profile)
+
+
+def _missing_semantic_resolution(*, candidate_field: str = "") -> dict[str, Any]:
+    return {
+        "availability": "missing",
+        "semantic_availability": "missing",
+        "available_value": None,
+        "candidate_field": candidate_field,
+        "substitute": None,
+        "relationship": "unsupported_substitute",
+        "relationship_record": None,
+        "coverage_ratio": 0.0,
+        "execution_ready": False,
+    }
+
+
+def _canonical_semantic_physical_field(semantic_id: str, concept: str) -> str:
+    aliases = {
+        "daily_open_price": "open",
+        "daily_close_price": "close",
+        "daily_high_price": "high",
+        "daily_low_price": "low",
+        "daily_trading_volume": "volume",
+        "daily_volume_weighted_average_price": "vwap",
+        "past_20_trading_day_return": "style_return_20d",
+        "past_20_trading_day_average_turnover": "style_average_turnover_20d",
+        "past_20_trading_day_volatility": "style_volatility_20d",
+    }
+    return aliases.get(concept, semantic_id)
+
+
+def _canonical_formula_field_id(semantic_id: str) -> str:
+    aliases = {
+        "daily_open": "open",
+        "daily_close": "close",
+        "daily_high": "high",
+        "daily_low": "low",
+        "daily_volume": "volume",
+        "daily_vwap": "vwap",
+    }
+    return aliases.get(semantic_id, semantic_id.removeprefix("daily_"))
 
 
 def _resolve_requirement(field: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -926,14 +1160,18 @@ def _enrich_requirement_result(result: EvaluationRequirementResult, profile: dic
         result.execution_ready = result.availability != "missing"
         result.source_contexts = result.source_contexts or ["truth_source.sample_period"]
         return
-    if result.category == "evaluator_capability":
+    if result.category in {"evaluator_capability", "operation_capability"}:
         result.semantic_availability = "exactly_available" if result.availability == "available" else "missing"
         result.execution_ready = result.availability == "available"
         result.relationship = "exact_alias" if result.execution_ready else "unsupported_substitute"
-        result.source_contexts = result.source_contexts or ["evaluator_capabilities"]
+        result.source_contexts = result.source_contexts or [result.category]
         return
 
-    resolved = _resolve_requirement(result.requirement, profile)
+    resolved = (
+        _resolve_semantic_requirement(result.semantic_definition, profile)
+        if result.semantic_definition
+        else _resolve_requirement(result.requirement, profile)
+    )
     result.availability = str(resolved["availability"])
     result.semantic_availability = str(resolved["semantic_availability"])
     result.available_value = resolved["available_value"]
@@ -1000,7 +1238,11 @@ def _replacement_record(
         return None
     if result.relationship == "unsupported_substitute" and not (result.candidate_field or result.substitute):
         return None
-    resolved = _resolve_requirement(result.requirement, profile)
+    resolved = (
+        _resolve_semantic_requirement(result.semantic_definition, profile)
+        if result.semantic_definition
+        else _resolve_requirement(result.requirement, profile)
+    )
     relationship = resolved.get("relationship_record")
     if isinstance(relationship, FieldRelationship):
         relationship_payload = asdict(relationship)
@@ -1088,7 +1330,7 @@ def _case_is_executable(results: list[EvaluationRequirementResult]) -> bool:
     for result in results:
         if result.relationship == "unsupported_substitute" and result.candidate_field:
             return False
-        if result.category == "evaluator_capability" and not result.execution_ready:
+        if result.category in {"evaluator_capability", "operation_capability"} and not result.execution_ready:
             return False
         if result.category in {"evaluation", "return"} and not result.execution_ready:
             return False
@@ -1351,6 +1593,11 @@ def _transform_requirement_results(
     metrics: list[str],
 ) -> list[EvaluationRequirementResult]:
     transform_spec = truth_source.get("transform_spec", {}) if isinstance(truth_source.get("transform_spec", {}), dict) else {}
+    semantic_definitions = {
+        str(item.get("semantic_field_id")): dict(item)
+        for item in truth_source.get("semantic_requirements", []) or []
+        if isinstance(item, dict) and item.get("semantic_field_id")
+    }
     results: list[EvaluationRequirementResult] = []
     for step in transform_spec.get("steps", []) or []:
         if not isinstance(step, dict):
@@ -1359,7 +1606,12 @@ def _transform_requirement_results(
             continue
         controls = [str(control) for control in step.get("controls", []) or []]
         for control in controls:
-            resolved = _resolve_requirement(control, profile)
+            semantic_definition = semantic_definitions.get(control, {})
+            resolved = (
+                _resolve_semantic_requirement(semantic_definition, profile)
+                if semantic_definition
+                else _resolve_requirement(control, profile)
+            )
             results.append(
                 EvaluationRequirementResult(
                     requirement=control,
@@ -1372,6 +1624,7 @@ def _transform_requirement_results(
                     affected_metrics=metrics or ["*"],
                     recommended_action="use_transform_control" if resolved["availability"] != "missing" else "drop_or_defer_transform_control",
                     source_contexts=["transform_spec.neutralization.controls"],
+                    semantic_definition=semantic_definition,
                 )
             )
     neutralization_spec = (
@@ -1385,7 +1638,12 @@ def _transform_requirement_results(
         paper_field = str(control.get("paper_field") or control.get("field") or "")
         if not paper_field:
             continue
-        resolved = _resolve_requirement(paper_field, profile)
+        semantic_definition = semantic_definitions.get(paper_field, {})
+        resolved = (
+            _resolve_semantic_requirement(semantic_definition, profile)
+            if semantic_definition
+            else _resolve_requirement(paper_field, profile)
+        )
         results.append(
             EvaluationRequirementResult(
                 requirement=paper_field,
@@ -1400,6 +1658,7 @@ def _transform_requirement_results(
                     "transform_and_use_control" if resolved["availability"] != "missing" else "drop_or_defer_transform_control"
                 ),
                 source_contexts=["neutralization_spec.controls"],
+                semantic_definition=semantic_definition,
             )
         )
     return results

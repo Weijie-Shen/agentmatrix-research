@@ -81,6 +81,11 @@ class PaperReproductionAgentHarnessTest(unittest.TestCase):
             self.assertIn("Apply ST/PT, suspension, and future-tradability masks only at their declared evaluation stage", prompt)
             self.assertIn("persistent command session", prompt)
             self.assertIn("yield deadline is not process termination", prompt)
+            self.assertIn("deterministic completion gate", prompt)
+            self.assertIn("agent_harness_review", prompt)
+            self.assertIn("earliest_invalid_stage", prompt)
+            self.assertIn("--factor Alpha3", metadata["deterministic_gate_command"])
+            self.assertEqual(metadata["deterministic_gate_max_repair_passes"], 3)
 
     def test_missing_skill_path_fails_before_writing_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

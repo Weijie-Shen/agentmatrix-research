@@ -195,7 +195,25 @@ def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]
                 source.get("neutralization_spec", {}) if isinstance(source.get("neutralization_spec", {}), dict) else {}
             ),
             "universe_protocol": universe_protocol,
+            "paper_protocol_refs": dict(source.get("paper_protocol_refs", {}) or {}),
+            "protocol_id": str(source.get("protocol_id", "")),
+            "operation_pipeline_id": str(source.get("operation_pipeline_id", "")),
+            "operation_pipeline": dict(
+                source.get("operation_pipeline", {})
+                if isinstance(source.get("operation_pipeline", {}), dict)
+                else {}
+            ),
+            "semantic_requirements": list(source.get("semantic_requirements", []) or []),
         },
+        "truth_source_id": str(source.get("truth_source_id") or truth_id),
+        "protocol_id": str(source.get("protocol_id", "")),
+        "operation_pipeline_id": str(source.get("operation_pipeline_id", "")),
+        "paper_protocol_refs": dict(source.get("paper_protocol_refs", {}) or {}),
+        "semantic_requirements": list(source.get("semantic_requirements", []) or []),
+        "operation_capability_requirements": list(source.get("operation_capability_requirements", []) or []),
+        "conflict_group_id": source.get("conflict_group_id"),
+        "paper_truth_conflict": bool(source.get("paper_truth_conflict", False)),
+        "paper_truth_conflict_status": str(source.get("paper_truth_conflict_status", "none")),
     }
 
 
@@ -305,6 +323,17 @@ def _select_evaluation_cases(
     if data_profile is not None:
         return _select_evaluation_cases_by_support(valid_cases, skipped, data_profile=data_profile)
 
+    if any(case.get("paper_protocol_refs") for case in valid_cases):
+        unresolved = [
+            _case_with_lifecycle(
+                _case_with_skip_reason(case, "stage_3_support_assessment_required"),
+                "insufficient_data",
+            )
+            for case in valid_cases
+        ]
+        skipped.extend(unresolved)
+        return [], [], skipped, unresolved, [], []
+
     ordered = sorted(valid_cases, key=_case_priority)
     generic_cases = [case for case in ordered if case.get("evaluation_family") in GENERIC_EVALUATION_FAMILIES]
     unsupported_cases = [case for case in ordered if case.get("evaluation_family") not in GENERIC_EVALUATION_FAMILIES]
@@ -353,7 +382,19 @@ def _select_evaluation_cases_by_support(
     unsupported: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
     targets: list[dict[str, Any]] = []
+    canonical_ic_only = bool(ordered) and all(
+        case.get("evaluation_family") == "ic_analysis" and case.get("paper_protocol_refs")
+        for case in ordered
+    )
+    selection_limit = 1 if canonical_ic_only else MAX_EVALUATION_METHODS_PER_RUN
     for case in ordered:
+        if case.get("paper_truth_conflict"):
+            conflict_case = _case_with_lifecycle(
+                _case_with_skip_reason(case, "unresolved_paper_truth_conflict"),
+                "paper_truth_conflict",
+            )
+            unsupported.append(conflict_case)
+            continue
         if not case.get("case_executable", True):
             capability_missing = any(
                 result.get("category") == "evaluator_capability" and not result.get("execution_ready", True)
@@ -372,16 +413,23 @@ def _select_evaluation_cases_by_support(
             if case.get("evaluation_family") not in GENERIC_EVALUATION_FAMILIES:
                 targets.append(_implementation_target_from_case(case))
             continue
-        if len(selected) < MAX_EVALUATION_METHODS_PER_RUN:
+        if len(selected) < selection_limit:
             selected.append(
                 _resolved_case(
                     case,
-                    selection_reason="highest support score among assessed truth sources",
+                    selection_reason=(
+                        "highest semantic comparability and data-support score among assessed IC truth sources; "
+                        "reported metric values were not used"
+                        if canonical_ic_only
+                        else "highest support score among assessed truth sources"
+                    ),
                 )
             )
         else:
-            skipped_case = _case_with_skip_reason(case, "method_budget_exceeded")
-            deferred.append(_case_with_lifecycle(skipped_case, "deferred_by_budget"))
+            skipped_case = _case_with_lifecycle(
+                _case_with_skip_reason(case, "superseded_by_better_supported_truth"),
+                "superseded_by_better_supported_truth",
+            )
             skipped.append(skipped_case)
 
     if not selected and unsupported:
@@ -458,16 +506,15 @@ def _resolved_case(case: dict[str, Any], *, selection_reason: str) -> dict[str, 
         "transform_spec": resolved_transform_spec,
         "neutralization_spec": resolved_neutralization_spec,
         "universe_protocol": resolved_universe_protocol,
+        "paper_protocol_refs": dict(payload.get("paper_protocol_refs", {}) or {}),
+        "operation_pipeline_id": payload.get("operation_pipeline_id", ""),
         "timing": {
             "signal_date": "t",
             "history_cutoff": "t",
             "eligibility_date": "t",
-            "tradability_filter_date": "t+1",
-            "entry_date": "t+1",
-            "entry_price": "paper_defined",
-            "exit_date": "market_calendar_forward_horizon",
-            "exit_price": "paper_defined",
-            "return_interval": "entry_to_exit",
+            "tradability_filter_date": _tradability_filter_date(resolved_universe_protocol),
+            "return_target_date": "market_calendar_t_plus_h",
+            "return_interval": "paper_defined_factor_t_to_following_h_trading_days",
         },
     }
     payload.setdefault("comparability", "exact")
@@ -489,7 +536,7 @@ def _case_priority(case: dict[str, Any]) -> tuple[int, str]:
     return EVALUATION_METHOD_PRIORITY.get(family, EVALUATION_METHOD_PRIORITY["custom"]), str(case.get("truth_id", ""))
 
 
-def _support_priority(case: dict[str, Any]) -> tuple[float, int, int, int, str]:
+def _support_priority(case: dict[str, Any]) -> tuple[float, int, int, int, int, str]:
     comparability_rank = {
         "exact": 5,
         "materially_comparable": 4,
@@ -504,6 +551,7 @@ def _support_priority(case: dict[str, Any]) -> tuple[float, int, int, int, str]:
         -comparability_rank,
         -eligible_count,
         material_deviations,
+        -len(case.get("metrics", {}) or {}),
         str(case.get("truth_id", "")),
     )
 
@@ -666,6 +714,17 @@ def _resolved_sample_period(case: dict[str, Any]) -> str:
         if result.get("category") == "sample_period" and result.get("available_value"):
             return str(result["available_value"])
     return str(case.get("sample_period", ""))
+
+
+def _tradability_filter_date(universe_protocol: dict[str, Any]) -> str:
+    rules = [
+        str(item.get("effective_date_rule", ""))
+        for item in universe_protocol.get("filters", []) or []
+        if isinstance(item, dict)
+    ]
+    if any(any(token in rule.lower() for token in ("t_plus_1", "t+1", "next")) for rule in rules):
+        return "next_exchange_trading_day_t_plus_1"
+    return "signal_date_t"
 
 
 def _available_requirement_value(case: dict[str, Any], category: str) -> str:

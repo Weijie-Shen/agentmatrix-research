@@ -44,6 +44,7 @@ GENERIC_EVALUATOR_CAPABILITIES: dict[str, dict[str, Any]] = {
                 "ic_std",
                 "ic_ir",
                 "ic_positive_ratio",
+                "rank_ic_positive_ratio",
                 "factor_return_mean",
                 "t_abs_mean",
                 "t_abs_gt_2_ratio",
@@ -229,14 +230,18 @@ def compute_ic_analysis(
             ic_values.append(float(value))
     mean = _mean_or_nan(ic_values)
     std = _std_or_nan(ic_values)
-    return {
+    positive_ratio = float(sum(value > 0 for value in ic_values) / len(ic_values)) if ic_values else float("nan")
+    result = {
         "rank_ic_mean" if method in {"spearman", "rank_ic", "spearman_rank_ic"} else "ic_mean": mean,
         "rank_ic_std" if method in {"spearman", "rank_ic", "spearman_rank_ic"} else "ic_std": std,
         "ic_ir": float(mean / std) if pd.notna(mean) and pd.notna(std) and std != 0 else float("nan"),
-        "ic_positive_ratio": float(sum(value > 0 for value in ic_values) / len(ic_values)) if ic_values else float("nan"),
+        "ic_positive_ratio": positive_ratio,
         "cross_section_count": len(ic_values),
         "ic_values": ic_values,
     }
+    if method in {"spearman", "rank_ic", "spearman_rank_ic"}:
+        result["rank_ic_positive_ratio"] = positive_ratio
+    return result
 
 
 def compute_cross_sectional_regression(

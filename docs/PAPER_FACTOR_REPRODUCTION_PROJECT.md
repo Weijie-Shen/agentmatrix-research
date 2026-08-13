@@ -29,7 +29,7 @@ See the latest validation run; do not copy a stale fixed count into workflow dec
 Implemented capabilities:
 
 - paper extraction dataclasses and validation
-- evaluation-result truth-source schema
+- shared-registry `paper_extraction.ic_analysis.v2` truth-source schema, with legacy-load compatibility
 - extraction artifact export/load
 - normalization into `FactorResearchSpec`
 - specs/catalog export through existing Factor Lab registry
@@ -44,7 +44,7 @@ Implemented capabilities:
 - canonical selected-case execution with separate calculation and evaluation panels
 - configurable resource preflight with methodology-preserving projected execution
 - incremental data hashing, narrow evaluator boundaries, and compact alignment fast paths
-- generic evaluator support for ordered factor/control transforms, neutralization, IC analysis, and IC regression
+- generic evaluator support for ordered factor/control transforms, neutralization, and IC analysis
 - stage-aware calculation/evaluation universe protocols and post-calculation filters
 - protocol-aware paper-reported evaluation metric matching
 - final paper reproduction report generation
@@ -58,7 +58,7 @@ Current serious benchmark:
 research_core/factor_lab/paper_reproduction/golden/huatai_alpha3_13_15.json
 ```
 
-This golden artifact covers Huatai Alpha3, Alpha13, and Alpha15 using the current evaluation-case schema.
+This legacy golden artifact covers Huatai Alpha3, Alpha13, and Alpha15. New extraction artifacts use the IC-analysis v2 schema; legacy artifacts remain loadable for regression compatibility.
 
 ## Core Design Decisions
 
@@ -67,19 +67,20 @@ This golden artifact covers Huatai Alpha3, Alpha13, and Alpha15 using the curren
 The current durable project decision is:
 
 ```text
-truth_type = evaluation_results
+paper_evidence_kind = evaluation_results
+evaluator_type = ic_analysis
 ```
 
-For this workflow, paper truth is paper-reported evaluation evidence, such as:
+Legacy artifacts express the first line as `truth_type = evaluation_results`; v2 expresses it through the IC truth-source registry and contract.
+
+For new jobs, paper truth is paper-reported IC-analysis evidence, such as:
 
 - Rank IC
 - IC / ICIR / IR
-- long-short return or spread
-- factor return
-- t-statistics
-- Sharpe
-- portfolio return metrics
-- IC decay / half-life metrics
+- Rank-IC mean
+- IC standard deviation
+- ICIR
+- positive-IC ratio
 
 Do not add or maintain paper-reported factor-value truth matching unless that design is explicitly reopened.
 
@@ -92,9 +93,9 @@ Do not use these in the current paper-truth workflow:
 
 External third-party truth data is a separate evidence type and is not the current paper-reproduction proof target.
 
-### 2. Evaluation Cases Are First-Class
+### 2. Shared IC Evidence Registries Are First-Class
 
-Raw factor definitions must stay minimal. Evaluation-specific details belong to each paper-reported evaluation case / truth source.
+New artifacts use `schema_version = paper_extraction.ic_analysis.v2`. Raw factor definitions stay minimal. Reusable evaluation meaning lives in paper-level registries for semantic requirements, universe protocols, sample periods, ordered operation pipelines, metric definitions, and IC protocols. Truth sources refer to one protocol and store factor-keyed paper results.
 
 Raw factor definition:
 
@@ -105,37 +106,31 @@ Raw factor definition:
 - frequency
 - formula source notes
 
-Evaluation case / truth source:
+IC truth source:
 
-- `truth_id`
-- `truth_type = evaluation_results`
-- `evaluation_family`
-- `evaluation_method`
-- `evaluation_spec`
-- `transform_spec`
-- `required_data`
-- paper-reported `metrics`
-- narrow `source_location`
-- sample period / universe when case-specific
+- `truth_source_id`
+- exactly one `protocol_id`
+- one narrow table/figure/row-block source
+- all `reported_metric_ids` printed together in that block
+- factor-keyed `reported_results`
+- optional paper-conflict group
 
 Do not put preprocessing, neutralization, portfolio construction, return horizon, execution price, benchmark, or evaluation-required fields at raw-factor level when they vary by paper result.
 
+Stage 1 contains no local physical-field bindings and no selected truth IDs. Stage 3 owns local semantic resolution; Stage 6 owns selection.
+
 ### 3. Truth Granularity Must Be Tight
 
-Split truth sources when any of these differ:
+Split truth sources when the IC protocol differs in any of these ways:
 
 - table / figure / appendix source
-- metric family
 - return horizon
 - preprocessing or neutralization
 - regression controls or weights
 - sample window
-- portfolio construction
-- transaction cost
-- execution price
-- benchmark
+- return alignment or status-filter timing
 
-Do not merge IC/regression metrics, IC decay metrics, and portfolio TOP-layer metrics into one broad truth source.
+Do not split Rank-IC mean, IC standard deviation, ICIR, or positive-ratio metrics when they appear together under the same table protocol. They are metrics of one `ic_analysis` evaluator type. Raw and neutralized IC tables remain separate truth sources because their operation pipelines differ.
 
 ### 4. Known Limitations Are Not Automatically Blockers
 
@@ -167,18 +162,16 @@ Stage 4B may implement paper-specific factor logic only after extraction, normal
 
 The project should not become a universal paper evaluator or formula compiler.
 
-Currently supported generic evaluator pieces:
+The canonical v2 evaluator family is deliberately limited to:
 
 - ordered transform specs
 - median-MAD winsorization
 - cross-sectional regression residual neutralization
 - cross-sectional z-score standardization
 - Rank/Pearson IC analysis
-- cross-sectional OLS/WLS regression summaries
 - `ic_analysis`
-- `ic_regression`
 
-Unsupported families should stop cleanly or use paper-local evaluator code:
+The legacy runtime still loads older regression/portfolio cases, but new v2 extraction does not create them. Unsupported paper evidence remains outside the selected IC truth workflow:
 
 - `layered_portfolio_backtest`
 - `ic_decay`
@@ -196,9 +189,15 @@ research_core/factor_lab/paper_reproduction/extraction.py
 
 Main types:
 
-- `PaperExtraction`
-- `ExtractedFactor`
-- `ExtractedTruthSource`
+- `ICAnalysisPaperExtraction`
+- `ExtractedFactorDefinition`
+- `ExtractedSemanticRequirement`
+- `ExtractedUniverseProtocol`
+- `ExtractedOperationPipeline`
+- `ExtractedICProtocol`
+- `ExtractedMetricDefinition`
+- `ExtractedICTruthSource`
+- legacy `PaperExtraction` types for loading old jobs
 - `ExtractionValidationResult`
 
 Expected artifact:
@@ -207,7 +206,7 @@ Expected artifact:
 runtime/factor_lab/paper_specs/<paper_id>_extracted.json
 ```
 
-Extraction should preserve:
+Extraction should preserve shared registries for:
 
 - paper id, title, authors, source, year
 - factor family name
@@ -216,23 +215,26 @@ Extraction should preserve:
 - formula-required fields
 - factor frequency
 - factor parameters
-- factor sample period / universe when applicable
-- paper-reported evaluation cases
-- selected truth source ids or truth selection rule
+- typed paper semantics, including industry source/version/level and capitalization basis
+- distinct calculation and evaluation universes plus staged filters
+- reusable samples, operation pipelines, IC protocols, and metric formulas/units
+- all paper-reported IC result blocks and every metric co-reported in each block
+- an explicit policy assigning support assessment to Stage 3 and final selection to Stage 6
 - classified ambiguity notes
 - known limitations
 
 Validation checks:
 
 - paper id, title, authors, and family name exist
-- every target factor has name, formula, required fields
+- every target factor has ID, formula, and referenced semantic fields
 - frequency exists or its absence is explicitly recorded
-- every truth source is `evaluation_results`
-- every truth source has non-empty metrics
-- evaluation method exists
-- selected truth ids exist and are not duplicated
-- duplicate truth ids fail
-- multiple truth sources without a selection rule or selected ids require human review
+- every registry ID is unique and every reference resolves
+- the only evaluator type is `ic_analysis`
+- every truth source has one protocol and its metric IDs exactly match each factor result row
+- duplicate truth IDs fail
+- local data-binding keys and selected truth IDs fail
+- future status masks at rolling-factor calculation stage fail unless semantically valid
+- unresolved contradictory paper blocks are explicit conflict groups and require review
 - broad or missing source locations require human review
 - unrecognized metric names require human review
 - ambiguities are classified as formula, field mapping, evaluation, or other
@@ -265,19 +267,21 @@ Validation targets:
 
 - `formula_match_ratio >= 1.0`
 - `field_mapping_match_ratio >= 1.0`
-- `paper_evaluation_metric_match_ratio >= 1.0` when selected evaluation truth exists
+- paper-evaluation matching remains inactive until Stage 3/6 chooses a truth source
 
 Preserve in spec metadata:
 
 - paper provenance
 - extraction validation status and warnings
-- all truth sources
-- selected truth sources
+- all projected candidate truth sources and shared evidence references
+- empty selected truth sources
 - truth source summary
 - evaluation cases
 - known limitations
 - classified ambiguities
-- truth selection rule
+- Stage-3 support-assessment and Stage-6 truth-selection policy
+- factor semantic-field IDs and evaluation-case refs
+- compiled ordered operation pipelines, without added transform defaults
 - proof status ceiling
 - implementation stage
 
@@ -308,6 +312,8 @@ Formula-stage validation checks:
 - enough per-code history exists for window parameters
 
 Keep formula-required fields separate from evaluation-required fields.
+
+For v2, assess every candidate truth source against typed semantic requirements and operation capabilities. SWS and CITIC industry definitions, their levels/timing, and total/A-share/circulating/free-float capitalization bases are distinct relationships. Persist exact/constructed/proxy/missing status without using calculated-versus-paper IC closeness. An unresolved paper conflict has no eligible truth metrics.
 
 Evaluation-data resolution must distinguish `exact_alias`, `derived_equivalent`,
 `proxy_substitute`, and `unsupported_substitute`. A proxy may keep an evaluation
@@ -443,7 +449,7 @@ ResourceExecutionConfig(memory_budget_bytes=...)
 does not establish implementation identity and must not be used as canonical
 reproduction evidence by itself.
 
-Before selecting truth, profile the available data and assess every candidate evaluation case. The extracted truth source represents what the paper did and must not be mutated during execution. The planner creates a separate resolved runtime case containing:
+Before selecting truth, profile the available data and assess every candidate evaluation case. A v2 case cannot be selected without a Stage-3 profile. The extracted truth source represents what the paper did and must not be mutated during execution. The planner selects exactly one highest-supported unconflicted IC truth source per factor, without looking at metric values, and creates a separate resolved runtime case containing:
 
 - `source_truth_id`
 - `paper_protocol`
@@ -463,7 +469,7 @@ pipeline-blocking scope. Repeated declarations of the same semantic requirement
 are reconciled before support scoring so schema repetition cannot inflate or
 penalize a case.
 
-Evaluation execution must consume `selected_evaluation_cases`, not loop over every extracted truth source. Unsupported, budget-deferred, or insufficient-data cases remain visible in reports but do not enter metric truth matching.
+Evaluation execution must consume the single `selected_evaluation_case`, not loop over every extracted truth source. Superseded, conflicted, unsupported, budget-deferred, or insufficient-data cases remain visible in reports but do not enter metric truth matching.
 
 Evaluation must follow the selected resolved case. Before computing metrics, apply
 the evaluation-case factor transforms and structured neutralization in order,
@@ -482,9 +488,9 @@ Do not assume:
 
 - all papers use daily frequency
 - `t+1` means one trading day
-- all IC is Rank IC
 - all factors use the same neutralization
-- all portfolio tests use the same execution price
+
+The v2 generic contract defines the IC correlation kind explicitly. Its timing comes from the signal date, extracted filter dates, exchange-calendar `T+h` target, and paper return interval; it is not hardcoded to entry at `t+1`.
 
 Forward returns must look forward:
 

@@ -25,18 +25,43 @@ OWNERSHIP_FILE = ".paper_autotest_owner.json"
 ARTIFACT_ROOTS = (
     "runtime/factor_lab/agent_harness",
     "runtime/factor_lab/catalogs",
+    "runtime/factor_lab/data_profiles",
     "runtime/factor_lab/evaluation_bundles",
+    "runtime/factor_lab/evaluation_plans",
     "runtime/factor_lab/evaluations",
+    "runtime/factor_lab/implementation_artifacts",
     "runtime/factor_lab/implementation_plans",
     "runtime/factor_lab/jobs",
     "runtime/factor_lab/paper_jobs",
     "runtime/factor_lab/paper_specs",
     "runtime/factor_lab/proofs",
     "runtime/factor_lab/reports",
+    "runtime/factor_lab/resource_evidence",
     "runtime/factor_lab/specs",
+    "runtime/factor_lab/test_results",
     "runtime/factor_lab/truth",
+    "runtime/factor_lab/truth_matches",
     "research_core/factor_lab/libraries",
+    "scripts",
+    "tests",
 )
+REQUIRED_HARVEST_FAMILIES = (
+    "pipeline_state",
+    "paper_extraction",
+    "normalized_specs",
+    "data_profile",
+    "implementation_artifact",
+    "implementation_test_source",
+    "implementation_test_result",
+    "evaluation_plan",
+    "evaluation_bundle",
+    "truth_match",
+    "report_json",
+    "report_markdown",
+)
+IGNORED_HARVEST_DIRECTORY_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+IGNORED_HARVEST_FILE_NAMES = {".DS_Store"}
+IGNORED_HARVEST_SUFFIXES = {".pyc", ".pyo"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +130,14 @@ class PaperTestRunPlan:
     harness_prompt_path: str = ""
     worker_task_id: str = ""
     worker_outcome: str = ""
+    worker_started_at: str = ""
+    worker_stopped_at: str = ""
+    worker_gate_pass_count: int = 0
+    worker_gate_path: str = ""
     reviewer_task_id: str = ""
+    reviewer_assignment_path: str = ""
+    reviewer_started_at: str = ""
+    reviewer_completed_at: str = ""
     review_path: str = ""
     review_verdict: str = ""
     state_history: list[dict[str, str]] = field(default_factory=list)
@@ -329,6 +361,7 @@ def record_worker_started(plan: PaperTestRunPlan, *, worker_task_id: str) -> Pat
     if not worker_task_id.strip():
         raise ValueError("worker task id is required")
     plan.worker_task_id = worker_task_id
+    plan.worker_started_at = now_iso()
     plan.status = "running"
     return _persist_run_state(plan)
 
@@ -343,7 +376,15 @@ def record_worker_stopped(
         raise ValueError(f"worker can stop only from running, not {plan.status}")
     if outcome not in {"completed", "interrupted", "failed"}:
         raise ValueError("worker outcome must be completed, interrupted, or failed")
+    if outcome == "completed":
+        gate = assess_worker_completion_gate(plan)
+        if not gate.complete:
+            raise ValueError(
+                "worker completion gate failed; keep the worker active and repair from "
+                f"{gate.earliest_invalid_stage or 'the reported defects'}: {gate.defects}"
+            )
     plan.worker_outcome = outcome
+    plan.worker_stopped_at = now_iso()
     plan.status = "worker_stopped"
     destination = Path(plan.control_root).resolve()
     export_json(
@@ -353,11 +394,34 @@ def record_worker_stopped(
             "worker_task_id": plan.worker_task_id,
             "outcome": outcome,
             "details": details or {},
-            "stopped_at": now_iso(),
+            "started_at": plan.worker_started_at,
+            "stopped_at": plan.worker_stopped_at,
         },
         destination / "worker_stop.json",
     )
     return _persist_run_state(plan)
+
+
+def assess_worker_completion_gate(plan: PaperTestRunPlan):
+    """Run and persist a fresh control-plane assessment while the worker remains active."""
+
+    if plan.status != "running":
+        raise ValueError(f"worker completion gate can run only from running, not {plan.status}")
+    from research_core.factor_lab.paper_reproduction.agent_harness_review import assess_agent_harness_run
+
+    assessment = assess_agent_harness_run(
+        plan.worktree,
+        expected_factors=list(plan.selected_factors),
+        harness_id=plan.run_id,
+    )
+    destination = Path(plan.control_root).resolve()
+    plan.worker_gate_pass_count += 1
+    history_path = destination / "worker_gate_assessments" / f"gate-{plan.worker_gate_pass_count:02d}.json"
+    export_json(assessment, history_path)
+    latest_path = export_json(assessment, destination / "worker_completion_gate.json")
+    plan.worker_gate_path = str(latest_path)
+    _persist_run_state(plan)
+    return assessment
 
 
 def harvest_run_artifacts(plan: PaperTestRunPlan, *, maximum_file_bytes: int = 256 * 1024 * 1024) -> Path:
@@ -382,21 +446,56 @@ def harvest_run_artifacts(plan: PaperTestRunPlan, *, maximum_file_bytes: int = 2
         target = destination / "artifacts" / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+        copied_digest = _sha256_file(target)
+        if copied_digest != digest:
+            raise OSError(f"harvested artifact hash mismatch after copy: {relative}")
         changed.append({"path": relative, "size_bytes": size, "sha256": digest})
     status = _git(worktree, "status", "--short", "--untracked-files=all")
-    diff = _git(worktree, "diff", "--no-ext-diff", plan.base_commit, "--", "research_core", "docs")
+    diff = _git(
+        worktree,
+        "diff",
+        "--no-ext-diff",
+        plan.base_commit,
+        "--",
+        "research_core",
+        "docs",
+        "scripts",
+        "tests",
+    )
     (destination / "git_status.txt").write_text(status, encoding="utf-8")
     (destination / "worker_changes.patch").write_text(diff, encoding="utf-8")
+    ownership_source = worktree / OWNERSHIP_FILE
+    ownership_target = destination / "worktree_ownership.json"
+    shutil.copy2(ownership_source, ownership_target)
+    artifact_inventory = _artifact_inventory(item["path"] for item in changed)
+    missing_required = [
+        family for family in REQUIRED_HARVEST_FAMILIES if not artifact_inventory.get(family)
+    ]
     payload = {
-        "schema_version": "paper_autotest_harvest/v1",
+        "schema_version": "paper_autotest_harvest/v2",
         "run_id": plan.run_id,
         "paper_id": plan.paper_id,
         "base_commit": plan.base_commit,
         "branch": plan.branch,
         "worktree": str(worktree),
+        "observed_git_head": _git(worktree, "rev-parse", "HEAD").strip(),
+        "observed_git_branch": _git(worktree, "branch", "--show-current").strip(),
         "harvested_at": now_iso(),
         "files": changed,
         "omitted_files": omitted,
+        "artifact_inventory": artifact_inventory,
+        "required_artifact_families": list(REQUIRED_HARVEST_FAMILIES),
+        "missing_required_artifact_families": missing_required,
+        "copy_integrity": {
+            "eligible_changed_file_count": len(changed) + len(omitted),
+            "copied_file_count": len(changed),
+            "omitted_file_count": len(omitted),
+            "all_copied_hashes_verified": True,
+            "complete": not omitted,
+        },
+        "review_ready": not omitted and not missing_required,
+        "worktree_ownership_path": str(ownership_target),
+        "worktree_ownership_sha256": _sha256_file(ownership_target),
         "git_status_path": str(destination / "git_status.txt"),
         "worker_patch_path": str(destination / "worker_changes.patch"),
     }
@@ -407,26 +506,168 @@ def harvest_run_artifacts(plan: PaperTestRunPlan, *, maximum_file_bytes: int = 2
     return manifest_path
 
 
-def record_deterministic_assessment(plan: PaperTestRunPlan, assessment: object) -> Path:
+def record_deterministic_assessment(plan: PaperTestRunPlan, assessment: object | None = None) -> Path:
     destination = Path(plan.control_root).resolve()
-    if not (destination / "harvest_manifest.json").is_file():
+    harvest_path = destination / "harvest_manifest.json"
+    if not harvest_path.is_file():
         raise FileNotFoundError("harvest artifacts before recording the deterministic assessment")
-    path = export_json(assessment, destination / "deterministic_assessment.json")
+    from research_core.factor_lab.paper_reproduction.agent_harness_review import assess_agent_harness_run
+
+    fresh = assess_agent_harness_run(
+        plan.worktree,
+        expected_factors=list(plan.selected_factors),
+        harness_id=plan.run_id,
+        harvest_manifest_path=harvest_path,
+    )
+    payload = asdict(fresh)
+    if assessment is not None:
+        submitted = asdict(assessment) if hasattr(assessment, "__dataclass_fields__") else assessment
+        payload.setdefault("diagnostics", {})["submitted_assessment_agreed"] = (
+            isinstance(submitted, dict) and bool(submitted.get("complete")) == fresh.complete
+        )
+    path = export_json(payload, destination / "deterministic_assessment.json")
     plan.status = "deterministic_reviewed"
+    _persist_run_state(plan)
+    return path
+
+
+def record_reviewer_started(
+    plan: PaperTestRunPlan,
+    *,
+    reviewer_task_id: str,
+    requested_model: str | None = None,
+    runtime_model_evidence: dict[str, Any] | None = None,
+) -> Path:
+    """Persist reviewer assignment provenance before dispatching the reviewer.
+
+    The assignment is control-plane evidence. Reviewer-authored JSON is never
+    accepted as proof of its own task identity or requested model.
+    """
+
+    if plan.status != "deterministic_reviewed":
+        raise ValueError(f"reviewer can start only from deterministic_reviewed, not {plan.status}")
+    task_id = reviewer_task_id.strip()
+    if not task_id:
+        raise ValueError("reviewer task id is required")
+    if task_id == plan.worker_task_id:
+        raise ValueError("independent reviewer task id must differ from the worker task id")
+    _require_fresh_reviewer_task_id(plan, task_id)
+    model = (requested_model or plan.reviewer_model).strip()
+    if model != plan.reviewer_model:
+        raise ValueError(f"reviewer requested model must match the run plan: {plan.reviewer_model}")
+    model_evidence = dict(runtime_model_evidence or {})
+    observed_model = str(model_evidence.get("actual_model", "")).strip()
+    if observed_model and observed_model != model:
+        raise ValueError(f"reviewer runtime model does not match requested model: {observed_model} != {model}")
+    destination = Path(plan.control_root).resolve()
+    required_inputs = (destination / "harvest_manifest.json", destination / "deterministic_assessment.json")
+    missing_inputs = [str(path) for path in required_inputs if not path.is_file()]
+    if missing_inputs:
+        raise FileNotFoundError(f"reviewer assignment inputs are missing: {missing_inputs}")
+    assigned_at = now_iso()
+    payload = {
+        "schema_version": "paper_autotest_reviewer_assignment/v1",
+        "run_id": plan.run_id,
+        "paper_id": plan.paper_id,
+        "paper_path": plan.paper_path,
+        "paper_sha256": _sha256_file(Path(plan.paper_path).expanduser().resolve()),
+        "selected_factors": list(plan.selected_factors),
+        "base_commit": plan.base_commit,
+        "branch": plan.branch,
+        "worker_task_id": plan.worker_task_id,
+        "reviewer_task_id": task_id,
+        "requested_model": model,
+        "actual_model_status": "attested" if observed_model else "unverified",
+        "runtime_model_evidence": model_evidence,
+        "independence_checks": {
+            "different_from_worker": True,
+            "unused_by_other_batch_run": True,
+        },
+        "review_inputs": _review_input_records(plan),
+        "assigned_at": assigned_at,
+    }
+    path = export_json(payload, destination / "reviewer_assignment.json")
+    plan.reviewer_task_id = task_id
+    plan.reviewer_assignment_path = str(path)
+    plan.reviewer_started_at = assigned_at
+    plan.status = "reviewer_running"
     _persist_run_state(plan)
     return path
 
 
 def record_independent_review(plan: PaperTestRunPlan, review: dict[str, Any]) -> Path:
     destination = Path(plan.control_root).resolve()
-    if not (destination / "deterministic_assessment.json").is_file():
-        raise FileNotFoundError("record the deterministic assessment before independent review")
+    if plan.status != "reviewer_running":
+        raise ValueError(f"independent review can finish only from reviewer_running, not {plan.status}")
+    assignment_path = destination / "reviewer_assignment.json"
+    if not assignment_path.is_file():
+        raise FileNotFoundError("record the reviewer assignment before independent review")
+    assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+    if assignment.get("run_id") != plan.run_id or assignment.get("reviewer_task_id") != plan.reviewer_task_id:
+        raise ValueError("reviewer assignment does not match the active run plan")
     verdict = str(review.get("verdict", ""))
     if verdict not in {"complete", "complete_with_limitations", "incomplete"}:
         raise ValueError("independent review verdict must be complete, complete_with_limitations, or incomplete")
-    path = export_json(review, destination / "independent_review.json")
+    deterministic_path = destination / "deterministic_assessment.json"
+    harvest_path = destination / "harvest_manifest.json"
+    deterministic = json.loads(deterministic_path.read_text(encoding="utf-8"))
+    harvest = json.loads(harvest_path.read_text(encoding="utf-8"))
+    if verdict in {"complete", "complete_with_limitations"}:
+        if deterministic.get("complete") is not True:
+            raise ValueError(
+                "a positive independent-review verdict requires a complete deterministic assessment"
+            )
+        if harvest.get("review_ready") is not True:
+            raise ValueError(
+                "a positive independent-review verdict requires a review-ready harvest manifest"
+            )
+    for field_name in ("blocking_defects", "limitations", "cited_artifact_paths"):
+        if not isinstance(review.get(field_name), list):
+            raise ValueError(f"independent review must include list field: {field_name}")
+    if not review["cited_artifact_paths"]:
+        raise ValueError("independent review must cite at least one persisted artifact path")
+    reported_task_id = str(review.get("reviewer_task_id", "")).strip()
+    if reported_task_id and reported_task_id != plan.reviewer_task_id:
+        raise ValueError("reviewer-authored task id conflicts with the control-plane assignment")
+    reported_model = str(review.get("requested_model", "")).strip()
+    if reported_model and reported_model != assignment.get("requested_model"):
+        raise ValueError("reviewer-authored requested model conflicts with the control-plane assignment")
+    completed_at = now_iso()
+    payload = dict(review)
+    payload["schema_version"] = "paper_reproduction_independent_review/v2"
+    payload["reviewer_task_id"] = plan.reviewer_task_id
+    payload["requested_model"] = assignment["requested_model"]
+    payload["recorded_at"] = completed_at
+    payload["provenance"] = {
+        "source": "paper_autotest_control_plane",
+        "assignment_path": str(assignment_path),
+        "assignment_sha256": _sha256_file(assignment_path),
+        "worker_task_id": plan.worker_task_id,
+        "reviewer_task_id": plan.reviewer_task_id,
+        "requested_model": assignment["requested_model"],
+        "actual_model_status": assignment["actual_model_status"],
+        "independence_checks": assignment["independence_checks"],
+        "review_input_hashes": assignment["review_inputs"],
+        "deterministic_assessment_sha256": _sha256_file(deterministic_path),
+        "harvest_manifest_sha256": _sha256_file(harvest_path),
+    }
+    path = export_json(payload, destination / "independent_review.json")
+    export_json(
+        {
+            "schema_version": "paper_autotest_reviewer_completion/v1",
+            "run_id": plan.run_id,
+            "reviewer_task_id": plan.reviewer_task_id,
+            "requested_model": assignment["requested_model"],
+            "actual_model_status": assignment["actual_model_status"],
+            "assignment_sha256": _sha256_file(assignment_path),
+            "review_sha256": _sha256_file(path),
+            "verdict": verdict,
+            "completed_at": completed_at,
+        },
+        destination / "reviewer_completion.json",
+    )
     plan.review_path = str(path)
-    plan.reviewer_task_id = str(review.get("reviewer_task_id", plan.reviewer_task_id))
+    plan.reviewer_completed_at = completed_at
     plan.status = "independently_reviewed"
     _persist_run_state(plan)
     plan.review_verdict = verdict
@@ -445,7 +686,9 @@ def cleanup_test_worktree(plan: PaperTestRunPlan) -> None:
     required = (
         control_root / "harvest_manifest.json",
         control_root / "deterministic_assessment.json",
+        control_root / "reviewer_assignment.json",
         control_root / "independent_review.json",
+        control_root / "reviewer_completion.json",
     )
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
@@ -467,7 +710,9 @@ def export_json(value: object, path: str | Path) -> Path:
 def _persist_run_state(plan: PaperTestRunPlan) -> Path:
     if not plan.state_history or plan.state_history[-1].get("status") != plan.status:
         plan.state_history.append({"status": plan.status, "recorded_at": now_iso()})
-    return export_json(plan, Path(plan.control_root).resolve() / "run_state.json")
+    path = export_json(plan, Path(plan.control_root).resolve() / "run_state.json")
+    _sync_batch_manifest(plan)
+    return path
 
 
 def _load_and_validate_ownership(plan: PaperTestRunPlan) -> dict[str, Any]:
@@ -490,9 +735,134 @@ def _artifact_hashes(root: Path) -> dict[str, str]:
         if not directory.exists():
             continue
         for path in directory.rglob("*"):
-            if path.is_file():
+            if path.is_file() and _is_harvestable_file(path, root):
                 hashes[path.relative_to(root).as_posix()] = _sha256_file(path)
     return hashes
+
+
+def _is_harvestable_file(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root)
+    if any(part in IGNORED_HARVEST_DIRECTORY_NAMES for part in relative.parts):
+        return False
+    if path.name in IGNORED_HARVEST_FILE_NAMES or path.suffix.lower() in IGNORED_HARVEST_SUFFIXES:
+        return False
+    return True
+
+
+def _artifact_inventory(paths: Sequence[str]) -> dict[str, list[str]]:
+    inventory: dict[str, list[str]] = {}
+    for path in paths:
+        for family in _artifact_families(path):
+            inventory.setdefault(family, []).append(path)
+    return {family: sorted(values) for family, values in sorted(inventory.items())}
+
+
+def _artifact_families(path: str) -> set[str]:
+    families: set[str] = set()
+    if path.startswith(("runtime/factor_lab/paper_jobs/", "runtime/factor_lab/jobs/")):
+        families.add("pipeline_state")
+    if path.startswith("runtime/factor_lab/paper_specs/"):
+        families.add("paper_extraction")
+    if path.startswith("runtime/factor_lab/specs/"):
+        families.add("normalized_specs")
+    if path.startswith("runtime/factor_lab/data_profiles/"):
+        families.add("data_profile")
+    if path.startswith("runtime/factor_lab/implementation_artifacts/"):
+        families.add("implementation_artifact")
+    if path.startswith("runtime/factor_lab/implementation_plans/"):
+        families.add("implementation_plan")
+    if path.startswith("runtime/factor_lab/evaluation_plans/"):
+        families.add("evaluation_plan")
+    if path.startswith(("runtime/factor_lab/evaluation_bundles/", "runtime/factor_lab/evaluations/")):
+        families.add("evaluation_bundle")
+    if path.startswith(("runtime/factor_lab/truth_matches/", "runtime/factor_lab/truth/")):
+        families.add("truth_match")
+    if path.startswith("runtime/factor_lab/reports/") and path.endswith(".json"):
+        families.add("report_json")
+    if path.startswith("runtime/factor_lab/reports/") and path.endswith(".md"):
+        families.add("report_markdown")
+    if path.startswith("runtime/factor_lab/test_results/"):
+        families.add("implementation_test_result")
+    name = Path(path).name
+    if path.endswith(".py") and (name.startswith("test_") or "/tests/" in path or path.startswith("tests/")):
+        families.add("implementation_test_source")
+    if path.startswith("runtime/factor_lab/resource_evidence/"):
+        families.add("resource_evidence")
+    if path.startswith("runtime/factor_lab/agent_harness/"):
+        families.add("agent_harness")
+    if path.startswith("scripts/"):
+        families.add("worker_script")
+    return families
+
+
+def _review_input_records(plan: PaperTestRunPlan) -> list[dict[str, str]]:
+    control_root = Path(plan.control_root).resolve()
+    batch_root = control_root.parents[1]
+    candidates = [
+        ("harvest_manifest", control_root / "harvest_manifest.json"),
+        ("deterministic_assessment", control_root / "deterministic_assessment.json"),
+        ("selection", batch_root / "selections" / f"{_slug(plan.paper_id)}.json"),
+    ]
+    harness_metadata = sorted((control_root / "artifacts" / "runtime" / "factor_lab" / "agent_harness").glob(
+        "*/harness_metadata.json"
+    ))
+    if harness_metadata:
+        candidates.append(("harness_metadata", harness_metadata[-1]))
+    records: list[dict[str, str]] = []
+    for role, path in candidates:
+        if path.is_file():
+            records.append({"role": role, "path": str(path), "sha256": _sha256_file(path)})
+    return records
+
+
+def _require_fresh_reviewer_task_id(plan: PaperTestRunPlan, reviewer_task_id: str) -> None:
+    manifest_path = Path(plan.control_root).resolve().parents[1] / "batch_manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"batch manifest is missing: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    conflicts: list[str] = []
+    for run in manifest.get("runs", []) or []:
+        run_id = str(run.get("run_id", ""))
+        for role in ("worker_task_id", "reviewer_task_id"):
+            if str(run.get(role, "")) == reviewer_task_id and not (
+                run_id == plan.run_id and role == "reviewer_task_id"
+            ):
+                conflicts.append(f"{run_id}:{role}")
+    if conflicts:
+        raise ValueError(f"reviewer task id is not fresh within the batch: {conflicts}")
+
+
+def _sync_batch_manifest(plan: PaperTestRunPlan) -> None:
+    manifest_path = Path(plan.control_root).resolve().parents[1] / "batch_manifest.json"
+    if not manifest_path.is_file():
+        return
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    runs = manifest.get("runs", []) or []
+    matched = False
+    for index, run in enumerate(runs):
+        if run.get("run_id") == plan.run_id:
+            runs[index] = asdict(plan)
+            matched = True
+            break
+    if not matched:
+        raise ValueError(f"run {plan.run_id} is missing from batch manifest")
+    manifest["runs"] = runs
+    verdicts = [str(run.get("review_verdict", "")) for run in runs]
+    if all(verdicts):
+        if "incomplete" in verdicts:
+            manifest["status"] = "incomplete"
+        elif "complete_with_limitations" in verdicts:
+            manifest["status"] = "complete_with_limitations"
+        else:
+            manifest["status"] = "complete"
+    elif all(str(run.get("status", "")) == "planned" for run in runs):
+        manifest["status"] = "planned"
+    else:
+        manifest["status"] = "in_progress"
+    manifest["updated_at"] = now_iso()
+    temporary = manifest_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(manifest_path)
 
 
 def _require_framework_at_ref(repo: Path, ref: str) -> None:

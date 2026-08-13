@@ -66,11 +66,15 @@ Do not give workers selection scores, extracted metric values, golden JSON, anot
 
 Immediately persist each dispatched task with `record_worker_started(...)`. When it finishes, fails, or is interrupted, call `record_worker_stopped(...)` with the lifecycle outcome before inspecting or harvesting its files.
 
+The generated harness contains a deterministic pre-return command. Require the worker to run it, repair from `earliest_invalid_stage`, and rerun dependent stages while the same task and worktree remain active. When the worker announces completion, `record_worker_stopped(..., outcome="completed")` independently reruns this gate. If it raises because `complete=false`, do not stop, harvest, or create a retry attempt: send the persisted defects and repair actions back to that same active worker. A genuine hard blocker may instead be recorded as `failed`; scientific metric drift must not be repaired by tuning formulas to paper answers.
+
 ## 4. Harvest and review
 
 After a worker stops, call `harvest_run_artifacts(...)` before cleanup. It copies changed reproduction artifacts to the batch control root, records hashes and omissions, and preserves Git status and a source patch.
 
-Run `assess_agent_harness_run(...)` against the isolated worktree and persist it with `record_deterministic_assessment(...)`. Then spawn a fresh Sol reviewer with only:
+Treat `review_ready=false` or any `missing_required_artifact_families` as an explicit evidence gap. The harvest must include Stage 3 profiles, evaluation plans, implementation certification, formula-test source and durable test output, evaluation bundles, truth matches, both reports, and worker-authored runners. Cache files and bytecode are not scientific artifacts.
+
+Run `assess_agent_harness_run(...)` against the isolated worktree and pass the harvested manifest path so durability is checked; persist it with `record_deterministic_assessment(...)`. Then spawn a fresh Sol reviewer with only:
 
 - the paper path;
 - selected factor names;
@@ -79,7 +83,9 @@ Run `assess_agent_harness_run(...)` against the isolated worktree and persist it
 - bundled skill hashes and base commit;
 - `$paper-reproduction-review`.
 
-Require the reviewer to inspect persisted artifacts and return `complete`, `complete_with_limitations`, or `incomplete`, with blocking defects separated from limitations. Persist it with `record_independent_review(...)`. The orchestrator reconciles that verdict with the deterministic assessment. Neither reviewer nor orchestrator may call a run successful unless all eight stages are evidenced, every selected factor has a certified implementation and passing test, every selected factor has a durable executed evaluation, and both report formats contain paper-versus-calculated comparisons.
+Before dispatch, call `record_reviewer_started(...)` with the fresh reviewer task ID and requested model. This writes control-plane-owned assignment provenance and rejects reuse of the writer or another batch task. Requested-model provenance must remain distinct from actual-runtime-model evidence; when the platform cannot attest the latter, record it as unverified rather than copying a reviewer self-claim.
+
+Require the reviewer to inspect persisted artifacts and return `complete`, `complete_with_limitations`, or `incomplete`, with blocking defects separated from limitations and cited artifact paths. Persist it with `record_independent_review(...)`; that API validates the assignment and writes a hashed completion record. The orchestrator reconciles that verdict with the deterministic assessment. Neither reviewer nor orchestrator may call a run successful unless all eight stages are evidenced, every selected factor has a certified implementation and passing test, every selected factor has a durable executed evaluation, and both report formats contain paper-versus-calculated comparisons.
 
 ## 5. Summarize and clean up
 
