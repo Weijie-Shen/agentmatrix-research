@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Factor Reproduction"
+  short_description: "Coordinate auditable paper-factor reproduction"
+  default_prompt: "Use $paper-factor-reproduction to reproduce selected factors from this research paper through all validated stages."

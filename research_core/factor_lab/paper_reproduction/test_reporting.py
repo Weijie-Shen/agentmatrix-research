@@ -12,6 +12,7 @@ from research_core.factor_lab.paper_reproduction.pipeline import PaperReproducti
 from research_core.factor_lab.paper_reproduction.reporting import (
     build_paper_reproduction_report,
     export_paper_reproduction_report,
+    finalize_paper_reproduction_report,
     render_paper_reproduction_report_markdown,
 )
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig
@@ -150,6 +151,151 @@ class PaperReproductionReportingTest(unittest.TestCase):
         self.assertIn("Evaluation Truth", markdown)
         self.assertIn("Selected Evaluation Methods", markdown)
         self.assertIn("Defaulted Transform Assumptions", markdown)
+
+    def test_report_surfaces_capitalization_and_industry_profile_selections(self) -> None:
+        report = build_paper_reproduction_report(
+            job_id="paper-demo-job",
+            extraction=self._extraction(),
+            specs=[self._spec()],
+            data_profiles={
+                "qfq": {
+                    "source_id": "recommended_data_v2:qfq",
+                    "row_count": 100,
+                    "date_min": "2020-01-01",
+                    "date_max": "2020-12-31",
+                    "conventions": {
+                        "price_adjustment": "qfq",
+                        "market_cap_fields": ["free_float_market_cap"],
+                        "industry_classification": {
+                            "source": "citics_2019",
+                            "level": 1,
+                            "interval_rule": "start_date <= date < cancel_date",
+                        },
+                        "financial_statement_selection": {
+                            "fields": ["total_assets"],
+                            "as_of_date": "2020-12-31",
+                            "version_policy": "latest_available",
+                        },
+                        "valuation_selection": {"fields": ["pb_ratio", "dividend_yield"]},
+                        "index_reference_selection": {
+                            "dataset": "index_weights",
+                            "index_id": "000300.XSHG",
+                            "weight_frequency": "monthly",
+                        },
+                        "yield_curve_selection": {"tenors": ["1Y"]},
+                        "forward_return_lineage": {
+                            "field": "forward_return_20d",
+                            "horizon": 20,
+                            "horizon_unit": "exchange_trading_days",
+                        },
+                    },
+                    "limitations": ["provider free-float caveat retained"],
+                }
+            },
+        )
+
+        markdown = render_paper_reproduction_report_markdown(report)
+
+        self.assertEqual(report["data_profile_summaries"][0]["market_cap_fields"], ["free_float_market_cap"])
+        self.assertIn("## Data Selections and Coverage", markdown)
+        self.assertIn("citics_2019 level 1", markdown)
+        self.assertIn("free_float_market_cap", markdown)
+        self.assertIn("total_assets", markdown)
+        self.assertIn("000300.XSHG/monthly", markdown)
+        self.assertIn("yield=1Y", markdown)
+        self.assertIn("exchange_trading_days", markdown)
+
+    def test_report_surfaces_selected_truth_and_direct_metric_comparisons(self) -> None:
+        extraction = self._extraction()
+        evaluation_plan = PaperEvaluationPlan(
+            library="PaperDemo",
+            status="ready_for_evaluation_with_limitations",
+            factor_plans=[
+                PaperFactorEvaluationPlan(
+                    factor_name="paper_alpha_1",
+                    status="ready_for_evaluation_with_limitations",
+                    selected_evaluation_cases=[
+                        {
+                            "truth_id": "table_3_eval",
+                            "source_truth_id": "table_3_eval",
+                            "evaluation_family": "ic_analysis",
+                            "selection_reason": "Best-supported numeric paper result.",
+                            "comparability": "proxy",
+                            "diagnostic_only_metrics": ["rank_ic_mean"],
+                            "case_executable": True,
+                        }
+                    ],
+                )
+            ],
+        )
+        bundle = {
+            "schema_version": "evaluation_bundle/v2",
+            "records": [
+                {
+                    "execution_id": "qfq-execution",
+                    "factor_name": "paper_alpha_1",
+                    "scenario_id": "qfq",
+                    "source_truth_id": "table_3_eval",
+                    "lifecycle_state": "executed",
+                    "comparability": "proxy",
+                    "diagnostic_only_metrics": ["rank_ic_mean"],
+                    "evaluator_output": {
+                        "metrics": {"rank_ic_mean": 0.044, "cross_section_count": 100}
+                    },
+                },
+                {
+                    "execution_id": "hfq-execution",
+                    "factor_name": "paper_alpha_1",
+                    "scenario_id": "hfq",
+                    "source_truth_id": "table_3_eval",
+                    "lifecycle_state": "executed",
+                    "comparability": "proxy",
+                    "diagnostic_only_metrics": ["rank_ic_mean"],
+                    "evaluator_output": {
+                        "metrics": {"rank_ic_mean": 0.036, "cross_section_count": 100}
+                    },
+                },
+            ],
+        }
+        truth_results = {
+            "paper_alpha_1": [
+                {"truth_id": "table_3_eval", "status": "directionally_consistent"},
+                {"truth_id": "table_3_eval", "status": "directionally_consistent"},
+            ]
+        }
+
+        report = build_paper_reproduction_report(
+            job_id="paper-demo-job",
+            extraction=extraction,
+            specs=[self._spec()],
+            evaluation_plan=evaluation_plan,
+            evaluation_bundle=bundle,
+            truth_results=truth_results,
+        )
+        markdown = render_paper_reproduction_report_markdown(report)
+
+        selection = report["selected_truth_sources"][0]
+        self.assertEqual(selection["truth_id"], "table_3_eval")
+        self.assertEqual(selection["source_location"], "Table 3")
+        self.assertEqual(selection["selection_reason"], "Best-supported numeric paper result.")
+        comparisons = report["comparison_results"]
+        self.assertEqual(comparisons["primary_metric"], "rank_ic_mean")
+        self.assertEqual(len(comparisons["primary_metric_rows"]), 2)
+        self.assertAlmostEqual(
+            comparisons["summary"]["primary_metric"]["median_absolute_percentage_error"],
+            0.1,
+        )
+        self.assertAlmostEqual(
+            comparisons["summary"]["primary_metric"]["sign_agreement_rate"],
+            1.0,
+        )
+        self.assertEqual(report["summary"]["metric_comparison_count"], 2)
+        self.assertIn("## Selected Truth Sources", markdown)
+        self.assertIn("Best-supported numeric paper result", markdown)
+        self.assertIn("## Paper vs Calculated Results", markdown)
+        self.assertIn("Mean Rank IC by Factor and Scenario", markdown)
+        self.assertIn("10.00%", markdown)
+        self.assertIn("0.044", markdown)
 
     def test_report_preserves_canonical_execution_and_universe_filter_provenance(self) -> None:
         bundle = {
@@ -345,6 +491,29 @@ class PaperReproductionReportingTest(unittest.TestCase):
             payload = json.loads(paths["json"].read_text(encoding="utf-8"))
             self.assertEqual(payload["job_id"], "paper-demo-job")
             self.assertIn("paper_alpha_1", paths["markdown"].read_text(encoding="utf-8"))
+
+    def test_finalize_report_embeds_completed_final_stage_and_persists_pipeline(self) -> None:
+        extraction = self._extraction()
+        state = PaperReproductionPipelineState.from_extraction(extraction, job_id="paper-demo-job")
+        for stage in state.stages[:-1]:
+            state.mark_stage(stage.name, "passed", execution_status="completed")
+        report = build_paper_reproduction_report(
+            job_id="paper-demo-job",
+            extraction=extraction,
+            specs=[self._spec()],
+            pipeline_state=state,
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = FactorLabWorkspaceConfig(data_root=Path(tmp_dir) / "data", runtime_root=Path(tmp_dir) / "runtime")
+            paths = finalize_paper_reproduction_report(report, state, config=workspace)
+
+            payload = json.loads(paths["json"].read_text(encoding="utf-8"))
+            pipeline_payload = json.loads(
+                (workspace.runtime_root / "paper_jobs" / "paper-demo-job.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(payload["summary"]["next_stage"], "complete")
+            self.assertEqual(payload["pipeline"]["stages"][-1]["execution_status"], "completed")
+            self.assertEqual(pipeline_payload["next_stage"], "complete")
 
 
 if __name__ == "__main__":

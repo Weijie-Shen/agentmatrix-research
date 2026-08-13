@@ -13,6 +13,14 @@ from research_core.factor_lab.runtime import FactorLabWorkspaceConfig, now_iso
 
 DEFAULT_SKILL_NAME = "paper-factor-reproduction"
 DEFAULT_SKILL_ENV_VAR = "PAPER_FACTOR_REPRODUCTION_SKILL_PATH"
+DEFAULT_STAGE_SKILL_NAMES = (
+    "paper-evidence-extraction",
+    "paper-factor-data-readiness",
+    "paper-factor-implementation",
+    "paper-factor-evaluation",
+    "paper-reproduction-review",
+    "rqdata-fetch-reference",
+)
 
 
 @dataclass(slots=True)
@@ -39,15 +47,18 @@ class PaperReproductionAgentHarnessBundle:
     skill_copy_path: str
     skill_source_path: str
     skill_sha256: str
+    skill_bundle_paths: list[str] = field(default_factory=list)
+    skill_bundle_sha256: str = ""
 
 
 def default_skill_path() -> Path:
-    """Return the configured Hermes skill path used by local fresh-agent tests."""
+    """Return the repository-scoped Codex skill used by fresh-agent tests."""
 
     configured = os.environ.get(DEFAULT_SKILL_ENV_VAR, "").strip()
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".hermes" / "skills" / "research" / DEFAULT_SKILL_NAME / "SKILL.md"
+    repository_root = Path(__file__).resolve().parents[3]
+    return repository_root / ".agents" / "skills" / DEFAULT_SKILL_NAME / "SKILL.md"
 
 
 def prepare_agent_harness_bundle(
@@ -68,13 +79,15 @@ def prepare_agent_harness_bundle(
         )
 
     root_dir = workspace.runtime_root / "agent_harness" / request.harness_id
-    skill_dir = root_dir / "skills" / DEFAULT_SKILL_NAME
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_copy_path = skill_dir / "SKILL.md"
-    shutil.copyfile(source_skill_path, skill_copy_path)
+    bundle_root = root_dir / "skills"
+    skill_copy_path, skill_bundle_paths = _copy_skill_bundle(
+        source_skill_path=source_skill_path,
+        bundle_root=bundle_root,
+    )
 
     skill_text = skill_copy_path.read_text(encoding="utf-8")
     skill_sha256 = hashlib.sha256(skill_text.encode("utf-8")).hexdigest()
+    skill_bundle_sha256 = _hash_skill_bundle(bundle_root)
 
     metadata = _metadata_payload(
         request=request,
@@ -82,6 +95,8 @@ def prepare_agent_harness_bundle(
         skill_copy_path=skill_copy_path,
         source_skill_path=source_skill_path,
         skill_sha256=skill_sha256,
+        skill_bundle_paths=skill_bundle_paths,
+        skill_bundle_sha256=skill_bundle_sha256,
     )
     metadata_path = root_dir / "harness_metadata.json"
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -98,6 +113,8 @@ def prepare_agent_harness_bundle(
         skill_copy_path=str(skill_copy_path),
         skill_source_path=str(source_skill_path),
         skill_sha256=skill_sha256,
+        skill_bundle_paths=skill_bundle_paths,
+        skill_bundle_sha256=skill_bundle_sha256,
     )
 
 
@@ -108,6 +125,8 @@ def _metadata_payload(
     skill_copy_path: Path,
     source_skill_path: Path,
     skill_sha256: str,
+    skill_bundle_paths: list[str],
+    skill_bundle_sha256: str,
 ) -> dict[str, Any]:
     payload = asdict(request)
     payload.update(
@@ -118,6 +137,9 @@ def _metadata_payload(
             "skill_copy_path": str(skill_copy_path),
             "skill_source_path": str(source_skill_path),
             "skill_sha256": skill_sha256,
+            "skill_bundle_paths": skill_bundle_paths,
+            "skill_bundle_sha256": skill_bundle_sha256,
+            "agent_platform": "codex",
             "required_agent_instruction": "Load and follow the bundled paper-factor-reproduction skill before doing reproduction work.",
             "truth_policy": "Use paper-reported evaluation_results only; do not use factor-value truth matching.",
             "stage_policy": "Proceed through the gated paper reproduction workflow and stop at the correct gate when blocked.",
@@ -154,6 +176,12 @@ Skill SHA-256:
 {metadata["skill_sha256"]}
 ```
 
+Skill bundle SHA-256:
+
+```text
+{metadata["skill_bundle_sha256"]}
+```
+
 ## Working Directory
 
 ```text
@@ -188,6 +216,8 @@ Paper ID:
 - Do not use paper factor-value truth matching.
 - Keep raw factor definitions separate from evaluation-case transforms, neutralization, return horizons, portfolio rules, and evaluation-required data.
 - Use `load_recommended_daily_panel(..., price_view="qfq", adjustment_end_date=test_end)` and `price_view="hfq"` sequentially with `/Users/mac/recommended_data_v2` before Quant API v2 or declaring `blocked_by_data`. Run the testing-end-anchored QFQ and initial-baseline HFQ views independently. Complete, persist, and release one scenario before loading the next; do not hand-pick physical files or keep both full views resident by default.
+- Read the recommended-data README before Stage 3. Resolve total/A-share/circulating-A/free-float capitalization from paper wording and request it with `market_cap_fields`. Resolve industry taxonomy source and level from paper evidence and pass `IndustryClassificationSelection`; interval history must use `start_date <= evaluation_or_formation_date < cancel_date`. Do not apply QFQ/HFQ multipliers to capitalization, treat industry codes as continuous, or silently choose a taxonomy.
+- Use repository loaders for PIT financial statements, valuations/dividends, benchmark levels, historical index constituents/weights, the China exchange calendar, and the government yield curve. Apply `ann_date <= T` before filing-version selection; specify monthly versus daily index weights and yield tenor explicitly; use exchange-calendar `T+h` labels when the paper defines trading-day horizons. Use `$rqdata-fetch-reference` only when the canonical local reference bundle cannot satisfy the exact request.
 - Use Quant API v2 only when the recommended local data folder cannot satisfy the paper's required fields/date window.
 - Preserve all extracted truth sources, profile available data, select the best-supported paper truth before computing metrics, and execute only selected resolved cases.
 - Resolve semantic data fields through declared relationships. Exact aliases, constructed equivalents, accepted proxies, and rejected substitutes must remain distinct; proxies downgrade comparability and stay report-visible, while unmaterialized derivations and unsupported substitutes must not become runtime fields.
@@ -198,6 +228,13 @@ Paper ID:
 - Represent calculation and evaluation universes separately. Apply ST/PT, suspension, and future-tradability masks only at their declared evaluation stage unless the paper explicitly requires them during factor calculation.
 - Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue through documented degradation and report deviations.
 - Export extraction/spec/pipeline/report artifacts under the repo's Factor Lab runtime paths.
+- Use the repository-scoped Codex stage skills routed by `$paper-factor-reproduction`; keep one coordinator responsible for pipeline state and final integration.
+- After any interruption, reload and merge valid persisted evaluation bundles before declaring cases deferred. Never erase successful durable execution records because a later scenario, partition, or report step failed.
+- Do not finish with zero selected/executed cases while constructible labels, alternative truth, or accepted proxies can make a case executable. Resource deferral requires persisted preflight evidence or an actual caught resource-budget error, not an assumption from panel size.
+- Resource evidence must come from the actual requested panel and a genuine runtime budget. Never pair a probe or reduced frame with full-period metadata, and never set an artificially tiny budget to manufacture a deferral.
+- Do not retain full QFQ and HFQ frames together. Profile and release each view during data readiness; during evaluation reload, execute, persist, and release one view before loading the next.
+- Run long full-panel evaluations in a persistent command session. When a command yields a session or cell identifier, poll that same process with the continuation tool until exit; a tool-call yield deadline is not process termination and must not trigger a restart or deferral.
+- This automated test is successful only when every selected factor has a durable `executed` evaluation record and a paper-truth result; deferred records alone are not completion.
 
 Required price views recorded by this harness: `{", ".join(metadata["required_price_adjustment_views"])}`.
 
@@ -205,3 +242,36 @@ Required price views recorded by this harness: `{", ".join(metadata["required_pr
 
 {notes_text}
 """
+
+
+def _copy_skill_bundle(*, source_skill_path: Path, bundle_root: Path) -> tuple[Path, list[str]]:
+    source_skill_dir = source_skill_path.parent
+    source_skills_root = source_skill_dir.parent
+    skill_names = (DEFAULT_SKILL_NAME, *DEFAULT_STAGE_SKILL_NAMES)
+    copied_paths: list[str] = []
+
+    for skill_name in skill_names:
+        source_dir = source_skills_root / skill_name
+        if skill_name == DEFAULT_SKILL_NAME:
+            source_dir = source_skill_dir
+        if not (source_dir / "SKILL.md").exists():
+            continue
+        target_dir = bundle_root / skill_name
+        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+        copied_paths.append(str(target_dir / "SKILL.md"))
+
+    skill_copy_path = bundle_root / DEFAULT_SKILL_NAME / "SKILL.md"
+    return skill_copy_path, copied_paths
+
+
+def _hash_skill_bundle(bundle_root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(bundle_root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(bundle_root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()

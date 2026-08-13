@@ -142,6 +142,14 @@ DEFAULT_FIELD_RELATIONSHIPS: tuple[FieldRelationship, ...] = (
     ),
     FieldRelationship("industry_or_sector", "industry", "exact_alias"),
     FieldRelationship("industry_or_sector", "sector", "exact_alias"),
+    FieldRelationship("trading_calendar", "trade_date", "exact_alias"),
+    FieldRelationship("benchmark_index_level", "close", "exact_alias"),
+    FieldRelationship("benchmark_return", "benchmark_return", "exact_alias"),
+    FieldRelationship("market_benchmark_return", "benchmark_return", "exact_alias"),
+    FieldRelationship("index_membership", "component_code", "exact_alias"),
+    FieldRelationship("index_constituents", "component_code", "exact_alias"),
+    FieldRelationship("index_weight", "weight", "exact_alias"),
+    FieldRelationship("risk_free_rate", "risk_free_rate", "exact_alias"),
 )
 
 
@@ -330,6 +338,20 @@ def build_data_profile(
         limitations.append(f"invalid {date_column} values: {int(parsed_dates.isna().sum())}")
 
     resolved_conventions = dict(conventions or {})
+    for attribute in (
+        "market_cap_fields",
+        "market_cap_lineage",
+        "industry_classification",
+        "financial_statement_selection",
+        "valuation_selection",
+        "dividend_history_selection",
+        "trading_calendar_selection",
+        "index_reference_selection",
+        "yield_curve_selection",
+        "forward_return_lineage",
+    ):
+        if attribute in frame.attrs:
+            resolved_conventions.setdefault(attribute, frame.attrs[attribute])
     if "price_adjustment" in frame.columns:
         price_views = [str(value) for value in frame["price_adjustment"].dropna().unique()]
         resolved_conventions.setdefault("price_adjustment", price_views[0] if len(price_views) == 1 else price_views)
@@ -337,6 +359,33 @@ def build_data_profile(
         anchor_dates = pd.to_datetime(frame["adjustment_anchor_date"], errors="coerce").dropna().unique()
         if len(anchor_dates) == 1:
             resolved_conventions.setdefault("adjustment_anchor_date", pd.Timestamp(anchor_dates[0]).date().isoformat())
+
+    resolved_derived_fields = [dict(item) for item in (derived_fields or [])]
+    market_cap_lineage = resolved_conventions.get("market_cap_lineage", {})
+    if isinstance(market_cap_lineage, dict):
+        for field_name, raw_lineage in market_cap_lineage.items():
+            if not isinstance(raw_lineage, dict) or not raw_lineage.get("derived"):
+                continue
+            if any(item.get("field") == field_name for item in resolved_derived_fields):
+                continue
+            resolved_derived_fields.append(
+                {
+                    "field": field_name,
+                    "sources": ["free_circulation", "implied_unadjusted_close"],
+                    "formula": "free_circulation * implied_unadjusted_close",
+                    "source_field": raw_lineage.get("source_field", field_name),
+                    "price_basis": raw_lineage.get("price_basis", "unadjusted"),
+                    "source": "recommended_data_v2",
+                    "reason": "RQData free-float capitalization is materialized from PIT share history and implied unadjusted close.",
+                }
+            )
+            limitations.append(
+                "free-float capitalization retains provider missing values and documented free-circulation share inconsistencies"
+            )
+    forward_lineage = resolved_conventions.get("forward_return_lineage", {})
+    if isinstance(forward_lineage, dict) and forward_lineage.get("field"):
+        if not any(item.get("field") == forward_lineage["field"] for item in resolved_derived_fields):
+            resolved_derived_fields.append(dict(forward_lineage))
 
     return DataProfile(
         source_id=source_id,
@@ -350,10 +399,49 @@ def build_data_profile(
         duplicate_key_count=duplicate_count,
         field_coverage=field_coverage,
         conventions=resolved_conventions,
-        derived_fields=derived_fields or [],
+        derived_fields=resolved_derived_fields,
         field_relationships=[asdict(item) if isinstance(item, FieldRelationship) else dict(item) for item in (field_relationships or [])],
         limitations=limitations,
     )
+
+
+def materialize_forward_return(
+    frame: pd.DataFrame,
+    horizon: int,
+    *,
+    price_col: str = "close",
+    output_col: str | None = None,
+    date_col: str = "date",
+    security_col: str = "code",
+    copy: bool = True,
+) -> pd.DataFrame:
+    """Materialize a trading-observation forward return without changing row order."""
+
+    if horizon <= 0:
+        raise ValueError("horizon must be a positive integer")
+    required = [date_col, security_col, price_col]
+    missing = [column for column in required if column not in frame.columns]
+    if missing:
+        raise ValueError(f"forward return inputs are missing columns: {missing}")
+    result = frame.copy() if copy else frame
+    row_order_col = "__paper_reproduction_row_order__"
+    while row_order_col in result.columns:
+        row_order_col += "_"
+    result[row_order_col] = range(len(result))
+    ordered = result.sort_values([security_col, date_col], kind="stable")
+    future_price = ordered.groupby(security_col, sort=False)[price_col].shift(-horizon)
+    column = output_col or f"forward_return_{horizon}d"
+    ordered[column] = future_price.div(ordered[price_col]).sub(1)
+    result[column] = ordered.sort_values(row_order_col, kind="stable")[column].to_numpy()
+    result.drop(columns=[row_order_col], inplace=True)
+    result.attrs["forward_return_lineage"] = {
+        "field": column,
+        "horizon": horizon,
+        "horizon_unit": "security_trading_observations",
+        "target_rule": "per-security shift(-horizon)",
+        "price_col": price_col,
+    }
+    return result
 
 
 def assess_evaluation_case_support(

@@ -623,7 +623,7 @@ The report must not describe unsupported cases as failed factors.
 
 ## 16. Skill-oriented implementation changes
 
-The Hermes skill is the primary policy driver. Update it before or alongside framework changes.
+The repository-scoped Codex skill bundle is the primary agent policy driver. Update the compact coordinator and the affected stage skill before or alongside framework changes.
 
 The skill should explicitly instruct the agent to:
 
@@ -749,14 +749,18 @@ Existing evaluator functions can be registered with capability metadata without 
 
 ### Huatai regression test
 
-Given the known local-data constraints:
+Given the canonical local-data contract:
 
 - factor implementation continues for all formula-supported factors;
-- the planner detects that full-period Table 52 WLS is not exactly supported;
+- the planner resolves free-float capitalization and the paper's industry source/level before deciding whether full-period WLS is exactly supported;
 - it searches for a better-supported extracted truth, including unneutralized truth;
 - if no better truth is available, it resolves a partial/proxy Table 52 case;
 - it does not mutate WLS to OLS inside the original truth source;
-- it records the 2017 start date and missing free-float weight;
+- it records selected capitalization/industry lineage, coverage, missingness, and any provider-quality limitations;
+- it applies the financial-statement announcement cutoff before version selection and records statement fields, as-of date, and version policy;
+- it records valuation/dividend units and the declaration or information date used for point-in-time eligibility;
+- it resolves the exact benchmark ID, constituent effective-date rule, monthly or daily weight family, trading calendar, and yield-curve tenors;
+- it records whether forward-return horizons use exchange trading days and leaves labels missing when a security has no price on the exact target date;
 - regression metrics affected by OLS substitution are diagnostic-only or proxy-grade;
 - IC metrics may remain truth-match eligible according to sample comparability policy;
 - IC decay and layered cases are deferred or targeted for evaluator implementation;

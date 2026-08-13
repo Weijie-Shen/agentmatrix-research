@@ -9,6 +9,7 @@ from research_core.factor_lab.paper_reproduction.data_validation import (
     FieldRelationship,
     assess_evaluation_case_support,
     build_data_profile,
+    materialize_forward_return,
     validate_input_frame,
 )
 from research_core.factor_lab.paper_reproduction.evaluators import get_generic_evaluator_capabilities
@@ -94,6 +95,19 @@ class PaperInputDataValidationTest(unittest.TestCase):
         self.assertGreater(profile.missingness["close"], 0)
         self.assertEqual(profile.duplicate_key_count, 2)
         self.assertIn("close", profile.field_coverage)
+
+    def test_materialize_forward_return_uses_future_security_observation_and_preserves_order(self) -> None:
+        frame = self._valid_frame().iloc[[2, 0, 3, 1]].copy()
+
+        result = materialize_forward_return(frame, 1)
+
+        self.assertEqual(result[["date", "code"]].to_dict("records"), frame[["date", "code"]].to_dict("records"))
+        returns = dict(zip(result["code"], result["forward_return_1d"]))
+        first_a = result.loc[(result["code"] == "AAA") & (result["date"] == pd.Timestamp("2020-01-01")), "forward_return_1d"].iloc[0]
+        first_b = result.loc[(result["code"] == "BBB") & (result["date"] == pd.Timestamp("2020-01-01")), "forward_return_1d"].iloc[0]
+        self.assertAlmostEqual(first_a, 10.0 / 10.1 - 1)
+        self.assertAlmostEqual(first_b, 20.2 / 19.9 - 1)
+        self.assertTrue(result.groupby("code")["forward_return_1d"].apply(lambda values: values.isna().sum() == 1).all())
 
     def test_assess_evaluation_case_support_records_missing_evaluation_field_as_proxy(self) -> None:
         profile = build_data_profile(self._valid_frame(), source_id="unit_panel")

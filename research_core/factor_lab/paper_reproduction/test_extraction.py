@@ -130,6 +130,15 @@ class PaperExtractionTest(unittest.TestCase):
         self.assertEqual(validation.status, "needs_human_review")
         self.assertIn("target_factors[0].truth_sources is missing; paper evaluation results are required", validation.warnings)
 
+    def test_formula_required_fields_warn_on_family_wide_raw_field_superset(self) -> None:
+        extraction = self._valid_extraction()
+        extraction.target_factors[0].required_fields = ["open", "high", "low", "close", "vwap", "volume"]
+
+        validation = validate_paper_extraction(extraction)
+
+        self.assertEqual(validation.status, "needs_human_review")
+        self.assertTrue(any("keep formula requirements factor-specific" in item for item in validation.warnings))
+
     def test_multiple_evaluation_truth_sources_require_selection_rule(self) -> None:
         extraction = self._valid_extraction()
         extraction.target_factors[1].truth_sources.append(

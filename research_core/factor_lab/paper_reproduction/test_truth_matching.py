@@ -2,14 +2,77 @@ from __future__ import annotations
 
 import unittest
 
-from research_core.factor_lab.paper_reproduction.extraction import ExtractedTruthSource
+from research_core.factor_lab.paper_reproduction.evaluation_execution import (
+    EvaluationBundle,
+    EvaluationExecutionRecord,
+)
+from research_core.factor_lab.paper_reproduction.extraction import (
+    ExtractedFactor,
+    ExtractedTruthSource,
+    PaperExtraction,
+)
 from research_core.factor_lab.paper_reproduction.truth_matching import (
+    compare_evaluation_bundle_to_paper_truth,
     compare_evaluation_metrics_to_paper_truth,
     interpret_truth_match_quality,
 )
 
 
 class PaperTruthMatchingTest(unittest.TestCase):
+    def test_durable_bundle_truth_matching_uses_record_comparability_and_eligibility(self) -> None:
+        truth = ExtractedTruthSource(
+            truth_id="table_3_eval",
+            truth_type="evaluation_results",
+            metrics={"rank_ic_mean": 0.04, "rank_ic_std": 0.05},
+        )
+        extraction = PaperExtraction(
+            paper_id="demo",
+            title="Demo",
+            authors=["Researcher"],
+            source="Demo source",
+            year=2026,
+            factor_family_name="Demo",
+            target_factors=[
+                ExtractedFactor(
+                    factor_name="alpha",
+                    formula="close",
+                    required_fields=["close"],
+                    frequency="daily",
+                    truth_sources=[truth],
+                )
+            ],
+        )
+        record = EvaluationExecutionRecord(
+            execution_id="execution-1",
+            truth_case_id="table_3_eval",
+            source_truth_id="table_3_eval",
+            factor_id="demo_alpha",
+            factor_name="alpha",
+            scenario_id="qfq",
+            evaluator_id="generic_ic_v1",
+            lifecycle_state="executed",
+            implementation_source_hash="source",
+            factor_specification_hash="spec",
+            data_snapshot_hash="data",
+            comparability="proxy",
+            truth_match_eligible_metrics=["rank_ic_mean"],
+            diagnostic_only_metrics=["rank_ic_std"],
+            evaluator_output={"metrics": {"rank_ic_mean": 0.04, "rank_ic_std": 1.0}},
+        )
+        bundle = EvaluationBundle(
+            library="Demo",
+            scenario_id="qfq",
+            data_snapshot_hash="data",
+            implementation_artifact={},
+            records=[record],
+        )
+
+        results = compare_evaluation_bundle_to_paper_truth(bundle, extraction)
+
+        self.assertEqual(results["alpha"][0].status, "directionally_consistent")
+        self.assertEqual(results["alpha"][0].diagnostics["matched_metrics"], ["rank_ic_mean"])
+        self.assertEqual(results["alpha"][0].diagnostics["diagnostic_only_metrics"], ["rank_ic_std"])
+
     def test_evaluation_metric_truth_match_passes_within_tolerance(self) -> None:
         truth = ExtractedTruthSource(
             truth_id="table_3_eval",

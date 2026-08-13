@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Factor Data Readiness"
+  short_description: "Resolve and validate reproduction data"
+  default_prompt: "Use $paper-factor-data-readiness to assess and resolve the data required by a paper factor reproduction."

@@ -546,6 +546,7 @@ Report contents:
 - paper metadata
 - whether factor implementation was produced
 - selected paper truth and selection reason
+- selected truth id, source location, paper method, sample period, universe, and paper-reported metrics
 - exact/comparable/proxy/directional comparability
 - truth-validation result
 - most important limitations
@@ -557,6 +558,9 @@ Report contents:
 - data coverage and evaluator support summaries when supplied
 - structured deviations and affected metrics
 - truth match results
+- direct paper-versus-calculated metric rows by factor and execution scenario
+- signed error, absolute error, signed percentage error, absolute percentage error, and sign agreement
+- primary IC and all-metric summaries including median absolute percentage error, mean absolute percentage error, MAE, RMSE, maximum percentage error, sign agreement, and paper/calculated correlation
 - correct truth-match denominators
 - pipeline stage state
 - artifacts
@@ -622,13 +626,13 @@ Soft limitations do not block later stages. Hard failures block only dependent w
 
 ## Skill and Fresh-Agent Testing
 
-Skill path used during current development:
+Repository-scoped Codex coordinator skill:
 
 ```text
-/Users/mac/.hermes/skills/research/paper-factor-reproduction/SKILL.md
+.agents/skills/paper-factor-reproduction/SKILL.md
 ```
 
-The skill is a primary project output. Testing the project means testing whether a fresh AI agent can follow this skill and reproduce the methodology extraction.
+Stage-specific Codex skills live beside it under `.agents/skills/`. The coordinator routes extraction, data readiness, implementation, evaluation, and review work to those smaller skills. Testing the project means testing whether a fresh Codex agent can follow the exact repository skill bundle and complete the gated workflow.
 
 Harness module:
 
@@ -776,19 +780,29 @@ Canonical daily-panel files:
 
 ```text
 kline_raw_rqdata.parquet          raw RQData OHLCV/amount, factors, ST/suspension status, price-observation flags
-market_cap.parquet                unified daily market cap, plus recent share fields
-trading_calendar.parquet          trading calendar
+market_cap_history_rqdata.parquet PIT total, A-share, circulating-A, and derived free-float capitalization
+financial_statements_pit_rqdata.parquet versioned PIT balance-sheet, income, and cash-flow fields
+valuation_factors_rqdata.parquet  daily valuation ratios and decimal/raw dividend yields
+dividend_events_rqdata.parquet    declaration/ex/pay-date dividend events
+dividend_amount_history_rqdata.parquet information-date dividend history
+trading_calendar.parquet          China exchange trading calendar
+standard_index_daily_levels.parquet provider-unadjusted benchmark levels
+index_components_rqdata/          annual point-in-time constituent partitions
+index_weights_monthly_rqdata/     annual monthly index-weight partitions
+index_weights_daily_rqdata/       annual daily index-weight partitions
+china_government_yield_curve.parquet decimal annual government yields by tenor
 security_master.parquet           security master
-income_statement.parquet          point-in-time income values
-balance_sheet.parquet      point-in-time balance-sheet values
-dividend_yield.parquet     daily dividend yield
-industry_map.parquet       current industry mapping snapshot
+industry_membership_history_rqdata.parquet interval memberships by taxonomy source and level
+industry_taxonomy_history_rqdata.parquet   historical taxonomy names and parent codes
 ```
 
 Daily panel helper:
 
 ```python
-from research_core.factor_lab.paper_reproduction.recommended_data import load_recommended_daily_panel
+from research_core.factor_lab.paper_reproduction.recommended_data import (
+    IndustryClassificationSelection,
+    load_recommended_daily_panel,
+)
 
 for price_view in ("qfq", "hfq"):
     calculation_panel = load_recommended_daily_panel(
@@ -797,8 +811,8 @@ for price_view in ("qfq", "hfq"):
         price_view=price_view,
         adjustment_end_date=paper_test_end if price_view == "qfq" else None,
         include_status=True,
-        include_market_cap=True,
-        include_industry=True,
+        market_cap_fields=("market_cap", "free_float_market_cap"),
+        industry_classification=IndustryClassificationSelection(paper_industry_source, paper_industry_level),
     )
     # Execute, persist the narrow FactorFrame/evaluation bundle, then release this
     # panel before loading the next price scenario.
@@ -819,10 +833,15 @@ Coverage notes:
 - The same file contains complete listed-calendar ST and suspension status. Status-only rows retain null market fields and must not be forward-filled.
 - Every reproduction runs two independent views: testing-end-anchored QFQ (`raw * F[t] / F[test_end]`) and initial-baseline HFQ (`raw * F[t]`). The paper test end is configuration, not a fixed date.
 - Apply the same view multiplier to OHLC and `amount / volume` VWAP; leave volume and amount unchanged. Never mix QFQ and HFQ fields in one run.
-- `market_cap.parquet` is the canonical market-cap series and covers 2010-01-04 to 2026-07-22.
+- `market_cap_history_rqdata.parquet` covers 2000-01-04 to 2026-08-10. Select total, A-share, circulating-A, or free-float capitalization from paper wording; do not treat them as aliases or apply QFQ/HFQ multipliers.
+- Industry history is interval-based. Select the paper taxonomy source and level explicitly, then resolve `start_date <= evaluation_or_formation_date < cancel_date`. The supported sources are `sws`, `citics`, `citics_2019`, and `gildata`; `sws` is not SWS 2021.
+- Financial-statement selection is point-in-time: apply `ann_date <= T` before selecting a version of `(symbol, report_period)`. Record whether the run uses `latest_available`, `original_only`, or all versions. Q2/Q3/Q4 income and cash-flow fields may be year-to-date and must not be treated as standalone quarters without an explicit construction.
+- `valuation_factors_rqdata.parquet` stores `dividend_yield` and `dividend_yield2` as decimal yields; retain the corresponding raw columns for audit rather than guessing units.
+- Resolve benchmark IDs, membership effective dates, monthly versus daily weight frequency, and yield-curve tenors explicitly. Never substitute one reference family silently.
+- Construct a `T+h` label from `trading_calendar.parquet`; if the target security lacks a price on that exact exchange date, leave the label missing rather than advancing to its next observation.
 - For full-period work, load QFQ and HFQ sequentially with `load_recommended_daily_panel(...)`; use the two-view convenience loader only when preflight shows both views are manageable. `resolve_recommended_data_sources()` is diagnostic only.
 - Require `has_price_observation=true` when a factor needs an actual price observation. Treat zero-volume/tradability, ST/PT, and suspension masks as staged universe decisions; the typical all-A-share protocol applies them to evaluation eligibility after factor calculation.
-- `income_statement.parquet`, `balance_sheet.parquet`, and `dividend_yield.parquet` include data back to 2010.
+- Use `recommended_fundamentals.py` and `recommended_reference.py` for the versioned fundamentals, valuation/dividend, calendar, index, and yield-curve families. Their dataframe attributes carry the selections into the Stage 3 profile and final report.
 
 ## Quant API v2 Data Notes
 
@@ -861,7 +880,7 @@ date, code, open, high, low, close, volume, amount
 Known limits:
 
 - `ods_kline_1d` coverage starts around 2020
-- the local RQData K-line panel now covers Huatai's 2010-2019 K-line window; other required fields such as exact point-in-time industry or free-float weights may still limit protocol fidelity
+- the local RQData bundle includes PIT capitalization and interval industry history, but exact fidelity still depends on matching the paper's capitalization basis, taxonomy source/version, classification level, and timing rule
 - recent windows can validate implementation/data flow but not full sample reproduction
 
 Date encoding pitfall:
@@ -890,8 +909,9 @@ Evaluation gaps:
 
 Data gaps:
 
-- point-in-time industry classification aligned to each paper's taxonomy
-- complete historical free-float market capitalization/weights for paper-specific WLS protocols
+- classifications not provided by the supported RQData sources, including SWS 2021 exactly
+- paper taxonomies or classification versions that cannot be mapped exactly to `sws`, `citics`, `citics_2019`, or `gildata`
+- provider missing values and documented share inconsistencies affecting strict free-float protocols
 - provider anomalies in a small minority of raw VWAP and zero-volume source rows
 - benchmark return series for paper portfolio metrics
 
@@ -916,9 +936,8 @@ integrity contracts incrementally:
 
 The main deferred architecture work is typed evidence-derived stage completion,
 calendar-based return labels, canonical metric lifecycle/reconciliation, and
-immutable finalization snapshots. Industry-history and free-float-market-cap
-semantics remain deferred until suitable data exists. These gaps must stay visible
-but do not invalidate the canonical artifact, alignment, neutralization, or staged
-universe capabilities already implemented.
+immutable finalization snapshots. Industry-history and capitalization-basis
+selection are now loader-supported; unresolved paper taxonomy/version semantics
+and provider quality caveats must remain visible in support assessment and reports.
 
 The most important missing tool is an automated or semi-automated golden comparator. It should report strict mismatches for formulas, fields, metrics, and source locations, and semantic review items for universe, sample period, transform specs, evaluation specs, and known limitations.

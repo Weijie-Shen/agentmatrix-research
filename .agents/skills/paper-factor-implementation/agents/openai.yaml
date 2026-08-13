@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Factor Implementation"
+  short_description: "Implement paper factors with tested semantics"
+  default_prompt: "Use $paper-factor-implementation to implement and test selected paper factors from validated extraction artifacts."

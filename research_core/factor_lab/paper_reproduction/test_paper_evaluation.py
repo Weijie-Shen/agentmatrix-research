@@ -104,6 +104,35 @@ class PaperEvaluationPlanningTest(unittest.TestCase):
         )
         self.assertEqual(plan.factor_plans[0].evaluation_cases[0]["required_data"]["controls"], ["industry", "market_cap"])
 
+    def test_plan_canonicalizes_horizon_alias_into_runtime_return_column_without_mutating_paper_protocol(self) -> None:
+        spec = FactorResearchSpec(
+            factor_name="alpha_from_paper",
+            library="PaperDemo",
+            version="v0.1",
+            formula="rank(close)",
+            required_fields=["close"],
+            metadata={
+                "selected_truth_sources": [
+                    {
+                        "truth_id": "table_ic",
+                        "truth_type": "evaluation_results",
+                        "evaluation_family": "ic_analysis",
+                        "evaluation_method": "20-day rank IC",
+                        "evaluation_spec": {"return_horizon_days": 20},
+                        "required_data": {"labels": ["close"]},
+                        "metrics": {"rank_ic_mean": 0.04},
+                    }
+                ]
+            },
+        )
+
+        case = build_paper_evaluation_plan([spec]).factor_plans[0].evaluation_cases[0]
+
+        self.assertEqual(case["evaluation_spec"]["return_horizon"], 20)
+        self.assertEqual(case["evaluation_spec"]["return_col"], "forward_return_20d")
+        self.assertIn("forward_return_20d", case["required_data"]["evaluation"])
+        self.assertNotIn("return_col", case["paper_protocol"]["evaluation_spec"])
+
     def test_plan_selects_ic_analysis_before_portfolio_backtest(self) -> None:
         spec = self._spec_with_cases(
             [

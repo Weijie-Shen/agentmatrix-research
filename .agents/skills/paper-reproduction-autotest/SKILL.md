@@ -1,0 +1,100 @@
+---
+name: paper-reproduction-autotest
+description: Orchestrate auditable multi-paper forward tests of the AgentMatrix paper-reproduction pipeline. Use when Codex must inventory a paper test-case folder, select strong and reproducible factors from each paper, prepare isolated repository-tracked test branches/worktrees, dispatch fresh low-cost reproduction agents, harvest their artifacts, assign independent reviewers, and summarize cross-paper defects without contaminating workers with golden answers or prior attempts.
+---
+
+# Paper Reproduction Autotest
+
+Coordinate the control plane. Reproduction workers follow `$paper-factor-reproduction`; reviewers follow `$paper-reproduction-review`.
+
+Read `references/artifact-contracts.md` before creating a batch. Use the deterministic APIs in `research_core/factor_lab/paper_reproduction/paper_autotest.py` for discovery, planning, worktree preparation, harness generation, harvesting, and owned cleanup.
+
+## Roles and models
+
+- Orchestrator: use `gpt-5.6-sol`. Own selection, scheduling, manifests, task boundaries, artifact collection, adjudication, and the batch summary.
+- Reproducer: use `gpt-5.6-terra` with medium reasoning by default. Give it exactly one paper, one isolated worktree, selected factor names, and the generated harness prompt.
+- Reviewer: use a fresh `gpt-5.6-sol` agent. Give it harvested artifacts, selected factor names, and `$paper-reproduction-review`; do not let it repair the writer's output.
+
+Run at most two reproducer agents concurrently. Full-market QFQ/HFQ evaluations are memory-heavy, so never increase this cap merely because more agent slots exist. Run no more than one full-data process in each worktree. Reviewers are read-only and may start after their corresponding writer has stopped.
+
+## 1. Inventory and select
+
+Discover PDFs under the requested test-case root with `discover_test_papers(...)`. Persist the path, byte size, and SHA-256. Do not assume filenames are reliable paper IDs without recording the hash.
+
+Review each paper independently before dispatch. Select the strongest factors within that paper, never by comparing its IC, return, or rank with factors from other papers. Select at most ten factors from one paper.
+
+Inspect the conclusion, summary, recommendation, and final factor-screening sections first. When the authors explicitly identify a final set of good-performing factors, use that set as the primary selection:
+
+- if the final set contains ten or fewer reproducible factors, select all of them;
+- if it contains more than ten, select the strongest ten using only that paper's ranking, reported metrics, and author emphasis;
+- do not replace an author-recommended factor with an easier factor merely because the easier one is cheaper to reproduce;
+- record the complete author-recommended set and the conclusion/recommendation source location in `PaperSelectionArtifact`.
+
+The Huatai-style pattern of naming seven final factors therefore produces a seven-factor test scope, not an arbitrary smaller sample.
+
+If the paper has no explicit final recommendation, select a few leading factors from its own factor comparison tables. A selected factor must have:
+
+- an unambiguous formula and parameters with a narrow source location;
+- inputs that are exact or constructible from supported data;
+- a numeric paper-reported evaluation result with a narrow truth location;
+- a supported or realistically implementable evaluator;
+- paper-reported performance strong enough to make it a useful reproduction target;
+- manageable expected compute cost.
+
+Score formula clarity, local-data support, evaluator support, within-paper performance strength, and compute feasibility from zero through five. Performance strength is relative only to factors evaluated in the same paper. Author inclusion in the paper's final recommended set is the strongest selection signal. Use the other dimensions to assess reproducibility and anticipated limitations, not to override the paper's final factor selection. Do not select composites, optimized portfolios, chart-only rankings, or factors whose attractive performance has no attributable numeric truth. Persist `PaperSelectionArtifact`; do not expose its truth values, scores, or reasoning to reproduction workers.
+
+## 2. Plan isolated runs
+
+Use `create_batch_manifest(...)` with an explicit committed base ref. The base commit must already contain the repository-tracked reproduction and review skills. Never test an uncommitted framework snapshot.
+
+Prepare one unique `codex/paper-test-<run-id>` branch and one `/private/tmp/agentmatrix-paper-tests/...` worktree per paper with `prepare_test_worktree(...)`. Never share a worktree between paper writers. Never reuse a path or branch from an earlier attempt. The ownership record is mandatory.
+
+Call `prepare_run_harness(...)` inside each worktree. Treat its bundled skill hash and base commit as run provenance. Keep selection artifacts and previous reviewer output in the main checkout's control root, outside every worker's discovery surface.
+
+## 3. Dispatch fresh reproducers
+
+Spawn up to two Terra workers. Use a bounded assignment containing:
+
+- exact worktree and paper paths;
+- selected factor names only;
+- generated harness prompt path;
+- `$paper-factor-reproduction` and bundled stage skills;
+- required outputs: pipeline state, extraction/specs, data profiles, implementation artifact and tests, evaluation bundles, paper-truth comparisons, and JSON/Markdown reports;
+- return contract: artifact paths, commands/tests, lifecycle outcomes, and limitations.
+
+Do not give workers selection scores, extracted metric values, golden JSON, another worker's results, suspected pipeline defects, or retry conclusions. A worker must not edit the orchestrator checkout or another worktree. Wait for persistent evaluation processes to exit; a yielded tool call is not completion.
+
+Immediately persist each dispatched task with `record_worker_started(...)`. When it finishes, fails, or is interrupted, call `record_worker_stopped(...)` with the lifecycle outcome before inspecting or harvesting its files.
+
+## 4. Harvest and review
+
+After a worker stops, call `harvest_run_artifacts(...)` before cleanup. It copies changed reproduction artifacts to the batch control root, records hashes and omissions, and preserves Git status and a source patch.
+
+Run `assess_agent_harness_run(...)` against the isolated worktree and persist it with `record_deterministic_assessment(...)`. Then spawn a fresh Sol reviewer with only:
+
+- the paper path;
+- selected factor names;
+- harvested manifest/artifact root;
+- assessment output;
+- bundled skill hashes and base commit;
+- `$paper-reproduction-review`.
+
+Require the reviewer to inspect persisted artifacts and return `complete`, `complete_with_limitations`, or `incomplete`, with blocking defects separated from limitations. Persist it with `record_independent_review(...)`. The orchestrator reconciles that verdict with the deterministic assessment. Neither reviewer nor orchestrator may call a run successful unless all eight stages are evidenced, every selected factor has a certified implementation and passing test, every selected factor has a durable executed evaluation, and both report formats contain paper-versus-calculated comparisons.
+
+## 5. Summarize and clean up
+
+Write one batch summary showing per paper:
+
+- selected scope and selection-artifact path;
+- branch, base commit, worker/reviewer models, and skill bundle hash;
+- stage status, executed/deferred cases, truth status, IC error metrics, and report paths;
+- deterministic assessment and independent-review verdict;
+- blocking defects, non-blocking limitations, and generic corrective themes.
+
+Aggregate defects only after preserving paper-local evidence. Classify proposed fixes by skill, extraction/schema, data readiness, implementation, evaluator, reporting, harness, or resource execution. Never tune framework logic to a paper name, factor name, table number, or known answer.
+
+Call `cleanup_test_worktree(...)` only after successful harvest and both review records are persisted. It validates exact ownership and the three control-plane artifacts before removing the worktree and branch. Retain incomplete run artifacts for audit even after cleanup.
+
+## Retry policy
+
+Retries use a new attempt number, run ID, branch, and worktree. A retry receives only the paper, selected factors, current bundled skill, and generic corrected workflow; it must not see the previous answer. Do not auto-retry scientific mismatches by changing formulas to chase paper metrics. Retry infrastructure/interruption failures only after recording the first attempt, and stop a paper after three attempts unless the user explicitly requests a broader iteration campaign.

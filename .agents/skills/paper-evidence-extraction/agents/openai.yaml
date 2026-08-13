@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Evidence Extraction"
+  short_description: "Extract formulas and evaluation evidence"
+  default_prompt: "Use $paper-evidence-extraction to extract selected factors and paper evaluation truth with precise provenance."

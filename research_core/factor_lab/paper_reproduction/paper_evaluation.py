@@ -153,6 +153,17 @@ def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]
     family = _normalize_evaluation_family(raw_family)
     truth_id = str(source.get("truth_id", ""))
     universe_protocol = _universe_protocol_from_source(source)
+    paper_evaluation_spec = dict(
+        source.get("evaluation_spec", {}) if isinstance(source.get("evaluation_spec", {}), dict) else {}
+    )
+    paper_required_data = dict(
+        source.get("required_data", {}) if isinstance(source.get("required_data", {}), dict) else {}
+    )
+    runtime_evaluation_spec, runtime_required_data = _canonical_runtime_evaluation_inputs(
+        paper_evaluation_spec,
+        paper_required_data,
+        family=family,
+    )
     return {
         "truth_case_id": truth_id,
         "truth_id": truth_id,
@@ -163,13 +174,13 @@ def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]
         "sample_period": str(source.get("sample_period", "")),
         "universe": str(source.get("universe", "")),
         "frequency": str(source.get("frequency", "")),
-        "evaluation_spec": dict(source.get("evaluation_spec", {}) if isinstance(source.get("evaluation_spec", {}), dict) else {}),
+        "evaluation_spec": runtime_evaluation_spec,
         "transform_spec": dict(source.get("transform_spec", {}) if isinstance(source.get("transform_spec", {}), dict) else {}),
         "neutralization_spec": dict(
             source.get("neutralization_spec", {}) if isinstance(source.get("neutralization_spec", {}), dict) else {}
         ),
         "universe_protocol": universe_protocol,
-        "required_data": dict(source.get("required_data", {}) if isinstance(source.get("required_data", {}), dict) else {}),
+        "required_data": runtime_required_data,
         "metrics": dict(source.get("metrics", {}) if isinstance(source.get("metrics", {}), dict) else {}),
         "source_location": str(source.get("source_location", "")),
         "paper_protocol": {
@@ -177,8 +188,8 @@ def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]
             "sample_period": str(source.get("sample_period", "")),
             "universe": str(source.get("universe", "")),
             "frequency": str(source.get("frequency", "")),
-            "evaluation_spec": dict(source.get("evaluation_spec", {}) if isinstance(source.get("evaluation_spec", {}), dict) else {}),
-            "required_data": dict(source.get("required_data", {}) if isinstance(source.get("required_data", {}), dict) else {}),
+            "evaluation_spec": paper_evaluation_spec,
+            "required_data": paper_required_data,
             "transform_spec": dict(source.get("transform_spec", {}) if isinstance(source.get("transform_spec", {}), dict) else {}),
             "neutralization_spec": dict(
                 source.get("neutralization_spec", {}) if isinstance(source.get("neutralization_spec", {}), dict) else {}
@@ -186,6 +197,40 @@ def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]
             "universe_protocol": universe_protocol,
         },
     }
+
+
+def _canonical_runtime_evaluation_inputs(
+    evaluation_spec: dict[str, Any],
+    required_data: dict[str, Any],
+    *,
+    family: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    runtime_spec = copy.deepcopy(evaluation_spec)
+    runtime_required = copy.deepcopy(required_data)
+    if family not in {"ic_analysis", "ic_regression"}:
+        return runtime_spec, runtime_required
+    horizon = runtime_spec.get("return_horizon")
+    if horizon in (None, ""):
+        horizon = runtime_spec.get("return_horizon_days")
+    if horizon in (None, ""):
+        horizon = runtime_spec.get("rebalance_days")
+    try:
+        horizon_int = int(horizon) if horizon not in (None, "") else 0
+    except (TypeError, ValueError):
+        horizon_int = 0
+    if horizon_int > 0:
+        runtime_spec["return_horizon"] = horizon_int
+        runtime_spec.setdefault("return_horizon_unit", "trading_day")
+        runtime_spec.setdefault("return_col", f"forward_return_{horizon_int}d")
+    return_col = str(runtime_spec.get("return_col", "") or "")
+    if return_col:
+        evaluation_fields = runtime_required.get("evaluation", []) or []
+        if not isinstance(evaluation_fields, list):
+            evaluation_fields = [evaluation_fields]
+        runtime_required["evaluation"] = list(
+            dict.fromkeys([*(str(value) for value in evaluation_fields if value), return_col])
+        )
+    return runtime_spec, runtime_required
 
 
 def _universe_protocol_from_source(source: dict[str, Any]) -> dict[str, Any]:

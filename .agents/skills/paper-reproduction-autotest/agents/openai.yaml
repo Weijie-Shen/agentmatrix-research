@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Reproduction Autotest"
+  short_description: "Orchestrate isolated multi-paper reproduction tests"
+  default_prompt: "Use $paper-reproduction-autotest to test the papers in a folder with isolated Terra workers and Sol review."

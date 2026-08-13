@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -12,6 +13,16 @@ from research_core.factor_lab.paper_reproduction.methodology import (
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig
 
 TruthSourceType = Literal["evaluation_results"]
+STANDARD_FORMULA_FIELDS = {
+    "open",
+    "high",
+    "low",
+    "close",
+    "vwap",
+    "volume",
+    "amount",
+    "returns",
+}
 
 
 @dataclass(slots=True)
@@ -208,6 +219,19 @@ def _validate_factor(
         errors.append(f"{prefix}.formula is required")
     if not factor.required_fields:
         errors.append(f"{prefix}.required_fields must not be empty")
+    else:
+        formula_tokens = {token.lower() for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", factor.formula)}
+        unrelated_standard_fields = sorted(
+            field
+            for field in factor.required_fields
+            if field.lower() in STANDARD_FORMULA_FIELDS and field.lower() not in formula_tokens
+        )
+        if unrelated_standard_fields:
+            needs_human_review = True
+            warnings.append(
+                f"{prefix}.required_fields contains standard raw fields absent from the formula: "
+                f"{unrelated_standard_fields}; keep formula requirements factor-specific"
+            )
     if not factor.frequency.strip() and not _mentions_frequency_gap(factor.ambiguous_or_missing_information):
         errors.append(f"{prefix}.frequency is missing and must be recorded in factor ambiguous_or_missing_information")
 

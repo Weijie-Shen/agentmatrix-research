@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 import numpy as np
 import pandas as pd
@@ -13,9 +13,33 @@ import pandas as pd
 DEFAULT_RECOMMENDED_DATA_DIR = Path("/Users/mac/recommended_data_v2")
 RECOMMENDED_MANIFEST_FILE = "MANIFEST.json"
 RECOMMENDED_KLINE_FILE = "kline_raw_rqdata.parquet"
-RECOMMENDED_MARKET_CAP_FILE = "market_cap.parquet"
+RECOMMENDED_MARKET_CAP_FILE = "market_cap_history_rqdata.parquet"
+LEGACY_RECOMMENDED_UNIFIED_MARKET_CAP_FILE = "market_cap.parquet"
 LEGACY_RECOMMENDED_MARKET_CAP_FILE = "market_cap_2010_2026.parquet"
-RECOMMENDED_INDUSTRY_FILE = "industry_map.parquet"
+RECOMMENDED_INDUSTRY_FILE = "industry_membership_history_rqdata.parquet"
+RECOMMENDED_INDUSTRY_TAXONOMY_FILE = "industry_taxonomy_history_rqdata.parquet"
+LEGACY_RECOMMENDED_INDUSTRY_FILE = "industry_map.parquet"
+RECOMMENDED_FINANCIAL_STATEMENTS_FILE = "financial_statements_pit_rqdata.parquet"
+RECOMMENDED_VALUATION_FACTORS_FILE = "valuation_factors_rqdata.parquet"
+RECOMMENDED_INDEX_LEVELS_FILE = "standard_index_daily_levels.parquet"
+RECOMMENDED_TRADING_CALENDAR_FILE = "trading_calendar.parquet"
+RECOMMENDED_YIELD_CURVE_FILE = "china_government_yield_curve.parquet"
+RECOMMENDED_INDEX_COMPONENTS_DIR = "index_components_rqdata"
+RECOMMENDED_INDEX_WEIGHTS_MONTHLY_DIR = "index_weights_monthly_rqdata"
+RECOMMENDED_INDEX_WEIGHTS_DAILY_DIR = "index_weights_daily_rqdata"
+
+SUPPORTED_INDUSTRY_SOURCES = ("sws", "citics", "citics_2019", "gildata")
+MARKET_CAP_FIELD_SOURCES = {
+    "market_cap": "market_cap_3",
+    "total_market_cap": "market_cap_3",
+    "market_cap_3": "market_cap_3",
+    "a_share_market_cap": "a_share_market_val_3",
+    "a_share_market_val_3": "a_share_market_val_3",
+    "circulating_market_cap": "a_share_market_val_in_circulation",
+    "circulating_a_market_cap": "a_share_market_val_in_circulation",
+    "a_share_market_val_in_circulation": "a_share_market_val_in_circulation",
+    "free_float_market_cap": "free_float_market_cap",
+}
 
 PriceAdjustmentView = Literal["raw", "qfq", "hfq"]
 PAPER_PRICE_ADJUSTMENT_VIEWS: tuple[Literal["qfq", "hfq"], ...] = ("qfq", "hfq")
@@ -41,11 +65,49 @@ class RecommendedDataSources:
 
     daily_prices: Path
     market_cap: Path | None
-    industry: Path | None
+    industry_membership: Path | None
+    industry_taxonomy: Path | None
+    financial_statements: Path | None
+    valuation_factors: Path | None
+    index_levels: Path | None
+    trading_calendar: Path | None
+    yield_curve: Path | None
+    index_components: Path | None
+    index_weights_monthly: Path | None
+    index_weights_daily: Path | None
 
     @property
     def uses_integrated_kline_status(self) -> bool:
         return self.daily_prices.name == RECOMMENDED_KLINE_FILE
+
+    @property
+    def industry(self) -> Path | None:
+        """Backward-compatible alias for the selected membership dataset."""
+
+        return self.industry_membership
+
+    @property
+    def uses_interval_industry_history(self) -> bool:
+        return bool(self.industry_membership and self.industry_membership.name == RECOMMENDED_INDUSTRY_FILE)
+
+
+@dataclass(frozen=True, slots=True)
+class IndustryClassificationSelection:
+    """Paper-resolved industry taxonomy used at each evaluation/formation date."""
+
+    source: str
+    level: int
+
+    def __post_init__(self) -> None:
+        source = str(self.source).strip().lower()
+        if source not in SUPPORTED_INDUSTRY_SOURCES:
+            raise ValueError(
+                f"unsupported industry source {self.source!r}; expected one of {', '.join(SUPPORTED_INDUSTRY_SOURCES)}"
+            )
+        if int(self.level) not in (1, 2, 3):
+            raise ValueError("industry level must be 1, 2, or 3")
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "level", int(self.level))
 
 
 def resolve_recommended_data_sources(config: RecommendedDataConfig | None = None) -> RecommendedDataSources:
@@ -54,14 +116,39 @@ def resolve_recommended_data_sources(config: RecommendedDataConfig | None = None
     data_config = config or RecommendedDataConfig.from_env()
     market_cap = _first_existing_path(
         data_config,
-        [RECOMMENDED_MARKET_CAP_FILE, LEGACY_RECOMMENDED_MARKET_CAP_FILE],
+        [
+            RECOMMENDED_MARKET_CAP_FILE,
+            LEGACY_RECOMMENDED_UNIFIED_MARKET_CAP_FILE,
+            LEGACY_RECOMMENDED_MARKET_CAP_FILE,
+        ],
         required=False,
     )
-    industry = data_config.path(RECOMMENDED_INDUSTRY_FILE)
+    industry = _first_existing_path(
+        data_config,
+        [RECOMMENDED_INDUSTRY_FILE, LEGACY_RECOMMENDED_INDUSTRY_FILE],
+        required=False,
+    )
+    taxonomy = data_config.path(RECOMMENDED_INDUSTRY_TAXONOMY_FILE)
+    def optional_file(name: str) -> Path | None:
+        path = data_config.path(name)
+        return path if path.exists() else None
+
+    def optional_dir(name: str) -> Path | None:
+        path = data_config.path(name)
+        return path if path.is_dir() else None
     return RecommendedDataSources(
         daily_prices=data_config.path(RECOMMENDED_KLINE_FILE),
         market_cap=market_cap,
-        industry=industry if industry.exists() else None,
+        industry_membership=industry,
+        industry_taxonomy=taxonomy if taxonomy.exists() else None,
+        financial_statements=optional_file(RECOMMENDED_FINANCIAL_STATEMENTS_FILE),
+        valuation_factors=optional_file(RECOMMENDED_VALUATION_FACTORS_FILE),
+        index_levels=optional_file(RECOMMENDED_INDEX_LEVELS_FILE),
+        trading_calendar=optional_file(RECOMMENDED_TRADING_CALENDAR_FILE),
+        yield_curve=optional_file(RECOMMENDED_YIELD_CURVE_FILE),
+        index_components=optional_dir(RECOMMENDED_INDEX_COMPONENTS_DIR),
+        index_weights_monthly=optional_dir(RECOMMENDED_INDEX_WEIGHTS_MONTHLY_DIR),
+        index_weights_daily=optional_dir(RECOMMENDED_INDEX_WEIGHTS_DAILY_DIR),
     )
 
 
@@ -90,6 +177,8 @@ def load_recommended_daily_panel(
     include_status: bool = False,
     include_market_cap: bool = False,
     include_industry: bool = False,
+    market_cap_fields: Sequence[str] | None = None,
+    industry_classification: IndustryClassificationSelection | None = None,
     config: RecommendedDataConfig | None = None,
 ) -> pd.DataFrame:
     """Load one explicit price view from the canonical raw RQData daily panel.
@@ -123,7 +212,9 @@ def load_recommended_daily_panel(
         adjustment_end_date=adjustment_end_date if adjustment_end_date is not None else end_date,
     )
 
-    if include_market_cap:
+    selected_market_cap_fields = _resolve_market_cap_fields(include_market_cap, market_cap_fields)
+    market_cap_lineage: dict[str, Any] = {}
+    if selected_market_cap_fields:
         if sources.market_cap is None:
             raise FileNotFoundError(f"recommended market-cap dataset not found in {data_config.data_dir}")
         market_cap = _read_recommended_market_cap(
@@ -131,14 +222,51 @@ def load_recommended_daily_panel(
             start_date=start_date,
             end_date=end_date,
             symbols=symbols,
+            fields=selected_market_cap_fields,
         )
+        market_cap_lineage = dict(market_cap.attrs.get("market_cap_lineage", {}))
         panel = panel.merge(market_cap, on=["date", "code"], how="left")
 
-    if include_industry:
-        if sources.industry is None:
+    if include_industry or industry_classification is not None:
+        if sources.industry_membership is None:
             raise FileNotFoundError(f"recommended industry dataset not found in {data_config.data_dir}")
-        industry = pd.read_parquet(sources.industry)
-        panel = panel.merge(normalize_recommended_industry_frame(industry), on="code", how="left")
+        if sources.uses_interval_industry_history:
+            if industry_classification is None:
+                raise ValueError(
+                    "industry_classification is required for interval industry history; "
+                    "resolve the paper's taxonomy source and level instead of choosing implicitly"
+                )
+            industry = _read_recommended_industry_history(
+                sources.industry_membership,
+                selection=industry_classification,
+                start_date=start_date,
+                end_date=end_date,
+                symbols=symbols,
+            )
+            panel = resolve_recommended_industry_membership(
+                panel,
+                industry,
+                selection=industry_classification,
+            )
+        else:
+            if industry_classification is not None:
+                raise ValueError(
+                    "legacy static industry_map.parquet has no taxonomy source/level or point-in-time history"
+                )
+            industry = pd.read_parquet(sources.industry_membership)
+            panel = panel.merge(normalize_recommended_industry_frame(industry), on="code", how="left")
+
+    panel.attrs["market_cap_fields"] = list(selected_market_cap_fields)
+    if market_cap_lineage:
+        panel.attrs["market_cap_lineage"] = market_cap_lineage
+    if industry_classification is not None:
+        panel.attrs["industry_classification"] = {
+            "source": industry_classification.source,
+            "level": industry_classification.level,
+            "membership_file": str(sources.industry_membership),
+            "taxonomy_file": str(sources.industry_taxonomy) if sources.industry_taxonomy else None,
+            "interval_rule": "start_date <= date < cancel_date",
+        }
 
     return panel.sort_values(["code", "date"]).reset_index(drop=True)
 
@@ -152,6 +280,8 @@ def load_recommended_paper_panels(
     include_status: bool = True,
     include_market_cap: bool = False,
     include_industry: bool = False,
+    market_cap_fields: Sequence[str] | None = None,
+    industry_classification: IndustryClassificationSelection | None = None,
     config: RecommendedDataConfig | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Load both mandatory price views for a manageable in-memory diagnostic.
@@ -178,6 +308,8 @@ def load_recommended_paper_panels(
         include_status=include_status,
         include_market_cap=include_market_cap,
         include_industry=include_industry,
+        market_cap_fields=market_cap_fields,
+        industry_classification=industry_classification,
         config=config,
     )
     return {
@@ -335,22 +467,55 @@ def _status_lookahead_end(end_date: str | pd.Timestamp | None) -> pd.Timestamp |
     return pd.Timestamp(end_date) + pd.Timedelta(days=31)
 
 
-def normalize_recommended_market_cap_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
+def normalize_recommended_market_cap_frame(
+    raw_frame: pd.DataFrame,
+    *,
+    fields: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    """Normalize requested capitalization semantics without conflating cap bases.
+
+    ``market_cap`` remains a compatibility name for RQData ``market_cap_3``.
+    Callers requiring A-share, circulating-A, or free-float capitalization must
+    request that semantic field explicitly.
+    """
+
     frame = raw_frame.reset_index() if isinstance(raw_frame.index, pd.MultiIndex) else raw_frame.copy()
     if "trade_date" in frame.columns and "date" not in frame.columns:
         frame = frame.rename(columns={"trade_date": "date"})
     if "symbol" in frame.columns and "order_book_id" not in frame.columns:
         frame["order_book_id"] = frame["symbol"]
-    required = ["order_book_id", "date", "market_cap"]
+    selected_fields = tuple(fields) if fields is not None else _default_available_market_cap_fields(frame.columns)
+    required_sources = {MARKET_CAP_FIELD_SOURCES.get(field, field) for field in selected_fields}
+    if "market_cap" in frame.columns and "market_cap_3" in required_sources and "market_cap_3" not in frame.columns:
+        frame["market_cap_3"] = frame["market_cap"]
+    required = ["order_book_id", "date", *sorted(required_sources)]
     missing = [column for column in required if column not in frame.columns]
     if missing:
         raise ValueError(f"missing recommended market cap columns: {', '.join(missing)}")
     frame["date"] = pd.to_datetime(frame["date"])
     frame["code"] = frame["order_book_id"].map(normalize_recommended_symbol)
-    return frame[["date", "code", "market_cap"]]
+    output = frame[["date", "code"]].copy()
+    for field in selected_fields:
+        source = MARKET_CAP_FIELD_SOURCES.get(field)
+        if source is None:
+            raise ValueError(
+                f"unsupported market-cap field {field!r}; expected one of {', '.join(MARKET_CAP_FIELD_SOURCES)}"
+            )
+        output[field] = pd.to_numeric(frame[source], errors="coerce")
+    output.attrs["market_cap_lineage"] = {
+        field: {
+            "source_field": MARKET_CAP_FIELD_SOURCES[field],
+            "price_basis": "unadjusted",
+            "derived": field == "free_float_market_cap",
+        }
+        for field in selected_fields
+    }
+    return output
 
 
 def normalize_recommended_industry_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize the deprecated static industry snapshot for compatibility only."""
+
     required = ["symbol", "industry"]
     missing = [column for column in required if column not in raw_frame.columns]
     if missing:
@@ -358,6 +523,100 @@ def normalize_recommended_industry_frame(raw_frame: pd.DataFrame) -> pd.DataFram
     frame = raw_frame.copy()
     frame["code"] = frame["symbol"].map(normalize_recommended_symbol)
     return frame[["code", "industry"]]
+
+
+def normalize_recommended_industry_history_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
+    required = [
+        "symbol",
+        "source",
+        "level",
+        "industry_code",
+        "industry_name",
+        "start_date",
+        "cancel_date",
+    ]
+    missing = [column for column in required if column not in raw_frame.columns]
+    if missing:
+        raise ValueError(f"missing recommended industry-history columns: {', '.join(missing)}")
+    frame = raw_frame.copy()
+    frame["code"] = frame["symbol"].map(normalize_recommended_symbol)
+    frame["source"] = frame["source"].astype(str).str.lower()
+    frame["level"] = pd.to_numeric(frame["level"], errors="raise").astype(int)
+    frame["start_date"] = pd.to_datetime(frame["start_date"])
+    frame["cancel_date"] = pd.to_datetime(frame["cancel_date"])
+    return frame[
+        ["code", "source", "level", "industry_code", "industry_name", "start_date", "cancel_date"]
+    ]
+
+
+def resolve_recommended_industry_membership(
+    panel: pd.DataFrame,
+    membership_history: pd.DataFrame,
+    *,
+    selection: IndustryClassificationSelection,
+) -> pd.DataFrame:
+    """Resolve point-in-time membership using ``start <= date < cancel``."""
+
+    missing_panel = [column for column in ("date", "code") if column not in panel.columns]
+    if missing_panel:
+        raise ValueError(f"missing panel columns for industry resolution: {', '.join(missing_panel)}")
+    history = normalize_recommended_industry_history_frame(membership_history)
+    history = history[
+        (history["source"] == selection.source) & (history["level"] == selection.level)
+    ].copy()
+    if history.empty:
+        raise ValueError(
+            f"no industry memberships found for source={selection.source!r}, level={selection.level}"
+        )
+    if history.duplicated(["code", "start_date"]).any():
+        raise ValueError(
+            f"ambiguous industry intervals for source={selection.source!r}, level={selection.level}"
+        )
+
+    result = panel.copy().reset_index(drop=True)
+    left = result[["code", "date"]].copy()
+    left["date"] = pd.to_datetime(left["date"])
+    left["__row_order"] = np.arange(len(left))
+    left = left.sort_values(["date", "code"])
+    right = history.rename(
+        columns={
+            "source": "industry_source",
+            "level": "industry_level",
+            "start_date": "industry_start_date",
+            "cancel_date": "industry_cancel_date",
+        }
+    ).sort_values(["industry_start_date", "code"])
+    resolved = pd.merge_asof(
+        left,
+        right,
+        left_on="date",
+        right_on="industry_start_date",
+        by="code",
+        direction="backward",
+        allow_exact_matches=True,
+    )
+    active = resolved["date"] < resolved["industry_cancel_date"]
+    resolved_columns = [
+        "industry_code",
+        "industry_name",
+        "industry_source",
+        "industry_level",
+        "industry_start_date",
+        "industry_cancel_date",
+    ]
+    resolved.loc[~active, resolved_columns] = pd.NA
+    resolved = resolved.sort_values("__row_order")
+    for column in resolved_columns:
+        result[column] = resolved[column].to_numpy()
+    result["industry"] = result["industry_code"].astype("string")
+    result.attrs.update(panel.attrs)
+    result.attrs["industry_classification"] = {
+        "source": selection.source,
+        "level": selection.level,
+        "interval_rule": "start_date <= date < cancel_date",
+        "categorical_field": "industry_code",
+    }
+    return result
 
 
 def add_next_suspension_flag(status_frame: pd.DataFrame) -> pd.DataFrame:
@@ -441,6 +700,7 @@ def _read_recommended_market_cap(
     start_date: str | pd.Timestamp | None,
     end_date: str | pd.Timestamp | None,
     symbols: list[str] | None,
+    fields: Sequence[str],
 ) -> pd.DataFrame:
     try:
         import pyarrow.parquet as pq
@@ -448,7 +708,25 @@ def _read_recommended_market_cap(
         columns = set(pq.read_schema(path).names)
     except Exception:
         columns = set()
+    physical_fields = sorted({MARKET_CAP_FIELD_SOURCES.get(field, field) for field in fields})
+    canonical_required = {"symbol", "trade_date", *physical_fields}
+    if canonical_required.issubset(columns):
+        raw = _read_parquet_with_filters(
+            path,
+            columns=["symbol", "trade_date", *physical_fields],
+            date_col="trade_date",
+            start_date=start_date,
+            end_date=end_date,
+            symbols=symbols,
+        )
+        return normalize_recommended_market_cap_frame(raw, fields=fields)
+
     if {"symbol", "trade_date", "market_cap"}.issubset(columns):
+        unsupported = [field for field in fields if MARKET_CAP_FIELD_SOURCES.get(field) != "market_cap_3"]
+        if unsupported:
+            raise ValueError(
+                "legacy market-cap data cannot satisfy semantic fields: " + ", ".join(unsupported)
+            )
         raw = _read_parquet_with_filters(
             path,
             columns=["symbol", "trade_date", "market_cap"],
@@ -457,10 +735,10 @@ def _read_recommended_market_cap(
             end_date=end_date,
             symbols=symbols,
         )
-        return normalize_recommended_market_cap_frame(raw)
+        return normalize_recommended_market_cap_frame(raw, fields=fields)
 
     frame = pd.read_parquet(path)
-    frame = normalize_recommended_market_cap_frame(frame)
+    frame = normalize_recommended_market_cap_frame(frame, fields=fields)
     if start_date is not None:
         frame = frame[frame["date"] >= pd.Timestamp(start_date)]
     if end_date is not None:
@@ -468,6 +746,76 @@ def _read_recommended_market_cap(
     if symbols:
         frame = frame[frame["code"].isin(symbols)]
     return frame
+
+
+def _read_recommended_industry_history(
+    path: Path,
+    *,
+    selection: IndustryClassificationSelection,
+    start_date: str | pd.Timestamp | None,
+    end_date: str | pd.Timestamp | None,
+    symbols: list[str] | None,
+) -> pd.DataFrame:
+    columns = [
+        "symbol",
+        "source",
+        "level",
+        "industry_code",
+        "industry_name",
+        "start_date",
+        "cancel_date",
+    ]
+    filters: list[tuple[str, str, Any]] = [
+        ("source", "==", selection.source),
+        ("level", "==", selection.level),
+    ]
+    if start_date is not None:
+        filters.append(("cancel_date", ">", pd.Timestamp(start_date)))
+    if end_date is not None:
+        filters.append(("start_date", "<=", pd.Timestamp(end_date)))
+    if symbols:
+        filters.append(("symbol", "in", _symbol_filter_values(symbols)))
+    try:
+        frame = pd.read_parquet(path, columns=columns, filters=filters)
+    except Exception:
+        frame = pd.read_parquet(path, columns=columns)
+        frame = normalize_recommended_industry_history_frame(frame)
+        frame = frame[(frame["source"] == selection.source) & (frame["level"] == selection.level)]
+        if start_date is not None:
+            frame = frame[frame["cancel_date"] > pd.Timestamp(start_date)]
+        if end_date is not None:
+            frame = frame[frame["start_date"] <= pd.Timestamp(end_date)]
+        if symbols:
+            frame = frame[frame["code"].isin([normalize_recommended_symbol(value) for value in symbols])]
+        frame = frame.rename(columns={"code": "symbol"})
+    return frame
+
+
+def _resolve_market_cap_fields(
+    include_market_cap: bool,
+    fields: Sequence[str] | None,
+) -> tuple[str, ...]:
+    selected = tuple(str(field) for field in fields) if fields is not None else (("market_cap",) if include_market_cap else ())
+    unsupported = [field for field in selected if field not in MARKET_CAP_FIELD_SOURCES]
+    if unsupported:
+        raise ValueError(
+            f"unsupported market-cap fields: {', '.join(unsupported)}; "
+            f"expected one of {', '.join(MARKET_CAP_FIELD_SOURCES)}"
+        )
+    return tuple(dict.fromkeys(selected))
+
+
+def _default_available_market_cap_fields(columns: Sequence[Any]) -> tuple[str, ...]:
+    available = {str(column) for column in columns}
+    if "market_cap" in available and "market_cap_3" not in available:
+        return ("market_cap",)
+    defaults = (
+        "market_cap",
+        "a_share_market_cap",
+        "circulating_market_cap",
+        "free_float_market_cap",
+    )
+    return tuple(field for field in defaults if MARKET_CAP_FIELD_SOURCES[field] in available)
 
 
 def _first_existing_path(data_config: RecommendedDataConfig, names: list[str], *, required: bool = True) -> Path | None:

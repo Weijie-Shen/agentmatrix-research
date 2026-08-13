@@ -8,16 +8,21 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from research_core.factor_lab.paper_reproduction.data_validation import build_data_profile
 from research_core.factor_lab.paper_reproduction.recommended_data import (
+    IndustryClassificationSelection,
     RecommendedDataConfig,
     apply_a_share_recommended_filters,
     build_recommended_price_view,
     load_recommended_data_manifest,
+    load_recommended_daily_panel,
     load_recommended_paper_panels,
     normalize_recommended_daily_kline_frame,
+    normalize_recommended_industry_history_frame,
     normalize_recommended_market_cap_frame,
     normalize_recommended_symbol,
     recommended_data_available,
+    resolve_recommended_industry_membership,
     resolve_recommended_data_sources,
 )
 
@@ -37,6 +42,36 @@ class RecommendedDataHelperTest(unittest.TestCase):
             manifest = load_recommended_data_manifest(config)
             kline = manifest.loc[manifest["file"] == "kline_raw_rqdata.parquet"].iloc[0]
             self.assertTrue(kline["present_on_disk"])
+
+    def test_source_resolution_surfaces_all_canonical_data_families(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_fixture_data(root)
+            for name in (
+                "financial_statements_pit_rqdata.parquet",
+                "valuation_factors_rqdata.parquet",
+                "standard_index_daily_levels.parquet",
+                "trading_calendar.parquet",
+                "china_government_yield_curve.parquet",
+            ):
+                (root / name).touch()
+            for name in (
+                "index_components_rqdata",
+                "index_weights_monthly_rqdata",
+                "index_weights_daily_rqdata",
+            ):
+                (root / name).mkdir()
+
+            sources = resolve_recommended_data_sources(RecommendedDataConfig(data_dir=root))
+
+            self.assertEqual(sources.financial_statements.name, "financial_statements_pit_rqdata.parquet")
+            self.assertEqual(sources.valuation_factors.name, "valuation_factors_rqdata.parquet")
+            self.assertEqual(sources.index_levels.name, "standard_index_daily_levels.parquet")
+            self.assertEqual(sources.trading_calendar.name, "trading_calendar.parquet")
+            self.assertEqual(sources.yield_curve.name, "china_government_yield_curve.parquet")
+            self.assertEqual(sources.index_components.name, "index_components_rqdata")
+            self.assertEqual(sources.index_weights_monthly.name, "index_weights_monthly_rqdata")
+            self.assertEqual(sources.index_weights_daily.name, "index_weights_daily_rqdata")
 
     def test_normalize_preserves_raw_prices_and_derives_raw_vwap(self) -> None:
         raw = self._raw_fixture_frame()
@@ -133,6 +168,101 @@ class RecommendedDataHelperTest(unittest.TestCase):
         self.assertEqual(normalized["code"].tolist(), ["000001.SZ"])
         self.assertEqual(normalize_recommended_symbol("600000.XSHG"), "600000.SH")
 
+    def test_canonical_capitalization_fields_remain_semantically_distinct(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "symbol": ["000001.XSHE"],
+                "trade_date": pd.to_datetime(["2020-01-02"]),
+                "market_cap_3": [100.0],
+                "a_share_market_val_3": [90.0],
+                "a_share_market_val_in_circulation": [70.0],
+                "free_float_market_cap": [60.0],
+            }
+        )
+
+        normalized = normalize_recommended_market_cap_frame(
+            raw,
+            fields=("market_cap", "a_share_market_cap", "circulating_market_cap", "free_float_market_cap"),
+        )
+
+        self.assertEqual(normalized.loc[0, "market_cap"], 100.0)
+        self.assertEqual(normalized.loc[0, "a_share_market_cap"], 90.0)
+        self.assertEqual(normalized.loc[0, "circulating_market_cap"], 70.0)
+        self.assertEqual(normalized.loc[0, "free_float_market_cap"], 60.0)
+        self.assertEqual(
+            normalized.attrs["market_cap_lineage"]["free_float_market_cap"]["source_field"],
+            "free_float_market_cap",
+        )
+
+    def test_interval_industry_resolution_uses_selected_taxonomy_and_cancel_boundary(self) -> None:
+        panel = pd.DataFrame(
+            {
+                "code": ["000001.SZ"] * 4,
+                "date": pd.to_datetime(["2019-12-01", "2019-12-02", "2020-01-01", "2021-01-01"]),
+            }
+        )
+        history = pd.DataFrame(
+            {
+                "symbol": ["000001.XSHE", "000001.XSHE", "000001.XSHE"],
+                "source": ["citics", "citics", "sws"],
+                "level": [1, 1, 1],
+                "industry_code": ["40", "41", "801780"],
+                "industry_name": ["bank-old", "bank-new", "银行"],
+                "start_date": pd.to_datetime(["2010-01-01", "2019-12-02", "2010-01-01"]),
+                "cancel_date": pd.to_datetime(["2019-12-02", "2020-12-31", "2200-12-31"]),
+            }
+        )
+
+        resolved = resolve_recommended_industry_membership(
+            panel,
+            history,
+            selection=IndustryClassificationSelection("citics", 1),
+        )
+
+        self.assertEqual(resolved["industry"].tolist()[:3], ["40", "41", "41"])
+        self.assertTrue(pd.isna(resolved.loc[3, "industry"]))
+        self.assertEqual(resolved.attrs["industry_classification"]["source"], "citics")
+
+    def test_canonical_loader_selects_free_float_cap_and_point_in_time_industry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_canonical_fixture_data(root)
+
+            panel = load_recommended_daily_panel(
+                start_date="2020-01-02",
+                end_date="2020-01-03",
+                symbols=["000001.SZ", "000002.SZ"],
+                price_view="qfq",
+                adjustment_end_date="2020-01-03",
+                market_cap_fields=("market_cap", "free_float_market_cap"),
+                industry_classification=IndustryClassificationSelection("citics_2019", 1),
+                config=RecommendedDataConfig(data_dir=root),
+            )
+
+            self.assertEqual(panel.loc[panel["code"] == "000001.SZ", "free_float_market_cap"].tolist(), [60.0, 66.0])
+            self.assertEqual(panel.loc[panel["code"] == "000001.SZ", "industry"].unique().tolist(), ["bank"])
+            self.assertEqual(panel.attrs["industry_classification"]["level"], 1)
+            self.assertEqual(panel.attrs["market_cap_fields"], ["market_cap", "free_float_market_cap"])
+            profile = build_data_profile(panel, source_id="canonical_fixture")
+            self.assertEqual(profile.conventions["industry_classification"]["source"], "citics_2019")
+            self.assertEqual(
+                next(item for item in profile.derived_fields if item["field"] == "free_float_market_cap")["formula"],
+                "free_circulation * implied_unadjusted_close",
+            )
+
+    def test_canonical_interval_industry_requires_explicit_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_canonical_fixture_data(root)
+
+            with self.assertRaisesRegex(ValueError, "industry_classification is required"):
+                load_recommended_daily_panel(
+                    start_date="2020-01-02",
+                    end_date="2020-01-03",
+                    include_industry=True,
+                    config=RecommendedDataConfig(data_dir=root),
+                )
+
     def _write_fixture_data(self, root: Path) -> None:
         raw = self._raw_fixture_frame()
         raw.to_parquet(root / "kline_raw_rqdata.parquet", index=False)
@@ -153,6 +283,45 @@ class RecommendedDataHelperTest(unittest.TestCase):
                 "industry": ["bank", "property"],
             }
         ).to_parquet(root / "industry_map.parquet", index=False)
+
+    def _write_canonical_fixture_data(self, root: Path) -> None:
+        raw = self._raw_fixture_frame()
+        raw.to_parquet(root / "kline_raw_rqdata.parquet", index=False)
+        (root / "MANIFEST.json").write_text(
+            json.dumps([{"file": "kline_raw_rqdata.parquet", "rows": len(raw)}]),
+            encoding="utf-8",
+        )
+        pd.DataFrame(
+            {
+                "symbol": ["000001.XSHE", "000001.XSHE", "000002.XSHE", "000002.XSHE"],
+                "trade_date": pd.to_datetime(["2020-01-02", "2020-01-03", "2020-01-02", "2020-01-03"]),
+                "market_cap_3": [100.0, 110.0, 200.0, 210.0],
+                "a_share_market_val_3": [90.0, 99.0, 180.0, 189.0],
+                "a_share_market_val_in_circulation": [70.0, 77.0, 140.0, 147.0],
+                "free_float_market_cap": [60.0, 66.0, 120.0, 126.0],
+            }
+        ).to_parquet(root / "market_cap_history_rqdata.parquet", index=False)
+        pd.DataFrame(
+            {
+                "symbol": ["000001.XSHE", "000002.XSHE"],
+                "source": ["citics_2019", "citics_2019"],
+                "level": [1, 1],
+                "industry_code": ["bank", "property"],
+                "industry_name": ["银行", "房地产"],
+                "start_date": pd.to_datetime(["2019-01-01", "2019-01-01"]),
+                "cancel_date": pd.to_datetime(["2200-12-31", "2200-12-31"]),
+            }
+        ).to_parquet(root / "industry_membership_history_rqdata.parquet", index=False)
+        pd.DataFrame(
+            {
+                "source": ["citics_2019", "citics_2019"],
+                "as_of_date": pd.to_datetime(["2019-12-31", "2019-12-31"]),
+                "level": [1, 1],
+                "industry_code": ["bank", "property"],
+                "industry_name": ["银行", "房地产"],
+                "parent_industry_code": [pd.NA, pd.NA],
+            }
+        ).to_parquet(root / "industry_taxonomy_history_rqdata.parquet", index=False)
 
     def _raw_fixture_frame(self) -> pd.DataFrame:
         return pd.DataFrame(

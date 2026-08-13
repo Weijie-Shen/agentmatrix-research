@@ -1,0 +1,4 @@
+interface:
+  display_name: "RQData On-Demand Reference"
+  short_description: "Stream RQData reference data without caching"
+  default_prompt: "Use $rqdata-fetch-reference to fetch the required RQData reference dataset on demand without storing it locally."

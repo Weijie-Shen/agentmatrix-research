@@ -6,6 +6,8 @@ from typing import Any
 import pandas as pd
 
 from research_core.factor_lab.paper_reproduction.extraction import ExtractedTruthSource
+from research_core.factor_lab.paper_reproduction.evaluation_execution import EvaluationBundle
+from research_core.factor_lab.paper_reproduction.extraction import PaperExtraction
 
 
 @dataclass(slots=True)
@@ -137,6 +139,48 @@ def interpret_truth_match_quality(
     if comparability in {"proxy", "directional_only", "materially_comparable"} and matched_metrics:
         return "inconclusive_due_to_protocol_gap"
     return "inconsistent"
+
+
+def compare_evaluation_bundle_to_paper_truth(
+    bundle: EvaluationBundle,
+    extraction: PaperExtraction,
+) -> dict[str, list[PaperTruthMatchResult]]:
+    """Truth-match every executed durable record using its preserved case policy."""
+
+    factors = {factor.factor_name: factor for factor in extraction.target_factors}
+    results: dict[str, list[PaperTruthMatchResult]] = {name: [] for name in factors}
+    for record in bundle.records:
+        if record.lifecycle_state != "executed":
+            continue
+        factor = factors.get(record.factor_name)
+        if factor is None:
+            continue
+        truth = next(
+            (source for source in factor.truth_sources if source.truth_id == record.source_truth_id),
+            None,
+        )
+        if truth is None:
+            continue
+        metrics = _record_metrics(record.evaluator_output)
+        results[record.factor_name].append(
+            compare_evaluation_metrics_to_paper_truth(
+                metrics,
+                truth,
+                comparability=record.comparability,
+                eligible_metrics=record.truth_match_eligible_metrics or None,
+                diagnostic_only_metrics=record.diagnostic_only_metrics or None,
+            )
+        )
+    return results
+
+
+def _record_metrics(evaluator_output: dict[str, Any]) -> dict[str, Any]:
+    metrics = evaluator_output.get("metrics", {}) or {}
+    if not isinstance(metrics, dict):
+        return {}
+    if isinstance(metrics.get("ic"), dict):
+        return dict(metrics["ic"])
+    return dict(metrics)
 
 
 def _sign(value: float) -> int:

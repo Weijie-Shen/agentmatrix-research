@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -58,6 +59,9 @@ class EvaluationExecutionRecord:
     factor_specification_hash: str
     data_snapshot_hash: str
     resolved_protocol: dict[str, Any] = field(default_factory=dict)
+    comparability: str = "exact"
+    truth_match_eligible_metrics: list[str] = field(default_factory=list)
+    diagnostic_only_metrics: list[str] = field(default_factory=list)
     alignment_diagnostics: dict[str, Any] = field(default_factory=dict)
     universe_diagnostics: dict[str, Any] = field(default_factory=dict)
     evaluator_output: dict[str, Any] = field(default_factory=dict)
@@ -187,6 +191,9 @@ def execute_evaluation_plan(
             descriptor = evaluator_capabilities_for_case(case) or {}
             evaluator_id = str(descriptor.get("evaluator_id", "unregistered"))
             resolved_protocol = dict(case.get("resolved_protocol", {}) or {})
+            comparability = str(case.get("comparability", "exact") or "exact")
+            eligible_metrics = list(case.get("truth_match_eligible_metrics", []) or [])
+            diagnostic_only_metrics = list(case.get("diagnostic_only_metrics", []) or [])
             universe_protocol = dict(
                 resolved_protocol.get("universe_protocol", {}) or case.get("universe_protocol", {}) or {}
             )
@@ -243,6 +250,9 @@ def execute_evaluation_plan(
                         factor_specification_hash=implementation_artifact.factor_specification_hash,
                         data_snapshot_hash=snapshot_hash,
                         resolved_protocol=resolved_protocol,
+                        comparability=comparability,
+                        truth_match_eligible_metrics=eligible_metrics,
+                        diagnostic_only_metrics=diagnostic_only_metrics,
                         alignment_diagnostics=dict(alignment.diagnostics),
                         universe_diagnostics=universe_diagnostics,
                         limitations=record_limitations,
@@ -295,6 +305,9 @@ def execute_evaluation_plan(
                     factor_specification_hash=implementation_artifact.factor_specification_hash,
                     data_snapshot_hash=snapshot_hash,
                     resolved_protocol=resolved_protocol,
+                    comparability=comparability,
+                    truth_match_eligible_metrics=eligible_metrics,
+                    diagnostic_only_metrics=diagnostic_only_metrics,
                     alignment_diagnostics=dict(alignment.diagnostics),
                     universe_diagnostics=universe_diagnostics,
                     evaluator_output=evaluator_output,
@@ -332,6 +345,96 @@ def execute_evaluation_plan(
             "execution_mode": preflight.execution_mode,
         },
     )
+
+
+def export_evaluation_bundle(bundle: EvaluationBundle, path: str | Path) -> Path:
+    """Persist a complete scenario bundle so interrupted runs can resume safely."""
+
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(bundle.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+    return output_path
+
+
+def load_evaluation_bundle(path: str | Path) -> EvaluationBundle:
+    """Reload a persisted scenario bundle without discarding successful records."""
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("evaluation bundle JSON must contain an object")
+    records = [EvaluationExecutionRecord(**record) for record in payload.get("records", []) or []]
+    fields = {
+        "library": str(payload.get("library", "")),
+        "scenario_id": str(payload.get("scenario_id", "")),
+        "data_snapshot_hash": str(payload.get("data_snapshot_hash", "")),
+        "implementation_artifact": dict(payload.get("implementation_artifact", {}) or {}),
+        "records": records,
+        "limitations": list(payload.get("limitations", []) or []),
+        "resource_preflight": dict(payload.get("resource_preflight", {}) or {}),
+        "resource_telemetry": dict(payload.get("resource_telemetry", {}) or {}),
+        "resource_adaptations": list(payload.get("resource_adaptations", []) or []),
+        "methodological_deviations": list(payload.get("methodological_deviations", []) or []),
+        "requested_execution": dict(payload.get("requested_execution", {}) or {}),
+        "executed_execution": dict(payload.get("executed_execution", {}) or {}),
+        "raw_factor_before_evaluation_filters": bool(payload.get("raw_factor_before_evaluation_filters", True)),
+        "schema_version": str(payload.get("schema_version", "evaluation_bundle/v2")),
+    }
+    return EvaluationBundle(**fields)
+
+
+def merge_evaluation_bundles(
+    bundles: list[EvaluationBundle],
+    *,
+    scenario_id: str = "combined_scenarios",
+) -> EvaluationBundle:
+    """Combine independently persisted scenarios for reporting and truth matching."""
+
+    if not bundles:
+        raise ValueError("At least one evaluation bundle is required.")
+    library = bundles[0].library
+    artifact = bundles[0].implementation_artifact
+    for bundle in bundles[1:]:
+        if bundle.library != library:
+            raise ValueError("Cannot merge evaluation bundles from different libraries.")
+        if bundle.implementation_artifact != artifact:
+            raise ValueError("Cannot merge evaluation bundles from different implementation artifacts.")
+    records: list[EvaluationExecutionRecord] = []
+    seen: set[tuple[str, str]] = set()
+    for bundle in bundles:
+        for record in bundle.records:
+            identity = (record.scenario_id, record.execution_id)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            records.append(record)
+    combined_hash = hashlib.sha256(
+        "\0".join(bundle.data_snapshot_hash for bundle in bundles).encode("utf-8")
+    ).hexdigest()
+    return EvaluationBundle(
+        library=library,
+        scenario_id=scenario_id,
+        data_snapshot_hash=combined_hash,
+        implementation_artifact=dict(artifact),
+        records=records,
+        limitations=_unique_strings(item for bundle in bundles for item in bundle.limitations),
+        resource_preflight={bundle.scenario_id: bundle.resource_preflight for bundle in bundles},
+        resource_telemetry={bundle.scenario_id: bundle.resource_telemetry for bundle in bundles},
+        resource_adaptations=_unique_strings(
+            item for bundle in bundles for item in bundle.resource_adaptations
+        ),
+        methodological_deviations=_unique_strings(
+            item for bundle in bundles for item in bundle.methodological_deviations
+        ),
+        requested_execution={bundle.scenario_id: bundle.requested_execution for bundle in bundles},
+        executed_execution={bundle.scenario_id: bundle.executed_execution for bundle in bundles},
+        raw_factor_before_evaluation_filters=all(
+            bundle.raw_factor_before_evaluation_filters for bundle in bundles
+        ),
+    )
+
+
+def _unique_strings(values: Any) -> list[str]:
+    return list(dict.fromkeys(str(value) for value in values if value))
 
 
 def _resolve_factor_identity(artifact: FactorImplementationArtifact, factor_name: str) -> tuple[str, str]:

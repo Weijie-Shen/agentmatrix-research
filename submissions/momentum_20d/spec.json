@@ -10,7 +10,7 @@
   "sample_scope": "全市场A股（剔除ST、新股、北交所）",
   "required_fields": ["close"],
   "parameters": {"window": 20},
-  "preprocessing": ["前复权价格"],
+  "preprocessing": ["测试期末锚定前复权与IPO基准后复权分别计算和评估"],
   "neutralization": [],
   "tags": ["momentum", "price", "medium-term"]
 }

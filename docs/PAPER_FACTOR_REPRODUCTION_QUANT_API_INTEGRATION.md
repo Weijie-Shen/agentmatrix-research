@@ -9,18 +9,25 @@ Use `/Users/mac/recommended_data_v2` before API access. Normal workflow code sho
 | File | Use |
 |---|---|
 | `kline_raw_rqdata.parquet` | RQData unadjusted daily OHLCV/amount, cumulative factors, factor-event dates, historical ST status, suspension status, and explicit price-observation flags; 2000-01-04 to 2026-08-06 |
-| `market_cap.parquet` | unified daily market capitalization for 2010-01-04 to 2026-07-22, plus recent share fields |
-| `trading_calendar.parquet` | trading calendar |
+| `market_cap_history_rqdata.parquet` | 2000-01-04 to 2026-08-10 PIT total, A-share, circulating-A, free-float capitalization, and share fields |
+| `trading_calendar.parquet` | China exchange trading calendar used to map `T+h` labels |
 | `security_master.parquet` | security master |
-| `income_statement.parquet` / `balance_sheet.parquet` | point-in-time fundamentals |
-| `dividend_yield.parquet` | daily dividend yield |
-| `industry_map.parquet` | current industry mapping snapshot |
+| `financial_statements_pit_rqdata.parquet` | versioned PIT balance-sheet, income, and cash-flow fields |
+| `valuation_factors_rqdata.parquet` | daily valuation factors, including decimal and raw dividend-yield fields |
+| `dividend_events_rqdata.parquet` / `dividend_amount_history_rqdata.parquet` | declaration-date and information-date dividend histories |
+| `standard_index_daily_levels.parquet` | provider-unadjusted standard-index levels |
+| `index_components_rqdata/` | annual effective-date constituent partitions |
+| `index_weights_monthly_rqdata/` / `index_weights_daily_rqdata/` | distinct monthly and daily weight families |
+| `china_government_yield_curve.parquet` | decimal annual government yields by explicit tenor |
+| `industry_membership_history_rqdata.parquet` | interval memberships for `sws`, `citics`, `citics_2019`, and `gildata`, by level |
+| `industry_taxonomy_history_rqdata.parquet` | historical taxonomy names and parent relationships |
 
 Recommended helper:
 
 ```python
 from research_core.factor_lab.paper_reproduction.recommended_data import (
     apply_a_share_recommended_filters,
+    IndustryClassificationSelection,
     load_recommended_paper_panels,
 )
 
@@ -29,8 +36,8 @@ panels = load_recommended_paper_panels(
     start_date=paper_data_start,
     end_date=paper_test_end,
     include_status=True,
-    include_market_cap=True,
-    include_industry=True,
+    market_cap_fields=("market_cap", "free_float_market_cap"),
+    industry_classification=IndustryClassificationSelection(paper_industry_source, paper_industry_level),
 )
 qfq_panel = apply_a_share_recommended_filters(panels["qfq"])
 hfq_panel = apply_a_share_recommended_filters(panels["hfq"])
@@ -44,7 +51,15 @@ date, code, open, high, low, close, volume, amount
 
 with raw audit columns, `vwap`, `is_trading`, `is_st`, `is_suspended`,
 `has_price_observation`, `next_is_suspended`, factor fields, and optional
-`market_cap`/`industry`.
+selected capitalization fields and point-in-time `industry`/industry-provenance columns.
+
+Select capitalization semantics from the paper: `market_cap` maps to total
+`market_cap_3`, while `a_share_market_cap`, `circulating_market_cap`, and
+`free_float_market_cap` remain distinct. Capitalization is already on an
+unadjusted price basis and must not be rescaled for QFQ/HFQ. Select industry
+source and level explicitly and resolve membership with
+`start_date <= evaluation_or_formation_date < cancel_date`; never replace an
+unavailable paper taxonomy with a present-day snapshot silently.
 
 Every paper reproduction must run both price conventions from the same raw panel:
 
@@ -66,6 +81,9 @@ Loader rules:
 - Filter price computations to `has_price_observation=true`; the standard A-share filter also requires positive volume through derived `is_trading`.
 - Status-only rows remain null and must not be forward-filled.
 - `has_factor_event` is authoritative; do not infer event presence solely from `ex_factor != 1`, because valid unit-factor events exist.
+- Use `load_recommended_financial_statements(...)` for PIT statements; enforce `ann_date <= T` before version selection and record the version policy. Do not silently interpret year-to-date Q2/Q3/Q4 income or cash-flow values as standalone quarters.
+- Use `load_recommended_valuation_panel(...)` and `load_recommended_dividend_history(...)` for valuation and dividend inputs. The normalized dividend-yield columns are decimal yields.
+- Use the `recommended_reference` loaders for trading dates, index levels, effective-date membership, explicit monthly/daily weights, and selected yield tenors. `materialize_calendar_forward_return(...)` maps `T+h` on the exchange calendar and leaves the label missing when that security has no price on the exact target date.
 
 ## Quant API fallback
 

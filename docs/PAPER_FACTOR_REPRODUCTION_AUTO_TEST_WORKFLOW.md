@@ -2,6 +2,10 @@
 
 This document describes the intended iterative workflow for testing whether a fresh AI agent can reproduce a paper's factor methodology using this repo and the `paper-factor-reproduction` skill.
 
+For automated multi-paper execution, use `$paper-reproduction-autotest` and
+`docs/PAPER_REPRODUCTION_MULTI_AGENT_AUTOTEST.md`. The workflow below remains
+the detailed single-paper/manual-debugging protocol.
+
 ## Goal
 
 We are not initially testing whether final computed IC/returns numerically match the paper. Those results can differ because of data source, sample coverage, vendor definitions, benchmark, neutralization data, or execution assumptions.
@@ -53,7 +57,7 @@ cd /tmp/agentmatrix-paper-test
 test -d research_core/factor_lab/paper_reproduction && echo paper_reproduction present
 ```
 
-In a new Hermes chat, use `/tmp/agentmatrix-paper-test` as the working directory and provide the paper and selected factors.
+Start a fresh Codex agent with `/tmp/agentmatrix-paper-test` as the working directory and provide only the paper, selected factors, and generated harness prompt. Do not provide the golden answer or conclusions from earlier attempts.
 
 Before starting the chat, create a harness packet that bundles the exact
 `paper-factor-reproduction` skill with the fresh-agent prompt:
@@ -72,37 +76,47 @@ bundle = prepare_agent_harness_bundle(
         paper_id="<paper_id>",
         golden_json_path="research_core/factor_lab/paper_reproduction/golden/<paper_id>_<factor_scope>.json",
         selected_factors=["<factor_1>", "<factor_2>"],
-        skill_path="/Users/mac/.hermes/skills/research/paper-factor-reproduction/SKILL.md",
+        skill_path=".agents/skills/paper-factor-reproduction/SKILL.md",
     )
 )
 print(bundle.prompt_path)
 ```
 
-The harness writes:
+The harness copies the coordinator and any available sibling stage skills, then writes:
 
 ```text
 runtime/factor_lab/agent_harness/<harness_id>/
   fresh_agent_prompt.md
   harness_metadata.json
   skills/paper-factor-reproduction/SKILL.md
+  skills/paper-evidence-extraction/SKILL.md
+  skills/paper-factor-data-readiness/SKILL.md
+  skills/paper-factor-implementation/SKILL.md
+  skills/paper-factor-evaluation/SKILL.md
+  skills/paper-reproduction-review/SKILL.md
 ```
 
 Use `fresh_agent_prompt.md` as the starting prompt. The metadata records the
-source skill path and SHA-256 hash so each AI test is auditable.
+source skill paths plus individual and bundle SHA-256 hashes so each AI test is auditable.
+
+Full-panel evaluation commands may outlive one tool-call yield interval. Run them in a persistent command session and poll the same session until it exits. A yielded session identifier is progress state, not evidence that the calculation failed; do not restart or defer the case solely because the initial call returned early.
 
 Recommended prompt:
 
 ```text
 Use /tmp/agentmatrix-paper-test as the working directory.
 
-Load and follow the bundled paper-factor-reproduction skill from the harness packet.
+Use `$paper-factor-reproduction` and follow the repository-scoped stage skills it routes from the exact bundled revision.
 
 I am attaching a paper. Run the paper reproduction workflow for selected factors only:
 - <factor list>
 
 Use paper-reported evaluation results only as truth.
 Do not use factor-value truth matching.
-Always load `/Users/mac/recommended_data_v2` through `load_recommended_paper_panels(test_end_date=...)` before Quant API v2 or declaring blocked_by_data. Execute both the testing-end-anchored QFQ panel and the initial-baseline HFQ panel; do not hand-pick physical source files or mix price views within one run.
+Always load `/Users/mac/recommended_data_v2` through repository loaders before Quant API v2 or declaring `blocked_by_data`. For full-period work, call `load_recommended_daily_panel(...)` sequentially for the testing-end-anchored QFQ panel and initial-baseline HFQ panel, persisting and releasing each; use `load_recommended_paper_panels(test_end_date=...)` only when preflight shows both views are manageable. Do not hand-pick physical source files or mix price views within one run.
+
+Before loading evaluation controls, resolve the paper's capitalization basis and industry taxonomy source/level. Request only the required total, A-share, circulating-A, or free-float capitalization fields; resolve industry membership point-in-time using the interval history. The harness must reject an implicit taxonomy selection, a static-current industry substitute presented as exact, or QFQ/HFQ rescaling of capitalization.
+Resolve PIT financial-statement inputs with `ann_date <= T` before version selection, and record the version policy. Resolve benchmark IDs, constituent effective dates, monthly versus daily index weights, yield-curve tenors, valuation units, and dividend information dates explicitly. Build forward returns on the exchange trading calendar; do not replace a missing exact target-date security price with the next observation. Use `$rqdata-fetch-reference` only when the canonical local reference family is missing or outside coverage.
 Preserve all extracted paper truth sources, profile available data, select the best-supported paper truth before computing metrics, and execute only selected resolved cases.
 Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue with documented degradation and report deviations.
 ```

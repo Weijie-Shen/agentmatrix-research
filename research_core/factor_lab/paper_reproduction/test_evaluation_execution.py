@@ -10,6 +10,9 @@ from contracts.factor_research import FactorResearchSpec
 from research_core.factor_lab.paper_reproduction.evaluation_execution import (
     EvaluationDataContext,
     execute_evaluation_plan,
+    export_evaluation_bundle,
+    load_evaluation_bundle,
+    merge_evaluation_bundles,
 )
 from research_core.factor_lab.paper_reproduction.implementation import build_factor_implementation_artifact
 from research_core.factor_lab.paper_reproduction.paper_evaluation import (
@@ -40,6 +43,9 @@ class CanonicalEvaluationExecutionTest(unittest.TestCase):
             "source_truth_id": "table_1_ic",
             "evaluation_family": "ic_analysis",
             "evaluation_method": "daily rank IC",
+            "comparability": "proxy",
+            "truth_match_eligible_metrics": ["rank_ic_mean"],
+            "diagnostic_only_metrics": ["rank_ic_std"],
             "resolved_protocol": {
                 "evaluation_family": "ic_analysis",
                 "evaluation_method": "daily rank IC",
@@ -122,7 +128,18 @@ class CanonicalEvaluationExecutionTest(unittest.TestCase):
         self.assertEqual(record.evaluator_output["execution_mode"], "canonical_plan_executor")
         self.assertEqual(record.alignment_diagnostics["alignment_method"], "one_to_one_key_join")
         self.assertEqual(record.implementation_source_hash, artifact.source_hash)
+        self.assertEqual(record.comparability, "proxy")
+        self.assertEqual(record.truth_match_eligible_metrics, ["rank_ic_mean"])
         self.assertFalse(any("not separately supplied" in item for item in record.limitations))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = export_evaluation_bundle(bundle, Path(tmp_dir) / "bundle.json")
+            loaded = load_evaluation_bundle(path)
+            merged = merge_evaluation_bundles([loaded, loaded])
+        self.assertEqual(len(loaded.records), 1)
+        self.assertEqual(loaded.records[0].comparability, "proxy")
+        self.assertEqual(len(merged.records), 1)
+        self.assertEqual(merged.scenario_id, "combined_scenarios")
 
     def test_missing_evaluation_column_is_case_level_insufficient_data(self) -> None:
         calculation = self._calculation_panel()
