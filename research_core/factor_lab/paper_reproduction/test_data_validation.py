@@ -203,6 +203,52 @@ class PaperInputDataValidationTest(unittest.TestCase):
         self.assertEqual(results["st_or_pt_status"].relationship, "proxy_substitute")
         self.assertEqual(results["next_day_suspension_status"].relationship, "exact_alias")
 
+    def test_generic_market_cap_records_basis_and_log_transform_as_separate_inferences(self) -> None:
+        profile = {
+            "columns": ["date", "code", "forward_return_1d", "log_free_float_market_cap"],
+            "missingness": {"forward_return_1d": 0.0, "log_free_float_market_cap": 0.0},
+            "derived_fields": [
+                {
+                    "field": "log_free_float_market_cap",
+                    "method": "log",
+                    "inputs": ["free_float_market_cap"],
+                }
+            ],
+        }
+        truth_source = {
+            "truth_id": "generic_market_cap_control",
+            "evaluation_family": "ic_regression",
+            "evaluation_method": "rank IC regression",
+            "required_data": {
+                "evaluation": ["forward_return_1d"],
+                "controls": ["market_cap"],
+            },
+            "metrics": {"rank_ic_mean": 0.04},
+        }
+        relationships = [
+            FieldRelationship(
+                "market_cap",
+                "log_free_float_market_cap",
+                "proxy_substitute",
+                reason="Runtime selected a logged free-float capitalization control.",
+                requires_reporting=True,
+            )
+        ]
+
+        assessment = assess_evaluation_case_support(
+            truth_source,
+            profile,
+            get_generic_evaluator_capabilities(),
+            field_relationships=relationships,
+        )
+
+        categories = [item["category"] for item in assessment.deviations]
+        self.assertEqual(categories.count("capitalization_basis_inference"), 1)
+        self.assertEqual(categories.count("capitalization_transform_inference"), 1)
+        self.assertEqual(assessment.score_components["capitalization_inference_count"], 2.0)
+        self.assertNotEqual(assessment.comparability, "exact")
+        self.assertIn("rank_ic_mean", assessment.diagnostic_only_metrics)
+
     def test_a_share_universe_without_exclusion_text_does_not_invent_status_filters(self) -> None:
         frame = pd.DataFrame(
             {

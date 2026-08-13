@@ -31,6 +31,7 @@ def build_paper_reproduction_report(
     artifacts: dict[str, str] | None = None,
     tests_run: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    _validate_stage3_support_consistency(pipeline_state, evaluation_plan)
     truth_results = truth_results or {}
     spec_by_name = {spec.factor_name: spec for spec in specs}
     evaluation_plan_by_name = {
@@ -191,6 +192,43 @@ def build_paper_reproduction_report(
         "tests_run": tests_run or [],
         "known_gaps": _collect_known_gaps(factors, pipeline_payload),
     }
+
+
+def _validate_stage3_support_consistency(
+    pipeline_state: PaperReproductionPipelineState | None,
+    evaluation_plan: PaperEvaluationPlan | None,
+) -> None:
+    if pipeline_state is None or evaluation_plan is None:
+        return
+    stage = next(
+        (
+            item
+            for item in pipeline_state.stages
+            if item.name == "input_dataframe_validation"
+        ),
+        None,
+    )
+    if stage is None:
+        return
+    expected = stage.diagnostics.get("support_assessment_ids")
+    if not isinstance(expected, dict) or not expected:
+        return
+    actual: dict[str, dict[str, str]] = {}
+    for factor_plan in evaluation_plan.factor_plans:
+        factor_assessments: dict[str, str] = {}
+        for case in factor_plan.assessed_evaluation_cases:
+            assessment = dict(case.get("support_assessment", {}) or {})
+            truth_id = str(case.get("truth_id") or case.get("truth_case_id") or "")
+            assessment_id = str(assessment.get("assessment_id", "") or "")
+            if truth_id and assessment_id:
+                factor_assessments[truth_id] = assessment_id
+        if factor_assessments:
+            actual[factor_plan.factor_name] = factor_assessments
+    if actual != expected:
+        raise ValueError(
+            "evaluation plan support assessments contradict durable Stage-3 state; "
+            "reassess support and persist the new authoritative assessment before reporting"
+        )
 
 
 def render_paper_reproduction_report_markdown(report: dict[str, Any]) -> str:

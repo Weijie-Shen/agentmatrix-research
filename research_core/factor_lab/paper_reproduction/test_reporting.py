@@ -69,6 +69,44 @@ class PaperReproductionReportingTest(unittest.TestCase):
             },
         )
 
+    def test_report_rejects_plan_that_contradicts_persisted_stage3_assessment(self) -> None:
+        extraction = self._extraction()
+        state = PaperReproductionPipelineState.from_extraction(extraction, job_id="paper-demo-job")
+        state.mark_stage(
+            "input_dataframe_validation",
+            "completed",
+            diagnostics={
+                "support_assessment_ids": {
+                    "paper_alpha_1": {"table_3_eval": "support-stage3"}
+                }
+            },
+        )
+        evaluation_plan = PaperEvaluationPlan(
+            library="PaperDemo",
+            status="ready_for_evaluation",
+            factor_plans=[
+                PaperFactorEvaluationPlan(
+                    factor_name="paper_alpha_1",
+                    status="ready_for_evaluation",
+                    assessed_evaluation_cases=[
+                        {
+                            "truth_id": "table_3_eval",
+                            "support_assessment": {"assessment_id": "support-live-registry"},
+                        }
+                    ],
+                )
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "contradict durable Stage-3 state"):
+            build_paper_reproduction_report(
+                job_id="paper-demo-job",
+                extraction=extraction,
+                specs=[self._spec()],
+                pipeline_state=state,
+                evaluation_plan=evaluation_plan,
+            )
+
     def test_build_report_summarizes_pipeline_specs_evaluation_and_truth(self) -> None:
         extraction = self._extraction()
         state = PaperReproductionPipelineState.from_extraction(extraction, job_id="paper-demo-job")

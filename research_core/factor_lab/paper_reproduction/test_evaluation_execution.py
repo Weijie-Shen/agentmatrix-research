@@ -141,6 +141,60 @@ class CanonicalEvaluationExecutionTest(unittest.TestCase):
         self.assertEqual(len(merged.records), 1)
         self.assertEqual(merged.scenario_id, "combined_scenarios")
 
+    def test_executor_scores_only_declared_sample_while_retaining_context_rows(self) -> None:
+        calculation = pd.DataFrame(
+            {
+                "date": [f"2026-01-0{day}" for day in range(1, 7)] * 2,
+                "code": ["A"] * 6 + ["B"] * 6,
+                "close": [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25],
+            }
+        )
+        evaluation = calculation[["date", "code"]].copy()
+        evaluation["forward_return_1d"] = [
+            -1.0,
+            -1.0,
+            0.2,
+            0.2,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            -0.2,
+            -0.2,
+            -1.0,
+            -1.0,
+        ]
+        case = self._case()
+        case["sample_period"] = "2026-01-03 to 2026-01-04"
+        case["paper_protocol"] = {"sample_period": "2026-01-03 to 2026-01-04"}
+        case["resolved_protocol"]["sample_period"] = "2026-01-03 to 2026-01-04"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact = self._artifact(Path(tmp_dir), calculation)
+            bundle = execute_evaluation_plan(
+                self._plan(case),
+                artifact,
+                EvaluationDataContext(
+                    calculation_panel=calculation,
+                    evaluation_inputs=evaluation,
+                ),
+            )
+
+        record = bundle.records[0]
+        diagnostics = record.scoring_sample_diagnostics
+        self.assertEqual(record.alignment_diagnostics["factor_row_count"], 12)
+        self.assertEqual(diagnostics["before_clip"]["row_count"], 12)
+        self.assertEqual(diagnostics["after_clip"]["row_count"], 4)
+        self.assertEqual(diagnostics["rows_removed_before_start"], 4)
+        self.assertEqual(diagnostics["rows_removed_after_end"], 4)
+        self.assertEqual(diagnostics["declared_sample"]["resolved_start_date"], "2026-01-03T00:00:00")
+        self.assertEqual(diagnostics["declared_sample"]["resolved_end_date"], "2026-01-04T00:00:00")
+        self.assertTrue(diagnostics["calculation_history_preserved"])
+        self.assertTrue(diagnostics["label_history_preserved"])
+        self.assertEqual(bundle.executed_execution["sample"]["row_count"], 4)
+        self.assertEqual(bundle.resource_telemetry["evaluation_rows"], 12)
+        self.assertEqual(bundle.resource_telemetry["scored_signal_rows"], 4)
+
     def test_missing_evaluation_column_is_case_level_insufficient_data(self) -> None:
         calculation = self._calculation_panel()
         evaluation = calculation.loc[calculation["date"] == "2026-01-03", ["date", "code"]]

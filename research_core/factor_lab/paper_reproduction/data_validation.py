@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -232,6 +234,8 @@ class EvaluationCaseSupportAssessment:
     truth_id: str
     support_score: float
     comparability: str
+    assessment_id: str = ""
+    evaluator_capability_fingerprint: str = ""
     requirement_results: list[EvaluationRequirementResult] = field(default_factory=list)
     deviations: list[dict[str, Any]] = field(default_factory=list)
     truth_match_eligible_metrics: list[str] = field(default_factory=list)
@@ -466,6 +470,7 @@ def assess_evaluation_case_support(
             for item in field_relationships
         ]
     evaluator_capabilities = evaluator_capabilities or {}
+    capability_fingerprint = _stable_payload_hash(evaluator_capabilities)
     truth_id = str(truth_source.get("truth_id", ""))
     metrics = list((truth_source.get("metrics", {}) or {}).keys())
     requirement_results: list[EvaluationRequirementResult] = []
@@ -662,6 +667,11 @@ def assess_evaluation_case_support(
         if (record := _replacement_record(result, profile)) is not None
     ]
     deviations.extend(_relationship_deviations(requirement_results, replacement_records))
+    capitalization_deviations = _capitalization_inference_deviations(
+        requirement_results,
+        profile,
+    )
+    deviations.extend(capitalization_deviations)
     deviations = _deduplicate_deviations(deviations)
 
     missing_count = sum(1 for result in requirement_results if result.availability == "missing")
@@ -671,7 +681,7 @@ def assess_evaluation_case_support(
         if result.availability in {"partially_available", "available_with_quality_warning", "constructible"}
     )
     proxy_count = sum(1 for result in requirement_results if result.relationship == "proxy_substitute" and result.execution_ready)
-    methodology_proxy_count = len(methodology_deviations)
+    methodology_proxy_count = len(methodology_deviations) + len(capitalization_deviations)
     constructible_count = sum(1 for result in requirement_results if result.semantic_availability == "constructible")
     data_coverage = (
         1.0
@@ -731,6 +741,15 @@ def assess_evaluation_case_support(
         truth_id=truth_id,
         support_score=support_score,
         comparability=comparability,
+        assessment_id="support-"
+        + _stable_payload_hash(
+            {
+                "truth_source": truth_source,
+                "data_profile": profile,
+                "evaluator_capability_fingerprint": capability_fingerprint,
+            }
+        )[:20],
+        evaluator_capability_fingerprint=capability_fingerprint,
         requirement_results=requirement_results,
         deviations=deviations,
         truth_match_eligible_metrics=eligible,
@@ -743,10 +762,22 @@ def assess_evaluation_case_support(
             "metric_coverage": metric_coverage,
             "proxy_substitution_count": float(proxy_count),
             "inferred_methodology_count": float(methodology_proxy_count),
+            "capitalization_inference_count": float(len(capitalization_deviations)),
             "constructible_not_materialized_count": float(constructible_count),
         },
         limitations=[dev["reason"] for dev in deviations],
     )
+
+
+def _stable_payload_hash(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def structured_deviation(
@@ -1343,6 +1374,82 @@ def _relationship_deviations(
                 relationship=result.relationship,
             )
         )
+    return deviations
+
+
+def _capitalization_inference_deviations(
+    results: list[EvaluationRequirementResult],
+    profile: dict[str, Any],
+) -> list[dict[str, Any]]:
+    deviations: list[dict[str, Any]] = []
+    derived_fields = {
+        str(item.get("field")): dict(item)
+        for item in profile.get("derived_fields", []) or []
+        if isinstance(item, dict) and item.get("field")
+    }
+    for result in results:
+        definition = result.semantic_definition or {}
+        cap_basis = str(definition.get("cap_basis", "") or "").lower()
+        generic_requirement = result.requirement in {
+            "market_cap",
+            "market_cap_or_log_market_cap",
+        } or (
+            str(definition.get("kind", "")).lower() == "capitalization"
+            and cap_basis in {"", "generic", "unspecified", "not_specified"}
+        )
+        physical_field = str(result.available_value or "")
+        if not generic_requirement or not physical_field or not result.execution_ready:
+            continue
+        lowered = physical_field.lower()
+        basis = ""
+        if "free_float" in lowered or "freefloat" in lowered:
+            basis = "free_float_market_capitalization"
+        elif "circulating" in lowered:
+            basis = "circulating_market_capitalization"
+        elif "a_share" in lowered or "ashare" in lowered:
+            basis = "a_share_market_capitalization"
+        elif "total" in lowered:
+            basis = "total_market_capitalization"
+        elif lowered.startswith(("log_market_cap", "sqrt_market_cap")):
+            basis = "basis_under_transformed_market_cap_not_declared"
+        if basis:
+            deviations.append(
+                structured_deviation(
+                    category="capitalization_basis_inference",
+                    paper_value="generic_market_cap_basis_not_specified",
+                    resolved_value=basis,
+                    reason=(
+                        "The paper evidence does not resolve a capitalization basis; the selected "
+                        "runtime field therefore introduces a separate basis inference."
+                    ),
+                    severity="material",
+                    affected_metrics=list(result.affected_metrics) or ["*"],
+                    truth_matching_policy="proxy_or_diagnostic_only",
+                    source="semantic_field_resolution",
+                )
+            )
+        lineage = derived_fields.get(physical_field, {})
+        derivation_method = str(
+            lineage.get("method")
+            or (lineage.get("derivation", {}) or {}).get("method")
+            or ""
+        ).lower()
+        if lowered.startswith("log_") or derivation_method in {"log", "ln", "natural_log"}:
+            deviations.append(
+                structured_deviation(
+                    category="capitalization_transform_inference",
+                    paper_value="untransformed_generic_market_cap",
+                    resolved_value="natural_log_market_cap",
+                    reason=(
+                        "The paper evidence does not resolve a log transform; the selected runtime "
+                        "field therefore introduces a separate transform inference."
+                    ),
+                    severity="material",
+                    affected_metrics=list(result.affected_metrics) or ["*"],
+                    truth_matching_policy="proxy_or_diagnostic_only",
+                    source="semantic_field_resolution",
+                )
+            )
     return deviations
 
 

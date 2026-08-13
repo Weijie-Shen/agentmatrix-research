@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from contracts.factor_research import FactorResearchSpec
 from research_core.factor_lab.paper_reproduction.paper_evaluation import (
@@ -247,6 +248,53 @@ class PaperEvaluationPlanningTest(unittest.TestCase):
         self.assertEqual(primary, original_primary)
         self.assertEqual({case["truth_id"] for case in factor_plan.assessed_evaluation_cases}, {"wls", "ic"})
         self.assertIn("resolved_protocol", factor_plan.selected_evaluation_cases[0])
+
+    def test_changed_evaluator_capability_requires_explicit_stage3_reassessment(self) -> None:
+        case = self._case("ic", "ic_analysis", {"rank_ic_mean": 0.04})
+        case["required_data"] = {"evaluation": ["forward_return_20d"]}
+        spec = self._spec_with_cases([case])
+        profile = {
+            "columns": ["date", "code", "forward_return_20d"],
+            "missingness": {"forward_return_20d": 0.0},
+        }
+        with patch(
+            "research_core.factor_lab.paper_reproduction.paper_evaluation.evaluator_capabilities_for_case",
+            return_value=None,
+        ):
+            initial = build_paper_evaluation_plan(
+                [spec],
+                data_profiles={"alpha_from_paper": profile},
+            )
+        persisted = {
+            "alpha_from_paper": {
+                "ic": dict(
+                    initial.factor_plans[0].assessed_evaluation_cases[0]["support_assessment"]
+                )
+            }
+        }
+        gated = build_paper_evaluation_plan(
+            [spec],
+            data_profiles={"alpha_from_paper": profile},
+            persisted_support_assessments=persisted,
+        )
+        reassessed = build_paper_evaluation_plan(
+            [spec],
+            data_profiles={"alpha_from_paper": profile},
+            persisted_support_assessments=persisted,
+            reassess_support=True,
+        )
+
+        gated_case = gated.factor_plans[0].assessed_evaluation_cases[0]
+        self.assertEqual(gated.factor_plans[0].selected_evaluation_cases, [])
+        self.assertTrue(gated_case["support_assessment"]["reassessment_required"])
+        self.assertEqual(gated_case["support_assessment"]["lifecycle_state"], "support_reassessment_required")
+        self.assertEqual(len(reassessed.factor_plans[0].selected_evaluation_cases), 1)
+        self.assertEqual(
+            reassessed.factor_plans[0].assessed_evaluation_cases[0]["support_assessment"][
+                "supersedes_assessment_id"
+            ],
+            persisted["alpha_from_paper"]["ic"]["assessment_id"],
+        )
 
     def test_selection_rule_allows_unselected_feasible_truth_source(self) -> None:
         selected = self._case("unsupported_selected", "layered_portfolio_backtest", {"long_short_mean": 0.01})

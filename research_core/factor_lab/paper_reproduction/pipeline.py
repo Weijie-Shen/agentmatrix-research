@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from research_core.factor_lab.paper_reproduction.extraction import ICAnalysisPaperExtraction, PaperExtraction
@@ -184,6 +185,37 @@ def export_pipeline_state(
     payload["next_stage"] = state.next_stage
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def record_stage3_support_assessments(
+    state: PaperReproductionPipelineState,
+    evaluation_plan: Any,
+) -> dict[str, dict[str, str]]:
+    """Record authoritative support-assessment identities in durable Stage-3 state."""
+
+    identities: dict[str, dict[str, str]] = {}
+    for factor_plan in getattr(evaluation_plan, "factor_plans", []) or []:
+        factor_name = str(getattr(factor_plan, "factor_name", "") or "")
+        factor_identities: dict[str, str] = {}
+        for case in getattr(factor_plan, "assessed_evaluation_cases", []) or []:
+            if not isinstance(case, dict):
+                continue
+            truth_id = str(case.get("truth_id") or case.get("truth_case_id") or "")
+            assessment = dict(case.get("support_assessment", {}) or {})
+            assessment_id = str(assessment.get("assessment_id", "") or "")
+            if truth_id and assessment_id:
+                factor_identities[truth_id] = assessment_id
+        if factor_name and factor_identities:
+            identities[factor_name] = factor_identities
+    state.mark_stage(
+        PaperReproductionStage.INPUT_DATAFRAME_VALIDATION.value,
+        "completed",
+        diagnostics={
+            "support_assessment_ids": identities,
+            "support_assessment_authority": "stage_3_persisted",
+        },
+    )
+    return identities
 
 
 def load_pipeline_state(

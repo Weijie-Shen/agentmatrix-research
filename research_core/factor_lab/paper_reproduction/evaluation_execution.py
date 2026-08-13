@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,7 @@ class EvaluationExecutionRecord:
     diagnostic_only_metrics: list[str] = field(default_factory=list)
     alignment_diagnostics: dict[str, Any] = field(default_factory=dict)
     universe_diagnostics: dict[str, Any] = field(default_factory=dict)
+    scoring_sample_diagnostics: dict[str, Any] = field(default_factory=dict)
     evaluator_output: dict[str, Any] = field(default_factory=dict)
     limitations: list[str] = field(default_factory=list)
     error: dict[str, str] | None = None
@@ -181,6 +183,7 @@ def execute_evaluation_plan(
         resource_adaptations.append("one-to-one left key join avoided a separate full outer key merge")
 
     records: list[EvaluationExecutionRecord] = []
+    scored_samples: list[dict[str, Any]] = []
     for factor_plan in plan.factor_plans:
         factor_id, factor_column = _resolve_factor_identity(implementation_artifact, factor_plan.factor_name)
         for case in factor_plan.selected_evaluation_cases:
@@ -206,6 +209,10 @@ def execute_evaluation_plan(
                 :,
                 [column for column in projected_case_columns if column in aligned_frame.columns],
             ].copy(deep=False)
+            case_input, scoring_sample_diagnostics = _clip_to_scoring_sample(
+                case_input,
+                case,
+            )
             universe_application = apply_universe_protocol(
                 case_input,
                 universe_protocol,
@@ -218,6 +225,17 @@ def execute_evaluation_plan(
                 "applied_filters": universe_application.applied_filters,
                 "skipped_filters": universe_application.skipped_filters,
             }
+            scoring_sample_diagnostics["after_universe"] = _frame_sample(case_frame)
+            scoring_sample_diagnostics["rows_removed_by_universe"] = int(
+                len(case_input) - len(case_frame)
+            )
+            scored_samples.append(
+                {
+                    "truth_case_id": truth_case_id,
+                    "execution_sample": _frame_sample(case_frame),
+                    "declared_sample": scoring_sample_diagnostics.get("declared_sample", {}),
+                }
+            )
             record_limitations = [
                 *context_limitations,
                 *alignment.limitations,
@@ -255,6 +273,7 @@ def execute_evaluation_plan(
                         diagnostic_only_metrics=diagnostic_only_metrics,
                         alignment_diagnostics=dict(alignment.diagnostics),
                         universe_diagnostics=universe_diagnostics,
+                        scoring_sample_diagnostics=scoring_sample_diagnostics,
                         limitations=record_limitations,
                         error={
                             "type": "MissingEvaluationInputs",
@@ -310,6 +329,7 @@ def execute_evaluation_plan(
                     diagnostic_only_metrics=diagnostic_only_metrics,
                     alignment_diagnostics=dict(alignment.diagnostics),
                     universe_diagnostics=universe_diagnostics,
+                    scoring_sample_diagnostics=scoring_sample_diagnostics,
                     evaluator_output=evaluator_output,
                     limitations=record_limitations,
                     error=error,
@@ -328,6 +348,9 @@ def execute_evaluation_plan(
             "measured_process_peak_rss_bytes": process_peak_rss_bytes(),
             "calculation_rows": len(calculation_panel),
             "evaluation_rows": len(evaluation_inputs),
+            "scored_signal_rows": sum(
+                int(item["execution_sample"].get("row_count", 0)) for item in scored_samples
+            ),
             "factor_rows": len(factor_frame),
             "active_scenario_count": 1,
         },
@@ -335,11 +358,14 @@ def execute_evaluation_plan(
         methodological_deviations=list(data_context.methodological_deviations),
         requested_execution={
             "sample": data_context.requested_sample or _frame_sample(evaluation_source),
+            "samples_by_case": scored_samples,
             "universe": data_context.requested_universe or "as_declared_by_selected_evaluation_cases",
             "scenario_id": data_context.scenario_id,
         },
         executed_execution={
-            "sample": data_context.executed_sample or _frame_sample(evaluation_inputs),
+            "sample": _aggregate_scored_samples(scored_samples),
+            "samples_by_case": scored_samples,
+            "context_declared_sample": dict(data_context.executed_sample),
             "universe": data_context.executed_universe or "resolved_evaluation_universe",
             "scenario_id": data_context.scenario_id,
             "execution_mode": preflight.execution_mode,
@@ -567,6 +593,140 @@ def _frame_sample(frame: pd.DataFrame) -> dict[str, Any]:
         "start_date": dates.min().isoformat() if dates.notna().any() else None,
         "end_date": dates.max().isoformat() if dates.notna().any() else None,
         "row_count": len(frame),
+    }
+
+
+def _clip_to_scoring_sample(
+    frame: pd.DataFrame,
+    case: dict[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    declared = _declared_scoring_sample(case)
+    diagnostics: dict[str, Any] = {
+        "declared_sample": declared,
+        "before_clip": _frame_sample(frame),
+        "clip_applied": False,
+        "rows_removed_before_start": 0,
+        "rows_removed_after_end": 0,
+        "rows_removed_invalid_date": 0,
+        "calculation_history_preserved": True,
+        "label_history_preserved": True,
+    }
+    start = declared.get("resolved_start_date")
+    end = declared.get("resolved_end_date")
+    if start is None and end is None:
+        diagnostics["after_clip"] = _frame_sample(frame)
+        return frame, diagnostics
+
+    date_column = next(
+        (column for column in frame.columns if column.lower() in {"date", "datetime", "trade_date"}),
+        None,
+    )
+    if date_column is None:
+        raise ValueError("declared evaluation sample cannot be enforced without a date column")
+    dates = pd.to_datetime(frame[date_column], errors="coerce")
+    mask = dates.notna()
+    diagnostics["rows_removed_invalid_date"] = int(dates.isna().sum())
+    if start is not None:
+        start_ts = pd.Timestamp(start)
+        diagnostics["rows_removed_before_start"] = int((dates < start_ts).fillna(False).sum())
+        mask &= dates >= start_ts
+    if end is not None:
+        end_ts = pd.Timestamp(end)
+        diagnostics["rows_removed_after_end"] = int((dates > end_ts).fillna(False).sum())
+        mask &= dates <= end_ts
+    clipped = frame.loc[mask].copy(deep=False)
+    diagnostics["clip_applied"] = True
+    diagnostics["date_column"] = date_column
+    diagnostics["after_clip"] = _frame_sample(clipped)
+    return clipped, diagnostics
+
+
+def _declared_scoring_sample(case: dict[str, Any]) -> dict[str, Any]:
+    runtime = dict(case.get("resolved_protocol", {}) or {})
+    evaluation_spec = dict(runtime.get("evaluation_spec", {}) or {})
+    paper_protocol = dict(case.get("paper_protocol", {}) or {})
+    requested_value = paper_protocol.get("sample_period") or case.get("sample_period") or ""
+    resolved_value = runtime.get("sample_period") or requested_value
+
+    explicit_start = (
+        evaluation_spec.get("sample_start_date")
+        or evaluation_spec.get("evaluation_start_date")
+        or evaluation_spec.get("start_date")
+    )
+    explicit_end = (
+        evaluation_spec.get("sample_end_date")
+        or evaluation_spec.get("evaluation_end_date")
+        or evaluation_spec.get("end_date")
+    )
+    if explicit_start or explicit_end:
+        resolved_start = _period_endpoint(explicit_start, end=False)
+        resolved_end = _period_endpoint(explicit_end, end=True)
+        source = "resolved_protocol.evaluation_spec"
+    else:
+        resolved_start, resolved_end = _period_bounds(resolved_value)
+        source = "resolved_protocol.sample_period" if runtime.get("sample_period") else "paper_sample_period"
+    requested_start, requested_end = _period_bounds(requested_value)
+    return {
+        "source": source,
+        "requested_value": requested_value,
+        "resolved_value": resolved_value,
+        "requested_start_date": requested_start,
+        "requested_end_date": requested_end,
+        "resolved_start_date": resolved_start,
+        "resolved_end_date": resolved_end,
+    }
+
+
+def _period_bounds(value: Any) -> tuple[str | None, str | None]:
+    if isinstance(value, dict):
+        start = value.get("start_date") or value.get("start")
+        end = value.get("end_date") or value.get("end")
+        return _period_endpoint(start, end=False), _period_endpoint(end, end=True)
+    tokens = re.findall(r"\d{4}(?:[-/.]\d{1,2}(?:[-/.]\d{1,2})?)?", str(value or ""))
+    if not tokens:
+        return None, None
+    return (
+        _period_endpoint(tokens[0], end=False),
+        _period_endpoint(tokens[-1], end=True),
+    )
+
+
+def _period_endpoint(value: Any, *, end: bool) -> str | None:
+    text = str(value or "").strip().replace("/", "-").replace(".", "-")
+    if not text:
+        return None
+    parts = text.split("-")
+    try:
+        if len(parts) == 1:
+            timestamp = pd.Timestamp(f"{parts[0]}-12-31" if end else f"{parts[0]}-01-01")
+        elif len(parts) == 2:
+            period = pd.Period(f"{int(parts[0]):04d}-{int(parts[1]):02d}", freq="M")
+            timestamp = period.end_time.normalize() if end else period.start_time.normalize()
+        else:
+            timestamp = pd.Timestamp(text)
+    except (TypeError, ValueError):
+        return None
+    return timestamp.isoformat()
+
+
+def _aggregate_scored_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    execution_samples = [
+        dict(item.get("execution_sample", {}) or {})
+        for item in samples
+        if isinstance(item, dict)
+    ]
+    if not execution_samples:
+        return {"row_count": 0, "case_count": 0}
+    if len(execution_samples) == 1:
+        return {**execution_samples[0], "case_count": 1}
+    starts = [item.get("start_date") for item in execution_samples if item.get("start_date")]
+    ends = [item.get("end_date") for item in execution_samples if item.get("end_date")]
+    return {
+        "start_date": min(starts) if starts else None,
+        "end_date": max(ends) if ends else None,
+        "row_count": sum(int(item.get("row_count", 0)) for item in execution_samples),
+        "case_count": len(execution_samples),
+        "row_count_semantics": "sum_across_evaluation_cases",
     }
 
 

@@ -61,10 +61,20 @@ def build_paper_evaluation_plan(
     specs: list[FactorResearchSpec],
     *,
     data_profiles: dict[str, dict[str, Any]] | None = None,
+    persisted_support_assessments: dict[str, dict[str, dict[str, Any]]] | None = None,
+    reassess_support: bool = False,
 ) -> PaperEvaluationPlan:
     if not specs:
         raise ValueError("At least one FactorResearchSpec is required to build a paper evaluation plan.")
-    factor_plans = [_build_factor_evaluation_plan(spec, data_profiles=data_profiles or {}) for spec in specs]
+    factor_plans = [
+        _build_factor_evaluation_plan(
+            spec,
+            data_profiles=data_profiles or {},
+            persisted_support_assessments=(persisted_support_assessments or {}).get(spec.factor_name, {}),
+            reassess_support=reassess_support,
+        )
+        for spec in specs
+    ]
     statuses = {plan.status for plan in factor_plans}
     if "needs_human_review" in statuses:
         status = "needs_human_review"
@@ -81,6 +91,8 @@ def _build_factor_evaluation_plan(
     spec: FactorResearchSpec,
     *,
     data_profiles: dict[str, dict[str, Any]],
+    persisted_support_assessments: dict[str, dict[str, Any]],
+    reassess_support: bool,
 ) -> PaperFactorEvaluationPlan:
     selected_truth_sources = _candidate_truth_sources(spec)
     evaluation_truth_sources = [
@@ -119,7 +131,12 @@ def _build_factor_evaluation_plan(
         unsupported_cases,
         deferred_cases,
         implementation_targets,
-    ) = _select_evaluation_cases(cases, data_profile=profile)
+    ) = _select_evaluation_cases(
+        cases,
+        data_profile=profile,
+        persisted_support_assessments=persisted_support_assessments,
+        reassess_support=reassess_support,
+    )
     requires_paper_local_evaluator = bool(implementation_targets)
 
     if blocked_reasons:
@@ -318,6 +335,8 @@ def _select_evaluation_cases(
     cases: list[dict[str, Any]],
     *,
     data_profile: dict[str, Any] | None = None,
+    persisted_support_assessments: dict[str, dict[str, Any]] | None = None,
+    reassess_support: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     valid_cases: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -328,7 +347,13 @@ def _select_evaluation_cases(
             valid_cases.append(case)
 
     if data_profile is not None:
-        return _select_evaluation_cases_by_support(valid_cases, skipped, data_profile=data_profile)
+        return _select_evaluation_cases_by_support(
+            valid_cases,
+            skipped,
+            data_profile=data_profile,
+            persisted_support_assessments=persisted_support_assessments or {},
+            reassess_support=reassess_support,
+        )
 
     if any(case.get("paper_protocol_refs") for case in valid_cases):
         unresolved = [
@@ -368,11 +393,49 @@ def _select_evaluation_cases_by_support(
     skipped: list[dict[str, Any]],
     *,
     data_profile: dict[str, Any],
+    persisted_support_assessments: dict[str, dict[str, Any]],
+    reassess_support: bool,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     assessed: list[dict[str, Any]] = []
     for case in valid_cases:
         descriptor = evaluator_capabilities_for_case(case) or {}
-        assessment = assess_evaluation_case_support(case, data_profile, descriptor).to_dict()
+        current_assessment = assess_evaluation_case_support(case, data_profile, descriptor).to_dict()
+        truth_id = str(case.get("truth_id") or case.get("truth_case_id") or "")
+        persisted = copy.deepcopy(persisted_support_assessments.get(truth_id, {}) or {})
+        persisted_fingerprint = str(persisted.get("evaluator_capability_fingerprint", "") or "")
+        current_fingerprint = str(current_assessment.get("evaluator_capability_fingerprint", "") or "")
+        assessment_changed = str(persisted.get("assessment_id", "") or "") != str(
+            current_assessment.get("assessment_id", "") or ""
+        )
+        if persisted and assessment_changed and not reassess_support:
+            assessment = dict(persisted)
+            assessment["reassessment_required"] = True
+            assessment["case_executable"] = False
+            assessment["lifecycle_state"] = "support_reassessment_required"
+            assessment["selection_reason"] = "Stage-3 support inputs changed after the persisted assessment"
+            assessment.setdefault("deviations", []).append(
+                {
+                    "category": "stage_3_support_reassessment",
+                    "paper_value": {
+                        "assessment_id": persisted.get("assessment_id", ""),
+                        "evaluator_capability_fingerprint": persisted_fingerprint,
+                    },
+                    "resolved_value": {
+                        "assessment_id": current_assessment.get("assessment_id", ""),
+                        "evaluator_capability_fingerprint": current_fingerprint,
+                    },
+                    "reason": "Support inputs differ from the authoritative Stage-3 assessment; rerun and persist Stage 3 before evaluation.",
+                    "severity": "fundamental",
+                    "affected_metrics": ["*"],
+                    "truth_matching_policy": "not_evaluated",
+                    "source": "pipeline_state_reconciliation",
+                }
+            )
+        else:
+            assessment = current_assessment
+            if persisted and reassess_support:
+                assessment["supersedes_assessment_id"] = persisted.get("assessment_id", "")
+                assessment["reassessment_reason"] = "evaluator_capabilities_changed"
         assessed_case = dict(case)
         assessed_case["support_assessment"] = assessment
         assessed_case["support_score"] = assessment["support_score"]

@@ -13,6 +13,11 @@ from research_core.factor_lab.paper_reproduction.pipeline import (
     export_pipeline_state,
     load_pipeline_state,
     merge_pipeline_stage_update,
+    record_stage3_support_assessments,
+)
+from research_core.factor_lab.paper_reproduction.paper_evaluation import (
+    PaperEvaluationPlan,
+    PaperFactorEvaluationPlan,
 )
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig
 
@@ -77,6 +82,32 @@ class PaperReproductionPipelineTest(unittest.TestCase):
             self.assertEqual(payload["paper_id"], "simple_price_volume_demo")
             self.assertEqual(payload["stages"][0]["name"], "paper_extraction")
             self.assertEqual(payload["stages"][0]["execution_status"], "completed")
+
+    def test_pipeline_state_persists_authoritative_stage3_assessment_ids(self) -> None:
+        state = PaperReproductionPipelineState.from_extraction(self._extraction())
+        plan = PaperEvaluationPlan(
+            library="SimplePV",
+            status="ready_for_evaluation",
+            factor_plans=[
+                PaperFactorEvaluationPlan(
+                    factor_name="pv_close_to_open",
+                    status="ready_for_evaluation",
+                    assessed_evaluation_cases=[
+                        {
+                            "truth_id": "table_3",
+                            "support_assessment": {"assessment_id": "support-abc"},
+                        }
+                    ],
+                )
+            ],
+        )
+
+        identities = record_stage3_support_assessments(state, plan)
+
+        self.assertEqual(identities, {"pv_close_to_open": {"table_3": "support-abc"}})
+        stage = next(item for item in state.stages if item.name == "input_dataframe_validation")
+        self.assertEqual(stage.diagnostics["support_assessment_ids"], identities)
+        self.assertEqual(stage.diagnostics["support_assessment_authority"], "stage_3_persisted")
 
     def test_pipeline_state_loads_and_merges_without_losing_diagnostics(self) -> None:
         state = PaperReproductionPipelineState.from_extraction(self._extraction(), job_id="paper-demo")
