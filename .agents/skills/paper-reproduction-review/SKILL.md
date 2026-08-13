@@ -83,3 +83,5 @@ Return one verdict:
 - `incomplete`: missing implementation, skipped required gate, absent report, invalid artifact, or unsupported status claim.
 
 List blocking deficiencies separately from non-blocking limitations. Give general corrective actions; do not tune guidance to one paper's known answer.
+
+Treat a hand-shaped execution JSON as no execution. Load and inspect each standalone `evaluation_bundle/v2`: it must preserve canonical execution IDs, executor mode, certified implementation and specification hashes, SHA-256 snapshot identity, resource preflight/telemetry, requested/executed samples, alignment counts, universe-filter counts, resolved protocols, and cross-sectional IC values whose summaries can be recomputed. Reconcile every scenario/execution/truth/metric comparison row to those exact bundle records. If calculated values merely restate rounded paper truth without this lineage, classify the run as `incomplete`.

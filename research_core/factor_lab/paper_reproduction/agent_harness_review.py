@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -420,6 +421,45 @@ def _deep_completion_defects(
                 f"[evaluation-lineage] {factor} selected truth not present in extraction: {sorted(unknown_selected)}"
             )
 
+    bundle_paths = sorted((runtime_root / "evaluation_bundles").glob("*.json"))
+    canonical_execution_records: dict[tuple[str, str, str], dict[str, Any]] = {}
+    bundle_scenarios: set[str] = set()
+    if not bundle_paths:
+        defects.append("[evaluation] no standalone canonical evaluation bundle was found")
+    for bundle_path in bundle_paths:
+        bundle = _load_json(bundle_path)
+        record_scenarios = {
+            str(record.get("scenario_id", ""))
+            for record in bundle.get("records", []) or []
+            if isinstance(record, dict) and record.get("scenario_id")
+        }
+        bundle_scenario = str(bundle.get("scenario_id", ""))
+        if len(record_scenarios) > 1 or (
+            len(record_scenarios) == 1 and bundle_scenario not in record_scenarios
+        ):
+            # A merged bundle is useful for reporting, but canonical execution
+            # provenance is validated against the independently exported
+            # per-scenario bundles from which it was assembled.
+            continue
+        bundle_scenarios.add(str(bundle.get("scenario_id", "")))
+        bundle_defects, records = _canonical_evaluation_bundle_defects(
+            bundle_path,
+            bundle,
+            implementation_payload=implementation_payload,
+            expected_factors=expected_factors,
+        )
+        defects.extend(bundle_defects)
+        for record in records:
+            key = (
+                str(record.get("factor_name", "")),
+                str(record.get("scenario_id", "")),
+                str(record.get("execution_id", "")),
+            )
+            canonical_execution_records[key] = record
+    missing_bundle_views = [view for view in required_views if view not in bundle_scenarios]
+    if missing_bundle_views:
+        defects.append(f"[evaluation] required price-view bundles are missing: {missing_bundle_views}")
+
     if implementation_path:
         module_path = _resolve_artifact_path(root, str(implementation_payload.get("module_path", "")))
         if not module_path or not module_path.is_file():
@@ -428,6 +468,8 @@ def _deep_completion_defects(
             defects.append("[implementation] implementation artifact source hash does not match its module")
         if not str(implementation_payload.get("callable_import_path", "")).strip():
             defects.append("[implementation] implementation artifact has no callable import path")
+    else:
+        module_path = None
 
     if not test_result_paths:
         defects.append("[tests] no durable implementation-test result artifact was found")
@@ -444,6 +486,15 @@ def _deep_completion_defects(
     missing_test_coverage = [factor for factor in expected_factors if factor not in covered_factors]
     if missing_test_coverage:
         defects.append(f"[tests] no formula-focused test coverage is recorded for: {missing_test_coverage}")
+    bound_test_sources = _bound_test_sources(root, module_path, implementation_payload)
+    if not bound_test_sources:
+        defects.append("[tests] no test source is bound to the certified implementation module")
+    elif not any(
+        any(path.name in str(test.get("command", "")) or str(path.parent) in str(test.get("command", "")) for path in bound_test_sources)
+        for test in tests_run
+        if isinstance(test, dict)
+    ):
+        defects.append("[tests] recorded test commands do not identify a test bound to the certified module")
 
     execution_by_factor: dict[str, list[dict[str, Any]]] = {
         factor: [] for factor in expected_factors
@@ -464,6 +515,22 @@ def _deep_completion_defects(
         if missing:
             defects.append(f"[evaluation] {factor} lacks executed required scenarios: {missing}")
         for execution in executions:
+            execution_id = str(execution.get("execution_id", ""))
+            if not execution_id:
+                defects.append(f"[evaluation] {factor} report execution lacks a canonical execution ID")
+            canonical = canonical_execution_records.get(
+                (factor, str(execution.get("scenario_id", "")), execution_id)
+            )
+            if canonical is None:
+                defects.append(
+                    f"[evaluation] {factor} report execution {execution_id or '-'} is not backed by a canonical bundle record"
+                )
+            elif (canonical.get("evaluator_output", {}) or {}).get("metrics", {}) != (
+                execution.get("evaluator_output", {}) or {}
+            ).get("metrics", {}):
+                defects.append(
+                    f"[evaluation] {factor} report metrics differ from canonical bundle execution {execution_id}"
+                )
             truth_id = str(execution.get("source_truth_id") or execution.get("truth_case_id") or "")
             if selected_ids.get(factor) and truth_id not in selected_ids[factor]:
                 defects.append(f"[evaluation-lineage] {factor} executed unselected truth case {truth_id or '-'}")
@@ -482,6 +549,7 @@ def _deep_completion_defects(
             defects.append("[evaluation] required price views do not have independent data snapshot hashes")
 
     defects.extend(_sample_boundary_defects(view_profiles, factor_plans))
+    defects.extend(_comparison_coverage_defects(report, execution_by_factor))
     defects.extend(_truth_denominator_defects(report))
     if not truth_path:
         defects.append("[truth] no standalone truth-match artifact was found")
@@ -510,6 +578,254 @@ def _pipeline_artifact_defects(root: Path, report: dict[str, Any], expected_fact
                     f"[pipeline] stage {stage.get('name', '-')} cites missing artifact: {text}"
                 )
     return defects
+
+
+def _bound_test_sources(
+    root: Path,
+    module_path: Path | None,
+    implementation_payload: dict[str, Any],
+) -> list[Path]:
+    if module_path is None:
+        return []
+    candidates = [
+        *module_path.parent.glob("test_*.py"),
+        *((root / "tests").rglob("test_*.py") if (root / "tests").is_dir() else []),
+    ]
+    callable_module = str(implementation_payload.get("callable_import_path", "")).split(":", 1)[0]
+    bound: list[Path] = []
+    for path in candidates:
+        if path.parent == module_path.parent:
+            bound.append(path)
+            continue
+        try:
+            if callable_module and callable_module in path.read_text(encoding="utf-8"):
+                bound.append(path)
+        except OSError:
+            continue
+    return sorted(set(bound))
+
+
+def _canonical_evaluation_bundle_defects(
+    path: Path,
+    bundle: dict[str, Any],
+    *,
+    implementation_payload: dict[str, Any],
+    expected_factors: list[str],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Reject hand-shaped execution claims that bypass the canonical plan executor."""
+
+    defects: list[str] = []
+    label = path.name
+    raw_records = bundle.get("records", []) or []
+    records = [record for record in raw_records if isinstance(record, dict)]
+    if bundle.get("schema_version") != "evaluation_bundle/v2":
+        return [f"[evaluation] {label} is not an evaluation_bundle/v2 canonical export"], records
+    scenario = str(bundle.get("scenario_id", ""))
+    snapshot_hash = str(bundle.get("data_snapshot_hash", ""))
+    if not scenario:
+        defects.append(f"[evaluation] {label} has no scenario ID")
+    if not re.fullmatch(r"[0-9a-f]{64}", snapshot_hash):
+        defects.append(f"[evaluation] {label} has no canonical SHA-256 data snapshot hash")
+    artifact_identity = bundle.get("implementation_artifact", {}) or {}
+    source_hash = str(implementation_payload.get("source_hash", ""))
+    specification_hash = str(implementation_payload.get("factor_specification_hash", ""))
+    if source_hash and artifact_identity.get("source_hash") != source_hash:
+        defects.append(f"[evaluation] {label} implementation identity does not match certification")
+    if not specification_hash or artifact_identity.get("factor_specification_hash") != specification_hash:
+        defects.append(f"[evaluation] {label} has no matching certified factor-specification hash")
+
+    preflight = bundle.get("resource_preflight", {}) or {}
+    telemetry = bundle.get("resource_telemetry", {}) or {}
+    if preflight.get("schema_version") != "resource_preflight/v1":
+        defects.append(f"[evaluation] {label} lacks canonical resource preflight evidence")
+    if preflight.get("partition_required") is True:
+        defects.append(f"[evaluation] {label} claims execution despite a partition-required preflight")
+    if int(preflight.get("active_scenario_count", 0) or 0) != 1:
+        defects.append(f"[evaluation] {label} did not record one-scenario-at-a-time preflight")
+    for field_name in ("calculation_rows", "evaluation_rows", "factor_rows"):
+        if int(telemetry.get(field_name, 0) or 0) <= 0:
+            defects.append(f"[evaluation] {label} has no positive {field_name} telemetry")
+    if int(telemetry.get("active_scenario_count", 0) or 0) != 1:
+        defects.append(f"[evaluation] {label} did not record one active execution scenario")
+    if telemetry.get("calculation_rows") != telemetry.get("factor_rows"):
+        defects.append(f"[evaluation] {label} factor-row telemetry differs from calculation rows")
+    requested = bundle.get("requested_execution", {}) or {}
+    executed = bundle.get("executed_execution", {}) or {}
+    if requested.get("scenario_id") != scenario or executed.get("scenario_id") != scenario:
+        defects.append(f"[evaluation] {label} requested/executed scenario lineage is inconsistent")
+    if int((executed.get("sample", {}) or {}).get("row_count", 0) or 0) <= 0:
+        defects.append(f"[evaluation] {label} has no executed sample row count")
+    if bundle.get("raw_factor_before_evaluation_filters") is not True:
+        defects.append(f"[evaluation] {label} did not preserve raw factor history before evaluation filters")
+
+    if len(records) != len(raw_records) or not records:
+        defects.append(f"[evaluation] {label} contains no structured execution records")
+    expected_set = set(expected_factors)
+    for record in records:
+        factor = str(record.get("factor_name", ""))
+        if factor not in expected_set:
+            defects.append(f"[evaluation] {label} contains an out-of-scope factor record: {factor or '-'}")
+        if record.get("schema_version") != "evaluation_execution_record/v1":
+            defects.append(f"[evaluation] {label} {factor or '-'} lacks canonical record schema")
+        if record.get("scenario_id") != scenario or record.get("data_snapshot_hash") != snapshot_hash:
+            defects.append(f"[evaluation] {label} {factor or '-'} record identity differs from its bundle")
+        if record.get("implementation_source_hash") != source_hash:
+            defects.append(f"[evaluation] {label} {factor or '-'} record uses an uncertified source hash")
+        if record.get("factor_specification_hash") != specification_hash:
+            defects.append(f"[evaluation] {label} {factor or '-'} record uses an uncertified specification hash")
+        if not str(record.get("factor_id", "")) or not str(record.get("evaluator_id", "")):
+            defects.append(f"[evaluation] {label} {factor or '-'} lacks factor/evaluator identity")
+        execution_id = str(record.get("execution_id", ""))
+        identity = {
+            "truth_case_id": str(record.get("truth_case_id", "")),
+            "factor_id": str(record.get("factor_id", "")),
+            "scenario_id": scenario,
+            "evaluator_id": str(record.get("evaluator_id", "")),
+            "implementation_source_hash": source_hash,
+            "factor_specification_hash": specification_hash,
+            "data_snapshot_hash": snapshot_hash,
+            "resolved_protocol": record.get("resolved_protocol", {}) or {},
+        }
+        encoded = json.dumps(
+            identity,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        expected_execution_id = f"execution-{hashlib.sha256(encoded).hexdigest()[:20]}"
+        if execution_id != expected_execution_id:
+            defects.append(f"[evaluation] {label} {factor or '-'} execution ID is not canonical")
+        if record.get("lifecycle_state") != "executed":
+            continue
+        output = record.get("evaluator_output", {}) or {}
+        if output.get("execution_mode") != "canonical_plan_executor":
+            defects.append(f"[evaluation] {label} {factor or '-'} bypassed the canonical plan executor")
+        if not isinstance(output.get("metrics"), dict) or not output.get("metrics"):
+            defects.append(f"[evaluation] {label} {factor or '-'} has no calculated metrics")
+        defects.extend(_ic_summary_invariant_defects(label, factor, output))
+        if not record.get("truth_match_eligible_metrics"):
+            defects.append(f"[evaluation] {label} {factor or '-'} has no metric eligibility lineage")
+        alignment = record.get("alignment_diagnostics", {}) or {}
+        if int(alignment.get("matched_rows", 0) or 0) <= 0:
+            defects.append(f"[evaluation] {label} {factor or '-'} has no matched-row alignment evidence")
+        universe = record.get("universe_diagnostics", {}) or {}
+        if int(universe.get("input_rows", 0) or 0) <= 0 or int(universe.get("output_rows", 0) or 0) <= 0:
+            defects.append(f"[evaluation] {label} {factor or '-'} has no universe row-count evidence")
+    return defects, records
+
+
+def _ic_summary_invariant_defects(label: str, factor: str, output: dict[str, Any]) -> list[str]:
+    family = str(output.get("evaluation_family", ""))
+    metrics = output.get("metrics", {}) or {}
+    ic_metrics = metrics.get("ic", {}) if isinstance(metrics.get("ic"), dict) else metrics
+    looks_like_ic = family in {"ic_analysis", "ic_regression"} or any(
+        key in ic_metrics for key in ("ic_mean", "rank_ic_mean", "ic_values")
+    )
+    if not looks_like_ic:
+        return []
+    raw_values = ic_metrics.get("ic_values")
+    if not isinstance(raw_values, list) or not raw_values:
+        return [f"[evaluation] {label} {factor or '-'} lacks persisted cross-sectional IC values"]
+    try:
+        values = [float(value) for value in raw_values]
+    except (TypeError, ValueError):
+        return [f"[evaluation] {label} {factor or '-'} has nonnumeric cross-sectional IC values"]
+    if not all(math.isfinite(value) for value in values):
+        return [f"[evaluation] {label} {factor or '-'} has nonfinite cross-sectional IC values"]
+    mean = sum(values) / len(values)
+    std = (
+        math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
+        if len(values) >= 2
+        else math.nan
+    )
+    positive_ratio = sum(value > 0 for value in values) / len(values)
+    expected = {
+        "cross_section_count": len(values),
+        "ic_positive_ratio": positive_ratio,
+    }
+    mean_key = "rank_ic_mean" if "rank_ic_mean" in ic_metrics else "ic_mean"
+    std_key = "rank_ic_std" if "rank_ic_std" in ic_metrics else "ic_std"
+    expected[mean_key] = mean
+    expected[std_key] = std
+    ir_key = "ic_ir" if "ic_ir" in ic_metrics else "icir" if "icir" in ic_metrics else ""
+    if ir_key:
+        expected[ir_key] = mean / std if math.isfinite(std) and std != 0 else math.nan
+    if "rank_ic_positive_ratio" in ic_metrics:
+        expected["rank_ic_positive_ratio"] = positive_ratio
+    defects: list[str] = []
+    for key, expected_value in expected.items():
+        observed = ic_metrics.get(key)
+        if observed is None:
+            defects.append(f"[evaluation] {label} {factor or '-'} IC summary omits {key}")
+            continue
+        try:
+            observed_value = float(observed)
+        except (TypeError, ValueError):
+            defects.append(f"[evaluation] {label} {factor or '-'} IC summary has nonnumeric {key}")
+            continue
+        both_nan = math.isnan(expected_value) and math.isnan(observed_value)
+        if not both_nan and not math.isclose(observed_value, expected_value, rel_tol=1e-10, abs_tol=1e-12):
+            defects.append(
+                f"[evaluation] {label} {factor or '-'} IC summary {key} is inconsistent with ic_values"
+            )
+    return defects
+
+
+def _comparison_coverage_defects(
+    report: dict[str, Any],
+    execution_by_factor: dict[str, list[dict[str, Any]]],
+) -> list[str]:
+    defects: list[str] = []
+    comparison_results = report.get("comparison_results", {}) or {}
+    rows = comparison_results.get("metric_rows", []) or comparison_results.get("all_metric_rows", []) or []
+    indexed_rows = {
+        (
+            str(row.get("factor_name", "")),
+            str(row.get("scenario_id", "")),
+            str(row.get("execution_id", "")),
+            str(row.get("truth_id") or row.get("source_truth_id", "")),
+            str(row.get("metric_id") or row.get("metric", "")),
+        ): row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("paper_value") is not None
+        and row.get("calculated_value") is not None
+    }
+    for factor, executions in execution_by_factor.items():
+        for execution in executions:
+            scenario = str(execution.get("scenario_id", ""))
+            execution_id = str(execution.get("execution_id", ""))
+            truth_id = str(execution.get("source_truth_id") or execution.get("truth_case_id", ""))
+            calculated_metrics = _evaluator_metrics_for_review(execution.get("evaluator_output", {}) or {})
+            for metric in execution.get("truth_match_eligible_metrics", []) or []:
+                metric = str(metric)
+                key = (factor, scenario, execution_id, truth_id, metric)
+                row = indexed_rows.get(key)
+                if row is None:
+                    defects.append(
+                        f"[truth] {factor} report omits comparison row for {scenario}/{execution_id}/{truth_id}/{metric}"
+                    )
+                    continue
+                calculated = calculated_metrics.get(metric)
+                try:
+                    agrees = calculated is not None and math.isclose(
+                        float(row.get("calculated_value")), float(calculated), rel_tol=1e-12, abs_tol=1e-14
+                    )
+                except (TypeError, ValueError):
+                    agrees = False
+                if not agrees:
+                    defects.append(
+                        f"[truth] {factor} comparison value differs from execution {execution_id} metric {metric}"
+                    )
+    return defects
+
+
+def _evaluator_metrics_for_review(output: dict[str, Any]) -> dict[str, Any]:
+    metrics = output.get("metrics", {}) or {}
+    if isinstance(metrics, dict) and isinstance(metrics.get("ic"), dict):
+        return dict(metrics["ic"])
+    return dict(metrics) if isinstance(metrics, dict) else {}
 
 
 def _execution_protocol_defects(

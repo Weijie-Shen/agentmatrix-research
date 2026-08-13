@@ -75,6 +75,36 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             self.assertTrue(assessment.complete)
             self.assertEqual(assessment.defects, [])
 
+    def test_complete_run_allows_additional_merged_cross_scenario_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_complete_fixture(root, ["Alpha3"])
+            bundle_path = root / "runtime" / "factor_lab" / "evaluation_bundles" / "default.json"
+            payload = json.loads(bundle_path.read_text(encoding="utf-8"))
+            merged = dict(payload)
+            merged["scenario_id"] = "combined_scenarios"
+            merged["records"] = [payload["records"][0]]
+            (bundle_path.parent / "combined.json").write_text(json.dumps(merged), encoding="utf-8")
+
+            assessment = assess_agent_harness_run(root, expected_factors=["Alpha3"])
+
+            self.assertTrue(assessment.complete, assessment.defects)
+
+    def test_comparison_rows_are_bound_to_exact_execution_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_complete_fixture(root, ["Alpha3"])
+            report_path = root / "runtime" / "factor_lab" / "reports" / "demo_paper_reproduction_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["comparison_results"]["metric_rows"][0]["execution_id"] = "another-execution"
+            report["comparison_results"]["primary_metric_rows"][0]["execution_id"] = "another-execution"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            assessment = assess_agent_harness_run(root, expected_factors=["Alpha3"])
+
+            self.assertFalse(assessment.complete)
+            self.assertTrue(any("omits comparison row for" in item for item in assessment.defects))
+
     def test_missing_report_is_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             assessment = assess_agent_harness_run(tmp_dir, expected_factors=["Alpha3"])
@@ -168,6 +198,58 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
                 assessment.defects,
             )
 
+    def test_hand_shaped_execution_bundle_cannot_restate_paper_truth_as_calculated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_complete_fixture(root, ["Alpha3"])
+            bundle_path = root / "runtime" / "factor_lab" / "evaluation_bundles" / "default.json"
+            bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+            record = bundle["records"][0]
+            bundle_path.write_text(
+                json.dumps(
+                    {
+                        "scenario_id": "default",
+                        "records": [
+                            {
+                                "factor_name": "Alpha3",
+                                "source_truth_id": record["source_truth_id"],
+                                "truth_case_id": record["truth_case_id"],
+                                "scenario_id": "default",
+                                "lifecycle_state": "executed",
+                                "implementation_source_hash": record["implementation_source_hash"],
+                                "data_snapshot_hash": "a1" * 32,
+                                "evaluator_output": {
+                                    "status": "passed",
+                                    "metrics": {"ic_mean": 0.05},
+                                },
+                                "universe_diagnostics": {"skipped_filters": []},
+                                "error": "",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            assessment = assess_agent_harness_run(root, expected_factors=["Alpha3"])
+
+            self.assertFalse(assessment.complete)
+            self.assertTrue(any("not an evaluation_bundle/v2" in item for item in assessment.defects))
+
+    def test_canonical_ic_summary_must_recompute_from_persisted_cross_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_complete_fixture(root, ["Alpha3"])
+            bundle_path = root / "runtime" / "factor_lab" / "evaluation_bundles" / "default.json"
+            bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+            bundle["records"][0]["evaluator_output"]["metrics"]["ic_mean"] = 0.05
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+
+            assessment = assess_agent_harness_run(root, expected_factors=["Alpha3"])
+
+            self.assertFalse(assessment.complete)
+            self.assertTrue(any("inconsistent with ic_values" in item for item in assessment.defects))
+
     def test_rejects_zero_assessed_selected_lineage_and_missing_neutralization(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -229,6 +311,7 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             "paper_jobs",
             "data_profiles",
             "evaluation_plans",
+            "evaluation_bundles",
             "truth_matches",
             "test_results",
         ):
@@ -236,7 +319,12 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
         module = root / "research_core" / "factor_lab" / "libraries" / "demo" / "factors.py"
         module.parent.mkdir(parents=True, exist_ok=True)
         module.write_text("def compute(panel):\n    return panel\n", encoding="utf-8")
+        (module.parent / "test_factors.py").write_text(
+            "from .factors import compute\n\ndef test_compute_exists():\n    assert callable(compute)\n",
+            encoding="utf-8",
+        )
         source_hash = hashlib.sha256(module.read_bytes()).hexdigest()
+        specification_hash = hashlib.sha256(b"demo-factor-specification").hexdigest()
         truth_id = {factor: f"{factor}_truth" for factor in factors}
         def selected_case(factor: str) -> dict[str, object]:
             return {
@@ -303,34 +391,73 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             "implemented_factor_ids": factors,
             "output_factor_columns": factors,
             "source_hash": source_hash,
+            "factor_specification_hash": specification_hash,
             "validation_status": "completed",
         }
-        executions = {
-            factor: {
-                "execution_id": f"execution-{factor}",
+        executions: dict[str, dict[str, object]] = {}
+        for factor in factors:
+            resolved_protocol = selected_case(factor)["resolved_protocol"]
+            identity = {
+                "truth_case_id": truth_id[factor],
+                "factor_id": factor,
+                "scenario_id": "default",
+                "evaluator_id": "generic_ic_v1",
+                "implementation_source_hash": source_hash,
+                "factor_specification_hash": specification_hash,
+                "data_snapshot_hash": hashlib.sha256(b"snapshot-default").hexdigest(),
+                "resolved_protocol": resolved_protocol,
+            }
+            encoded = json.dumps(
+                identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            executions[factor] = {
+                "execution_id": f"execution-{hashlib.sha256(encoded).hexdigest()[:20]}",
                 "source_truth_id": truth_id[factor],
                 "truth_case_id": truth_id[factor],
+                "factor_id": factor,
                 "factor_name": factor,
                 "scenario_id": "default",
+                "evaluator_id": "generic_ic_v1",
                 "lifecycle_state": "executed",
                 "implementation_source_hash": source_hash,
-                "data_snapshot_hash": "snapshot-default",
+                "factor_specification_hash": specification_hash,
+                "data_snapshot_hash": hashlib.sha256(b"snapshot-default").hexdigest(),
+                "resolved_protocol": resolved_protocol,
                 "truth_match_eligible_metrics": ["ic_mean"],
                 "diagnostic_only_metrics": [],
-                "universe_diagnostics": {"skipped_filters": []},
+                "alignment_diagnostics": {"matched_rows": 100},
+                "universe_diagnostics": {
+                    "input_rows": 100,
+                    "output_rows": 100,
+                    "skipped_filters": [],
+                },
                 "evaluator_output": {
                     "status": "passed",
+                    "execution_mode": "canonical_plan_executor",
                     "transform_applied": True,
                     "neutralization_diagnostics": {"used_controls": [], "skipped_controls": []},
-                    "metrics": {"ic_mean": 0.048},
+                    "metrics": {
+                        "ic_mean": 0.048,
+                        "ic_std": 0.0014142135623730963,
+                        "ic_ir": 33.94112549695425,
+                        "ic_positive_ratio": 1.0,
+                        "cross_section_count": 2,
+                        "ic_values": [0.047, 0.049],
+                    },
                 },
                 "error": None,
+                "schema_version": "evaluation_execution_record/v1",
             }
-            for factor in factors
-        }
         comparison_rows = [
             {
                 "factor_name": factor,
+                "scenario_id": "default",
+                "execution_id": executions[factor]["execution_id"],
+                "truth_id": truth_id[factor],
                 "metric": "ic_mean",
                 "paper_value": 0.05,
                 "calculated_value": 0.048,
@@ -406,6 +533,39 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
         (runtime / "evaluation_plans" / "plan.json").write_text(json.dumps(evaluation_plan), encoding="utf-8")
         (runtime / "implementation_artifacts" / "implementation.json").write_text(
             json.dumps(artifact), encoding="utf-8"
+        )
+        snapshot_hash = hashlib.sha256(b"snapshot-default").hexdigest()
+        (runtime / "evaluation_bundles" / "default.json").write_text(
+            json.dumps(
+                {
+                    "library": "demo",
+                    "scenario_id": "default",
+                    "data_snapshot_hash": snapshot_hash,
+                    "implementation_artifact": {
+                        "source_hash": source_hash,
+                        "factor_specification_hash": specification_hash,
+                    },
+                    "records": list(executions.values()),
+                    "limitations": [],
+                    "resource_preflight": {
+                        "schema_version": "resource_preflight/v1",
+                        "execution_mode": "projected_in_memory",
+                        "partition_required": False,
+                        "active_scenario_count": 1,
+                    },
+                    "resource_telemetry": {
+                        "calculation_rows": 100,
+                        "evaluation_rows": 100,
+                        "factor_rows": 100,
+                        "active_scenario_count": 1,
+                    },
+                    "requested_execution": {"scenario_id": "default", "sample": {"row_count": 100}},
+                    "executed_execution": {"scenario_id": "default", "sample": {"row_count": 100}},
+                    "raw_factor_before_evaluation_filters": True,
+                    "schema_version": "evaluation_bundle/v2",
+                }
+            ),
+            encoding="utf-8",
         )
         (runtime / "truth_matches" / "truth.json").write_text(json.dumps({"results": []}), encoding="utf-8")
         (runtime / "test_results" / "pytest.json").write_text(

@@ -63,6 +63,8 @@ For a clean forward test, start from a fresh branch/worktree and bundle or point
 
 After interruption or resource termination, inventory persisted stage and scenario artifacts before deciding what remains incomplete. Reload and merge every valid completed evaluation bundle. Never replace successful durable execution records with a blanket deferred result because a later scenario, partition, report build, or process failed.
 
+An executed case exists only when it is present in the unmodified `evaluation_bundle/v2` returned and exported by `execute_evaluation_plan(...)`. Never construct an execution record or calculated metric by hand, and never seed calculated values from paper truth. Preserve canonical execution IDs, executor mode, certified hashes, SHA-256 snapshot identity, preflight/telemetry, sample lineage, alignment, universe diagnostics, cross-sectional IC values, and resolved protocol so Stage 8 and the independent reviewer can reconcile every claim.
+
 ## Cross-paper invariants
 
 - Stage 1 is immutable shared paper evidence: factor definitions, semantic requirements, universe/sample/operation/metric/IC protocol registries, and factor-keyed truth result blocks. It contains neither local column bindings nor selected truth IDs.

@@ -11,6 +11,8 @@ from research_core.factor_lab.paper_reproduction.agent_harness_review import Age
 from research_core.factor_lab.paper_reproduction.paper_autotest import (
     FactorSelectionEvidence,
     PaperSelectionArtifact,
+    _artifact_families,
+    _bound_implementation_test_sources,
     cleanup_test_worktree,
     create_batch_manifest,
     discover_test_papers,
@@ -27,6 +29,50 @@ from research_core.factor_lab.paper_reproduction.paper_autotest import (
 
 
 class PaperAutotestTest(unittest.TestCase):
+    def test_bundled_skill_self_test_is_not_factor_implementation_test_source(self) -> None:
+        bundled = (
+            "runtime/factor_lab/agent_harness/run/skills/"
+            "rqdata-fetch-reference/scripts/test_rqdata_reference.py"
+        )
+        factor_test = "research_core/factor_lab/libraries/demo/test_factors.py"
+
+        self.assertNotIn("implementation_test_source", _artifact_families(bundled))
+        self.assertIn("implementation_test_source", _artifact_families(factor_test))
+
+    def test_test_source_must_bind_to_certified_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            artifact_path = root / "runtime/factor_lab/implementation_artifacts/implementation.json"
+            artifact_path.parent.mkdir(parents=True)
+            artifact_path.write_text(
+                json.dumps(
+                    {
+                        "module_path": "research_core/factor_lab/libraries/selected/factors.py",
+                        "callable_import_path": "research_core.factor_lab.libraries.selected.factors:compute",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            selected_test = root / "research_core/factor_lab/libraries/selected/test_factors.py"
+            unrelated_test = root / "research_core/factor_lab/libraries/unrelated/test_factors.py"
+            selected_test.parent.mkdir(parents=True)
+            unrelated_test.parent.mkdir(parents=True)
+            selected_test.write_text("def test_selected(): pass\n", encoding="utf-8")
+            unrelated_test.write_text("def test_unrelated(): pass\n", encoding="utf-8")
+            changed = [
+                str(artifact_path.relative_to(root)),
+                str(selected_test.relative_to(root)),
+                str(unrelated_test.relative_to(root)),
+            ]
+
+            bound = _bound_implementation_test_sources(
+                root,
+                changed_paths=changed,
+                candidates=changed[1:],
+            )
+
+            self.assertEqual(bound, [str(selected_test.relative_to(root))])
+
     def test_discovers_pdf_candidates_with_stable_hashes_and_unique_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -228,7 +274,12 @@ class PaperAutotestTest(unittest.TestCase):
                 "runtime/factor_lab/paper_specs/extraction.json": "{}",
                 "runtime/factor_lab/specs/specs.json": "{}",
                 "runtime/factor_lab/data_profiles/qfq.json": "{}",
-                "runtime/factor_lab/implementation_artifacts/implementation.json": "{}",
+                "runtime/factor_lab/implementation_artifacts/implementation.json": json.dumps(
+                    {
+                        "module_path": "research_core/factor_lab/libraries/demo/factors.py",
+                        "callable_import_path": "research_core.factor_lab.libraries.demo.factors:compute",
+                    }
+                ),
                 "runtime/factor_lab/test_results/pytest.txt": "2 passed",
                 "runtime/factor_lab/evaluation_plans/plan.json": "{}",
                 "runtime/factor_lab/evaluation_bundles/qfq.json": "{}",
@@ -236,6 +287,7 @@ class PaperAutotestTest(unittest.TestCase):
                 "runtime/factor_lab/reports/report.json": "{}",
                 "runtime/factor_lab/reports/report.md": "# report",
                 "research_core/factor_lab/libraries/demo/test_factors.py": "def test_factor(): pass\n",
+                "research_core/factor_lab/libraries/demo/factors.py": "def compute(panel): return panel\n",
                 "research_core/factor_lab/libraries/demo/__pycache__/test_factors.pyc": "bytecode",
                 "scripts/run_demo.py": "print(1)\n",
             }

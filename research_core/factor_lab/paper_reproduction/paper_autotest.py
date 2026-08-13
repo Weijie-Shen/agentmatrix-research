@@ -468,6 +468,13 @@ def harvest_run_artifacts(plan: PaperTestRunPlan, *, maximum_file_bytes: int = 2
     ownership_target = destination / "worktree_ownership.json"
     shutil.copy2(ownership_source, ownership_target)
     artifact_inventory = _artifact_inventory(item["path"] for item in changed)
+    artifact_inventory["implementation_test_source"] = _bound_implementation_test_sources(
+        worktree,
+        changed_paths=[item["path"] for item in changed],
+        candidates=artifact_inventory.get("implementation_test_source", []),
+    )
+    if not artifact_inventory["implementation_test_source"]:
+        artifact_inventory.pop("implementation_test_source")
     missing_required = [
         family for family in REQUIRED_HARVEST_FAMILIES if not artifact_inventory.get(family)
     ]
@@ -784,7 +791,13 @@ def _artifact_families(path: str) -> set[str]:
     if path.startswith("runtime/factor_lab/test_results/"):
         families.add("implementation_test_result")
     name = Path(path).name
-    if path.endswith(".py") and (name.startswith("test_") or "/tests/" in path or path.startswith("tests/")):
+    is_test_source = path.endswith(".py") and (
+        name.startswith("test_") or "/tests/" in path or path.startswith("tests/")
+    )
+    is_factor_test_location = path.startswith("research_core/factor_lab/libraries/") or path.startswith(
+        "tests/"
+    )
+    if is_test_source and is_factor_test_location:
         families.add("implementation_test_source")
     if path.startswith("runtime/factor_lab/resource_evidence/"):
         families.add("resource_evidence")
@@ -793,6 +806,48 @@ def _artifact_families(path: str) -> set[str]:
     if path.startswith("scripts/"):
         families.add("worker_script")
     return families
+
+
+def _bound_implementation_test_sources(
+    worktree: Path,
+    *,
+    changed_paths: Sequence[str],
+    candidates: Sequence[str],
+) -> list[str]:
+    worktree = worktree.resolve()
+    module_paths: list[Path] = []
+    callable_modules: list[str] = []
+    for relative in changed_paths:
+        if not relative.startswith("runtime/factor_lab/implementation_artifacts/") or not relative.endswith(
+            ".json"
+        ):
+            continue
+        try:
+            artifact = json.loads((worktree / relative).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        raw_module_path = Path(str(artifact.get("module_path", "")))
+        module_path = raw_module_path if raw_module_path.is_absolute() else worktree / raw_module_path
+        try:
+            module_paths.append(module_path.resolve().relative_to(worktree))
+        except ValueError:
+            continue
+        callable_module = str(artifact.get("callable_import_path", "")).split(":", 1)[0]
+        if callable_module:
+            callable_modules.append(callable_module)
+    bound: list[str] = []
+    for relative in candidates:
+        candidate = Path(relative)
+        if any(candidate.parent == module.parent for module in module_paths):
+            bound.append(relative)
+            continue
+        try:
+            text = (worktree / candidate).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if any(module in text for module in callable_modules):
+            bound.append(relative)
+    return sorted(dict.fromkeys(bound))
 
 
 def _review_input_records(plan: PaperTestRunPlan) -> list[dict[str, str]]:
