@@ -49,6 +49,10 @@ For truth matching verify:
 - diagnostic, deferred, unsupported, and missing proxy metrics are excluded from failure denominators;
 - `inconsistent` is used only under sufficient comparability;
 - positive claims match the recorded comparability level.
+- the executed Pearson-versus-Spearman method matches the immutable paper protocol;
+- every explicit missing-value operation survives normalization and execution in the same order;
+- signed and absolute metric conventions are reconciled before comparison;
+- any companion formula source is authorized, hashed, and distinct from the selected evaluation-truth paper.
 
 ## Produce the report
 

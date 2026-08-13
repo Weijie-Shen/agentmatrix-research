@@ -32,6 +32,8 @@ Formula-required fields must be factor-specific. Do not copy a family-wide OHLCV
 
 Do not invent missing formula semantics. Classify material ambiguity and retain source text or location.
 
+If the selected paper reports a factor only as a comparison row and cites a companion paper for its formula, do not treat the row as formula evidence. Locate the cited source only within the user's authorized paper set, record its path and SHA-256 identity as formula provenance, and keep the selected paper as the evaluation-truth source. If the cited source is unavailable, leave formula fidelity unverified.
+
 Semantic requirements describe paper meaning only. They may specify industry provider/version/level/effective-date rule, capitalization basis, status meaning, timing, or construction, but must never contain a selected local column, physical file, or resolved field. Stage 3 owns those bindings.
 
 ## Model IC analysis truth narrowly
@@ -53,7 +55,7 @@ Keep paper protocol immutable. Do not rewrite WLS as OLS, a paper sample as loca
 
 Extract all relevant IC alternatives, including raw versus neutralized, different preprocessing for different factor groups, different horizons, and different samples. Do not extract only the most data-intensive variant when a raw IC case also carries valid numeric truth. Stage 3 assesses local semantic/data support and Stage 6 selects exactly one unconflicted truth source per factor without looking at metric closeness.
 
-Normalize metric names and units to the framework's computational convention while retaining the original paper label/unit as provenance. For example, a percentage IC mean must be represented consistently with the evaluator's decimal output; do not compare `6.29` directly with `0.0629` or invent incompatible metric keys.
+Normalize metric names and units to the framework's computational convention while retaining the original paper label/unit as provenance. For example, a percentage IC mean must be represented consistently with the evaluator's decimal output; do not compare `6.29` directly with `0.0629` or invent incompatible metric keys. Extract whether IC is ordinary Pearson correlation or Spearman/rank correlation; never infer rank IC merely from the label `IC`. Preserve signed-versus-absolute conventions for IR and other derived metrics in their definitions.
 
 Missing daily factor values or curves are limitations, not blockers, when aggregate evaluation metrics and a meaningful method exist. Aggregate-only family evidence must not be fabricated into per-factor metrics.
 
@@ -88,6 +90,7 @@ Normalize as a preservation mapping into `FactorResearchSpec`:
 - compile ordered operation pipelines into runtime transform/control structures without changing the immutable registries;
 - leave `selected_truth_sources` empty, record Stage 3 as support assessment, and Stage 6 as the selection stage;
 - never invent default transforms while compiling v2;
+- preserve every explicit missing-value operation and its position, including zero-fill after cross-sectional standardization;
 - never add paper factor-value truth targets.
 
 Export and reload artifacts to verify serialization. Generated `specs.py` must import cleanly.

@@ -188,6 +188,31 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
         self.assertAlmostEqual(result["rank_ic_std"], math.sqrt(2), places=12)
         self.assertAlmostEqual(result["ic_positive_ratio"], 0.5, places=12)
 
+    def test_compute_ic_analysis_supports_absolute_ir_convention(self) -> None:
+        frame = self._base_frame()
+
+        result = compute_ic_analysis(
+            frame,
+            factor_col="factor",
+            return_col="forward_return_1d",
+            method="spearman",
+            ic_ir_convention="absolute",
+        )
+
+        self.assertGreaterEqual(result["ic_ir"], 0.0)
+
+    def test_transform_pipeline_can_fill_standardized_missing_values_with_zero(self) -> None:
+        frame = self._base_frame()
+        frame.loc[frame.index[0], "factor"] = float("nan")
+
+        transformed = apply_transform_spec(
+            frame,
+            value_col="factor",
+            transform_spec={"steps": [{"name": "missing_value_policy", "method": "fill_zero"}]},
+        )
+
+        self.assertEqual(float(transformed.loc[frame.index[0], "processed_factor"]), 0.0)
+
     def test_evaluate_paper_case_dispatches_ic_analysis(self) -> None:
         frame = self._base_frame()
         case = {

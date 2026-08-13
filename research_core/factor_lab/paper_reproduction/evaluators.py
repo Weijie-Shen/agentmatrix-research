@@ -31,11 +31,12 @@ GENERIC_EVALUATOR_CAPABILITIES: dict[str, dict[str, Any]] = {
                 "log",
                 "cross_sectional_regression_residual",
                 "cross_section_zscore",
+                "fill_zero",
                 "do_not_fill",
                 "none",
             ],
             "neutralization_methods": ["cross_sectional_regression_residual", "none"],
-            "input_transform_methods": ["median_mad", "log", "cross_section_zscore", "do_not_fill", "none"],
+            "input_transform_methods": ["median_mad", "log", "cross_section_zscore", "fill_zero", "do_not_fill", "none"],
             "control_encodings": ["continuous", "categorical", "dummy"],
             "metrics": [
                 "rank_ic_mean",
@@ -209,6 +210,7 @@ def compute_ic_analysis(
     factor_col: str,
     return_col: str,
     method: str = "spearman",
+    ic_ir_convention: str = "signed",
     date_col: str = DEFAULT_DATE_COL,
 ) -> dict[str, Any]:
     """Compute cross-sectional IC metrics by date."""
@@ -231,10 +233,13 @@ def compute_ic_analysis(
     mean = _mean_or_nan(ic_values)
     std = _std_or_nan(ic_values)
     positive_ratio = float(sum(value > 0 for value in ic_values) / len(ic_values)) if ic_values else float("nan")
+    if ic_ir_convention not in {"signed", "absolute"}:
+        raise ValueError(f"Unsupported IC IR convention: {ic_ir_convention}")
+    signed_ir = float(mean / std) if pd.notna(mean) and pd.notna(std) and std != 0 else float("nan")
     result = {
         "rank_ic_mean" if method in {"spearman", "rank_ic", "spearman_rank_ic"} else "ic_mean": mean,
         "rank_ic_std" if method in {"spearman", "rank_ic", "spearman_rank_ic"} else "ic_std": std,
-        "ic_ir": float(mean / std) if pd.notna(mean) and pd.notna(std) and std != 0 else float("nan"),
+        "ic_ir": abs(signed_ir) if ic_ir_convention == "absolute" else signed_ir,
         "ic_positive_ratio": positive_ratio,
         "cross_section_count": len(ic_values),
         "ic_values": ic_values,
@@ -334,7 +339,14 @@ def evaluate_paper_case(
     return_col = str(evaluation_spec.get("return_col") or _first_required(required_data, "evaluation") or "forward_return_1d")
     ic_type = str(evaluation_spec.get("ic_type", "spearman_rank_ic")).lower()
     method = _ic_method_from_type(ic_type)
-    ic_metrics = compute_ic_analysis(transformed, factor_col=PROCESSED_FACTOR_COL, return_col=return_col, method=method, date_col=date_col)
+    ic_metrics = compute_ic_analysis(
+        transformed,
+        factor_col=PROCESSED_FACTOR_COL,
+        return_col=return_col,
+        method=method,
+        ic_ir_convention=str(evaluation_spec.get("ic_ir_convention", "signed")),
+        date_col=date_col,
+    )
     if family == "ic_regression":
         controls = [str(control) for control in evaluation_spec.get("regression_controls", []) or required_data.get("controls", [])]
         regression_metrics = compute_cross_sectional_regression(
@@ -429,6 +441,8 @@ def _apply_input_transforms(
             result = np.log(numeric.where(numeric > 0))
         elif method == "cross_section_zscore":
             result = result.groupby(frame[date_col], group_keys=False).apply(_zscore)
+        elif method == "fill_zero":
+            result = result.fillna(0.0)
         elif method in {"do_not_fill", "none", ""}:
             pass
         else:

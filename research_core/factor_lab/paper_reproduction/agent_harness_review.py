@@ -750,7 +750,12 @@ def _ic_summary_invariant_defects(label: str, factor: str, output: dict[str, Any
     expected[std_key] = std
     ir_key = "ic_ir" if "ic_ir" in ic_metrics else "icir" if "icir" in ic_metrics else ""
     if ir_key:
-        expected[ir_key] = mean / std if math.isfinite(std) and std != 0 else math.nan
+        ir = mean / std if math.isfinite(std) and std != 0 else math.nan
+        resolved = output.get("resolved_parameters", {}) or {}
+        evaluation_spec = resolved.get("evaluation_spec", {}) or {}
+        if str(evaluation_spec.get("ic_ir_convention", "signed")) == "absolute":
+            ir = abs(ir)
+        expected[ir_key] = ir
     if "rank_ic_positive_ratio" in ic_metrics:
         expected["rank_ic_positive_ratio"] = positive_ratio
     defects: list[str] = []

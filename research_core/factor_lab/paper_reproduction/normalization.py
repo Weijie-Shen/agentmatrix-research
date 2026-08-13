@@ -407,6 +407,12 @@ def _project_v2_truth_source_for_factor(
         for metric_id in truth_source.reported_metric_ids
         if metric_id in metric_by_id
     }
+    ic_ir_definition = metric_definitions.get("ic_ir", {})
+    ic_ir_text = " ".join(
+        str(ic_ir_definition.get(key, ""))
+        for key in ("paper_label", "definition")
+    ).lower()
+    ic_ir_convention = "absolute" if any(token in ic_ir_text for token in ("absolute", "绝对值", "abs(")) else "signed"
     return {
         "truth_id": truth_source.truth_source_id,
         "truth_source_id": truth_source.truth_source_id,
@@ -424,6 +430,7 @@ def _project_v2_truth_source_for_factor(
             "return_horizon_unit": "trading_day",
             "return_col": return_field,
             "ic_type": ic_type,
+            "ic_ir_convention": ic_ir_convention,
             "signal_schedule": extraction.ic_analysis_contract.get("signal_frequency", "every_trading_day"),
             "sign_convention": extraction.ic_analysis_contract.get("sign_convention", "positive_rank_ic_is_favorable"),
         },
@@ -590,7 +597,11 @@ def _factor_transform_step(operation: dict[str, Any]) -> dict[str, Any] | None:
     if operation_type == "standardize":
         return {"name": "standardization", "method": "cross_section_zscore", "source": "compiled_from_operation_pipeline"}
     if operation_type == "missing_values":
-        return {"name": "missing_value_policy", "method": "do_not_fill", "source": "compiled_from_operation_pipeline"}
+        return {
+            "name": "missing_value_policy",
+            "method": _runtime_missing_value_method(operation),
+            "source": "compiled_from_operation_pipeline",
+        }
     if operation_type == "transform":
         return {"name": "transform", "method": _runtime_transform_method(operation), "source": "compiled_from_operation_pipeline"}
     return None
@@ -608,6 +619,19 @@ def _runtime_winsor_step(operation: dict[str, Any]) -> dict[str, Any]:
 def _runtime_transform_method(operation: dict[str, Any]) -> str:
     method = str(operation.get("method", ""))
     return "log" if method in {"natural_log", "ln"} else method
+
+
+def _runtime_missing_value_method(operation: dict[str, Any]) -> str:
+    method = str(operation.get("method", "")).strip().lower()
+    aliases = {
+        "fill_mean_to_zero": "fill_zero",
+        "fill_standardized_mean": "fill_zero",
+        "impute_zero": "fill_zero",
+        "zero_fill": "fill_zero",
+        "do_not_impute": "do_not_fill",
+        "leave_missing": "do_not_fill",
+    }
+    return aliases.get(method, method or "do_not_fill")
 
 
 def _canonical_formula_field(requirement: ExtractedSemanticRequirement | None, *, fallback: str) -> str:

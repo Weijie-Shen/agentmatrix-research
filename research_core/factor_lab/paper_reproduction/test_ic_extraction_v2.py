@@ -285,6 +285,28 @@ class ICAnalysisExtractionV2Test(unittest.TestCase):
         self.assertEqual([item["paper_field"] for item in controls], ["industry_citic_level_1", "total_company_market_cap_close"])
         self.assertEqual(controls[1]["transforms"][0]["method"], "log")
 
+    def test_stage2_preserves_explicit_zero_fill_and_absolute_ir_semantics(self) -> None:
+        extraction = ic_v2_fixture()
+        for pipeline in extraction.operation_pipelines:
+            for operation in pipeline.operations:
+                if operation.get("type") == "missing_values":
+                    operation["method"] = "fill_mean_to_zero"
+        for metric in extraction.metric_definitions:
+            if metric.metric_id == "ic_ir":
+                metric.definition = "absolute value of IC mean divided by IC standard deviation"
+
+        truth_cases = normalize_extraction_to_specs(extraction, version="v2")[0].metadata["truth_sources"]
+
+        self.assertEqual(
+            truth_cases[0]["transform_spec"]["steps"][2]["method"],
+            "fill_zero",
+        )
+        self.assertEqual(
+            truth_cases[1]["neutralization_spec"]["output_transforms"][1]["method"],
+            "fill_zero",
+        )
+        self.assertTrue(all(case["evaluation_spec"]["ic_ir_convention"] == "absolute" for case in truth_cases))
+
     def test_stage3_and_stage6_choose_one_supported_truth_without_metric_peeking(self) -> None:
         specs = normalize_extraction_to_specs(ic_v2_fixture(), version="v2")
         profile = {

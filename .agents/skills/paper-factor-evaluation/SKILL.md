@@ -61,7 +61,7 @@ Keep the full calculation panel separate from evaluation inputs. Join certified 
 
 Use forward alignment for future returns. Use `materialize_forward_return(...)` only for security-observation horizons; use `materialize_calendar_forward_return(...)` for exact exchange-trading-day `T+h` horizons. Do not compute past returns or let suspension/missing observations redefine the paper horizon.
 
-Respect frequency: `t+1` means the next relevant period, not automatically the next trading day. Build timing from the extracted signal date, status-filter effective dates, exchange-calendar `T+h` target, and paper-defined return interval; do not hardcode every case to an entry at `t+1`. Preserve IC rank type, horizon, preprocessing/control order, and sign conventions.
+Respect frequency: `t+1` means the next relevant period, not automatically the next trading day. Build timing from the extracted signal date, status-filter effective dates, exchange-calendar `T+h` target, and paper-defined return interval; do not hardcode every case to an entry at `t+1`. Preserve Pearson-versus-Spearman IC type, horizon, preprocessing/control order, missing-exposure policy, and sign conventions. Apply a paper-declared absolute ICIR convention before truth matching; do not compare signed evaluator IR to an absolute paper statistic.
 
 Run selected cases through `execute_evaluation_plan(...)` with `EvaluationDataContext.resource_config` for full-period work. Honor resource preflight, column projection, sequential execution, and verified partitions.
 

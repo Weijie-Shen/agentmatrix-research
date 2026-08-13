@@ -199,6 +199,12 @@ def canonical_transform_method(value: str) -> str:
         "natural_log": "log",
         "ln": "log",
         "missing_value_policy": "do_not_fill",
+        "fill_mean_to_zero": "fill_zero",
+        "fill_standardized_mean": "fill_zero",
+        "impute_zero": "fill_zero",
+        "zero_fill": "fill_zero",
+        "do_not_impute": "do_not_fill",
+        "leave_missing": "do_not_fill",
     }
     return aliases.get(normalized, normalized)
 
