@@ -30,6 +30,8 @@ Factor functions must:
 
 For formulas mixing cross-sectional ranks and time-series operators, preserve operator order exactly. A typical safe pattern is long panel → cross-sectional operation by date → wide date/security rolling operation → cross-sectional post-transform → long output.
 
+Keep source parameters and derived runtime constants distinct. Use a parameter in the exact unit and algebraic position stated by the paper; converting a lookback window to observations does not authorize replacing a separate month-valued decay parameter with that observation count. When a conversion is explicitly supported, document its dimensional rationale and provenance in the implementation artifact and test the converted value independently. Leave an unresolved unit/index mismatch as a formula limitation rather than choosing a convenient interpretation.
+
 Use safe rolling correlation/covariance wrappers on sparse or low-variance panels. Scrub infinity immediately after the rolling operation so downstream ranks and sums do not propagate it.
 
 ## TDD sequence
@@ -51,11 +53,13 @@ Test:
 - warm-up nulls and numeric output;
 - absence of infinity;
 - hand-computable formula semantics;
+- source-parameter units and any independently derived conversion constants;
 - rank direction and rolling window boundaries;
 - adjusted-price view consistency for price-derived inputs;
 - no accidental evaluation filtering during calculation.
 
 Do not tune formula code to make paper metrics closer. Formula correctness comes from evidence and semantic tests.
+Do not build a test oracle by repeating the implementation's unsupported parameter conversion. For hand-computable tests, calculate expected values from the literal source equation and source-level parameter values so a wrong unit, scale, normalization, or index direction fails.
 
 ## Certification
 

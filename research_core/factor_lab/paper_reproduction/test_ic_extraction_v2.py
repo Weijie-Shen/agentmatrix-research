@@ -31,6 +31,7 @@ from research_core.factor_lab.paper_reproduction.evaluation_execution import (
 from research_core.factor_lab.paper_reproduction.data_validation import assess_evaluation_case_support
 from research_core.factor_lab.paper_reproduction.evaluators import get_generic_evaluator_capabilities
 from research_core.factor_lab.paper_reproduction.extraction import infer_reported_ratio_denominator
+from research_core.factor_lab.paper_reproduction.normalization import _default_ic_sign_convention
 
 
 def ic_v2_fixture() -> ICAnalysisPaperExtraction:
@@ -209,6 +210,10 @@ def ic_v2_fixture() -> ICAnalysisPaperExtraction:
 
 
 class ICAnalysisExtractionV2Test(unittest.TestCase):
+    def test_normalization_default_sign_label_tracks_canonical_ic_method(self) -> None:
+        self.assertEqual(_default_ic_sign_convention("pearson_ic"), "positive_ic_is_favorable")
+        self.assertEqual(_default_ic_sign_convention("spearman_rank_ic"), "positive_rank_ic_is_favorable")
+
     def test_infers_unique_shared_observation_denominator_from_printed_ratios(self) -> None:
         self.assertEqual(
             infer_reported_ratio_denominator([0.2671, 0.1781, 0.1644, 0.1575]),

@@ -162,7 +162,7 @@ def build_paper_reproduction_report(
             "truth_match_pass_rate": _truth_match_pass_rate(truth_case_counts),
             "selected_truth_source_count": len(selected_truth_sources),
             "metric_comparison_count": len(comparison_results.get("metric_rows", [])),
-            "rank_ic_comparison_summary": comparison_summary.get("primary_metric", {}),
+            "ic_comparison_summary": comparison_summary.get("primary_metric", {}),
             "metric_comparison_summary": comparison_summary.get("all_metrics", {}),
             "pipeline_overall_status": pipeline_payload.get("overall_status"),
             "next_stage": pipeline_payload.get("next_stage"),

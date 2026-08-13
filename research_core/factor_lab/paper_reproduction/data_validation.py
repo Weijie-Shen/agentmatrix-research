@@ -875,6 +875,51 @@ def _resolve_semantic_requirement(definition: dict[str, Any], profile: dict[str,
     columns = set(str(column) for column in profile.get("columns", []) or [])
     conventions = profile.get("conventions", {}) if isinstance(profile.get("conventions", {}), dict) else {}
 
+    # Stage 3 may explicitly bind an otherwise paper-specific semantic ID to a
+    # materialized field. Preserve the declared relationship class verbatim:
+    # proxies stay proxies and unsupported substitutes stay unavailable. Exact
+    # aliases for typed classification/capitalization still pass through their
+    # dedicated semantic checks below.
+    declared_relationships = _profile_declared_relationships(semantic_id, profile)
+    relationship_candidates: list[dict[str, Any]] = []
+    for relationship in declared_relationships:
+        if relationship.relationship == "exact_alias" and kind in {"classification", "capitalization"}:
+            continue
+        physical_available = relationship.physical_field in columns
+        if relationship.relationship == "unsupported_substitute":
+            if physical_available:
+                relationship_candidates.append(
+                    _relationship_resolution(
+                        relationship,
+                        availability="missing",
+                        semantic_availability="not_assessed",
+                        execution_ready=False,
+                        profile=profile,
+                    )
+                )
+        elif physical_available and relationship.derivation:
+            relationship_candidates.append(
+                _relationship_resolution(
+                    relationship,
+                    availability="constructible",
+                    semantic_availability="constructible",
+                    execution_ready=False,
+                    profile=profile,
+                )
+            )
+        elif physical_available:
+            relationship_candidates.append(
+                _available_field_resolution(
+                    relationship.physical_field,
+                    profile,
+                    relationship=relationship.relationship,
+                    paper_field=semantic_id,
+                    relationship_record=relationship,
+                )
+            )
+    if relationship_candidates:
+        return min(relationship_candidates, key=_resolution_priority)
+
     if kind == "classification":
         physical = "industry" if "industry" in columns else "industry_code" if "industry_code" in columns else ""
         if not physical:
@@ -1124,19 +1169,7 @@ def _resolve_requirement(field: str, profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def _relationships_for_requirement(field: str, profile: dict[str, Any]) -> list[FieldRelationship]:
-    custom: list[FieldRelationship] = []
-    for item in profile.get("field_relationships", []) or []:
-        if isinstance(item, FieldRelationship):
-            relationship = item
-        elif isinstance(item, dict):
-            try:
-                relationship = FieldRelationship(**item)
-            except (TypeError, ValueError):
-                continue
-        else:
-            continue
-        if relationship.paper_field == field:
-            custom.append(relationship)
+    custom = _profile_declared_relationships(field, profile)
 
     dynamic: list[FieldRelationship] = []
     lowered = field.lower()
@@ -1154,6 +1187,25 @@ def _relationships_for_requirement(field: str, profile: dict[str, Any]) -> list[
         if item.paper_field == field and (item.paper_field, item.physical_field) not in overridden_pairs
     ]
     return [*custom, *dynamic, *built_in]
+
+
+def _profile_declared_relationships(field: str, profile: dict[str, Any]) -> list[FieldRelationship]:
+    """Return only relationships explicitly persisted in this data profile."""
+
+    custom: list[FieldRelationship] = []
+    for item in profile.get("field_relationships", []) or []:
+        if isinstance(item, FieldRelationship):
+            relationship = item
+        elif isinstance(item, dict):
+            try:
+                relationship = FieldRelationship(**item)
+            except (TypeError, ValueError):
+                continue
+        else:
+            continue
+        if relationship.paper_field == field:
+            custom.append(relationship)
+    return custom
 
 
 def _available_field_resolution(

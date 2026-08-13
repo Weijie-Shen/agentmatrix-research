@@ -60,6 +60,10 @@ COMMON_TRANSFORM_DEFAULTS: dict[str, dict[str, Any]] = {
 COMMON_TRANSFORM_ORDER = ("winsorization", "standardization", "missing_value_policy")
 
 
+def _default_ic_sign_convention(ic_type: str) -> str:
+    return "positive_rank_ic_is_favorable" if ic_type == "spearman_rank_ic" else "positive_ic_is_favorable"
+
+
 def normalize_extraction_to_specs(
     extraction: PaperExtraction | ICAnalysisPaperExtraction,
     *,
@@ -436,7 +440,10 @@ def _project_v2_truth_source_for_factor(
             "ic_type": ic_type,
             "ic_ir_convention": ic_ir_convention,
             "signal_schedule": extraction.ic_analysis_contract.get("signal_frequency", "every_trading_day"),
-            "sign_convention": extraction.ic_analysis_contract.get("sign_convention", "positive_rank_ic_is_favorable"),
+            "sign_convention": extraction.ic_analysis_contract.get(
+                "sign_convention",
+                _default_ic_sign_convention(ic_type),
+            ),
         },
         "transform_spec": compiled["transform_spec"],
         "neutralization_spec": compiled["neutralization_spec"],
@@ -669,6 +676,8 @@ def _canonical_formula_field(requirement: ExtractedSemanticRequirement | None, *
         "daily_low_price": "low",
         "daily_trading_volume": "volume",
         "daily_volume_weighted_average_price": "vwap",
+        "unadjusted_daily_close_price": "close_raw",
+        "circulating_a_market_cap": "circulating_market_cap",
     }
     return aliases.get(concept, fallback.removeprefix("daily_"))
 

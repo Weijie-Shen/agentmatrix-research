@@ -72,6 +72,7 @@ An executed case exists only when it is present in the unmodified `evaluation_bu
 - Stage 2 preserves registry references and projects candidates without choosing truth or adding transform defaults. Stage 3 resolves typed local semantics and assesses every candidate without metric-value peeking. Stage 6 requires those assessments and selects exactly one unconflicted IC truth source per factor.
 - Keep raw factor definitions separate from transforms, universes, return horizons, controls, weights, portfolio rules, and evaluation data.
 - Preserve narrow source locations and provenance for formulas, transforms, methods, and metrics.
+- Preserve formula parameter symbols, values, units, and domains literally. Record observation-count or calendar conversions separately; never replace a source month/year/day parameter with a rolling-window row count without explicit source-backed conversion semantics.
 - Distinguish ordinary/Pearson IC from Spearman/rank IC, preserve explicit zero-fill versus drop-missing behavior in order, and preserve signed versus absolute metric conventions.
 - When formula evidence comes from a cited companion paper, use it only when that document is inside the authorized source set and persist its path/hash separately from the selected paper's evaluation truth.
 - Distinguish exact data, constructed equivalents, proxies, rejected substitutes, and missing requirements.

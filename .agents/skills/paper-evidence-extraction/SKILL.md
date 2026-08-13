@@ -32,6 +32,8 @@ Formula-required fields must be factor-specific. Do not copy a family-wide OHLCV
 
 Do not invent missing formula semantics. Classify material ambiguity and retain source text or location.
 
+Preserve every formula parameter as a source-level symbol with its literal value, unit, and domain. Keep derived runtime quantities—such as an estimated number of trading observations in a month—in separate fields with explicit conversion provenance. Never substitute a derived observation count for a parameter stated in months, years, calendar days, or another unit merely because the rolling window is implemented with observations. If a formula combines variables whose units or indexing conventions are unclear, record a formula gap instead of silently making the expression dimensionally convenient.
+
 If the selected paper reports a factor only as a comparison row and cites a companion paper for its formula, do not treat the row as formula evidence. Locate the cited source only within the user's authorized paper set, record its path and SHA-256 identity as formula provenance, and keep the selected paper as the evaluation-truth source. If the cited source is unavailable, leave formula fidelity unverified.
 
 Semantic requirements describe paper meaning only. They may specify industry provider/version/level/effective-date rule, capitalization basis, status meaning, timing, or construction, but must never contain a selected local column, physical file, or resolved field. Stage 3 owns those bindings.

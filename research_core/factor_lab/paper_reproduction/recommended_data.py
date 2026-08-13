@@ -290,6 +290,35 @@ def load_recommended_daily_panel(
     return panel.sort_values(["code", "date"]).reset_index(drop=True)
 
 
+def discover_recommended_daily_securities(
+    *,
+    start_date: str | pd.Timestamp,
+    end_date: str | pd.Timestamp,
+    config: RecommendedDataConfig | None = None,
+) -> list[str]:
+    """Discover the complete historical security membership with a projected read.
+
+    This is the fail-closed planner companion to ``SecurityPartitionSpec``: it
+    reads only symbol/date over the requested interval, so delisted securities
+    are retained without materializing the full OHLCV panel.
+    """
+
+    data_config = config or RecommendedDataConfig.from_env()
+    source = resolve_recommended_data_sources(data_config).daily_prices
+    frame = _read_parquet_with_filters(
+        source,
+        columns=["symbol", "trade_date"],
+        date_col="trade_date",
+        start_date=start_date,
+        end_date=end_date,
+        symbols=None,
+    )
+    values = sorted({normalize_recommended_symbol(value) for value in frame["symbol"].dropna()})
+    if not values:
+        raise ValueError("projected daily-security discovery returned no securities")
+    return values
+
+
 def load_recommended_paper_panels(
     *,
     test_end_date: str | pd.Timestamp,

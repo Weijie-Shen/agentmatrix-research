@@ -16,6 +16,7 @@ from research_core.factor_lab.paper_reproduction.recommended_data import (
     RecommendedDataPredicatePushdownError,
     apply_a_share_recommended_filters,
     build_recommended_price_view,
+    discover_recommended_daily_securities,
     load_recommended_data_manifest,
     load_recommended_daily_panel,
     load_recommended_paper_panels,
@@ -31,6 +32,19 @@ from research_core.factor_lab.paper_reproduction.recommended_data import (
 
 
 class RecommendedDataHelperTest(unittest.TestCase):
+    def test_discovers_all_historical_securities_with_date_symbol_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_fixture_data(root)
+
+            securities = discover_recommended_daily_securities(
+                start_date="2020-01-02",
+                end_date="2020-01-03",
+                config=RecommendedDataConfig(data_dir=root),
+            )
+
+            self.assertEqual(securities, ["000001.SZ", "000002.SZ"])
+
     def test_bounded_parquet_read_fails_closed_when_predicates_cannot_push_down(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "daily.parquet"

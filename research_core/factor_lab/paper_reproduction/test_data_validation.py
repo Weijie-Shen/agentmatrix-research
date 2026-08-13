@@ -249,6 +249,65 @@ class PaperInputDataValidationTest(unittest.TestCase):
         self.assertNotEqual(assessment.comparability, "exact")
         self.assertIn("rank_ic_mean", assessment.diagnostic_only_metrics)
 
+    def test_semantic_resolver_honors_declared_exact_market_data_alias(self) -> None:
+        frame = self._valid_frame().assign(close_raw=lambda value: value["close"], forward_return_1d=0.01)
+        profile = build_data_profile(
+            frame,
+            field_relationships=[FieldRelationship("paper_raw_close", "close_raw", "exact_alias")],
+        )
+        case = {
+            "truth_id": "declared_exact_alias",
+            "evaluation_family": "ic_analysis",
+            "evaluation_method": "Pearson correlation",
+            "evaluation_spec": {"return_col": "forward_return_1d", "ic_type": "pearson_ic"},
+            "required_data": {"evaluation": ["forward_return_1d"], "formula": ["paper_raw_close"]},
+            "semantic_requirements": [
+                {"semantic_field_id": "paper_raw_close", "kind": "market_data", "concept": "unadjusted_close"}
+            ],
+            "metrics": {"ic_mean": 0.01},
+        }
+
+        assessment = assess_evaluation_case_support(case, profile, get_generic_evaluator_capabilities())
+        result = next(item for item in assessment.requirement_results if item.requirement == "paper_raw_close")
+
+        self.assertEqual(result.available_value, "close_raw")
+        self.assertEqual(result.relationship, "exact_alias")
+        self.assertTrue(result.execution_ready)
+
+    def test_semantic_resolver_preserves_declared_capitalization_proxy_class(self) -> None:
+        frame = self._valid_frame().assign(market_cap=100.0, forward_return_1d=0.01)
+        profile = build_data_profile(
+            frame,
+            field_relationships=[
+                FieldRelationship(
+                    "paper_size_control",
+                    "market_cap",
+                    "proxy_substitute",
+                    reason="The paper capitalization basis is unspecified.",
+                    requires_reporting=True,
+                )
+            ],
+        )
+        case = {
+            "truth_id": "declared_cap_proxy",
+            "evaluation_family": "ic_analysis",
+            "evaluation_method": "Pearson correlation",
+            "evaluation_spec": {"return_col": "forward_return_1d", "ic_type": "pearson_ic"},
+            "required_data": {"evaluation": ["forward_return_1d"], "controls": ["paper_size_control"]},
+            "semantic_requirements": [
+                {"semantic_field_id": "paper_size_control", "kind": "capitalization", "concept": "market_cap_factor", "cap_basis": "not_specified"}
+            ],
+            "metrics": {"ic_mean": 0.01},
+        }
+
+        assessment = assess_evaluation_case_support(case, profile, get_generic_evaluator_capabilities())
+        result = next(item for item in assessment.requirement_results if item.requirement == "paper_size_control")
+
+        self.assertEqual(result.available_value, "market_cap")
+        self.assertEqual(result.relationship, "proxy_substitute")
+        self.assertTrue(result.execution_ready)
+        self.assertEqual(assessment.comparability, "proxy")
+
     def test_a_share_universe_without_exclusion_text_does_not_invent_status_filters(self) -> None:
         frame = pd.DataFrame(
             {
