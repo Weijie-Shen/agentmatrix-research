@@ -293,6 +293,14 @@ class ICAnalysisExtractionV2Test(unittest.TestCase):
         self.assertEqual([item["paper_field"] for item in controls], ["industry_citic_level_1", "total_company_market_cap_close"])
         self.assertEqual(controls[1]["transforms"][0]["method"], "log")
 
+    def test_stage2_treats_unqualified_correlation_as_pearson_not_rank_ic(self) -> None:
+        extraction = ic_v2_fixture()
+        extraction.ic_analysis_contract["cross_sectional_statistic"] = "ordinary corr(R, factor)"
+
+        cases = normalize_extraction_to_specs(extraction, version="v2")[0].metadata["truth_sources"]
+
+        self.assertTrue(all(case["evaluation_spec"]["ic_type"] == "pearson_ic" for case in cases))
+
     def test_stage2_honors_natural_month_protocol_attribute(self) -> None:
         extraction = ic_v2_fixture()
         extraction.ic_protocols[0].attributes["forward_horizon_unit"] = "natural_month"

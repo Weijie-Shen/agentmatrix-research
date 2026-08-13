@@ -17,6 +17,21 @@ UNIVERSE_FILTER_STAGES = {
 EVALUATION_FILTER_STAGES = {"factor_cross_section", "portfolio_formation", "return_realization"}
 
 
+def canonical_ic_type(statistic: Any) -> str:
+    """Return the only runtime IC type supported by immutable paper wording.
+
+    A paper must explicitly say ``rank`` or ``Spearman`` before the runtime
+    evaluator may rank either series.  Ordinary ``corr``/``correlation`` and
+    an unqualified IC therefore stay Pearson; this is deliberately a
+    conservative preservation rule rather than a convention guess.
+    """
+
+    normalized = str(statistic or "").strip().lower().replace("-", "_")
+    if "spearman" in normalized or "rank" in normalized:
+        return "spearman_rank_ic"
+    return "pearson_ic"
+
+
 @dataclass(slots=True)
 class MethodologySpecValidationResult:
     valid: bool

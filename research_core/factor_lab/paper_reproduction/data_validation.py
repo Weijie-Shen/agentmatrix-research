@@ -235,6 +235,7 @@ class EvaluationCaseSupportAssessment:
     support_score: float
     comparability: str
     assessment_id: str = ""
+    assessment_scope: str = ""
     evaluator_capability_fingerprint: str = ""
     requirement_results: list[EvaluationRequirementResult] = field(default_factory=list)
     deviations: list[dict[str, Any]] = field(default_factory=list)
@@ -462,6 +463,7 @@ def assess_evaluation_case_support(
     evaluator_capabilities: dict[str, Any] | None = None,
     *,
     field_relationships: list[FieldRelationship | dict[str, Any]] | None = None,
+    assessment_scope: str = "",
 ) -> EvaluationCaseSupportAssessment:
     profile = dict(data_profile) if isinstance(data_profile, dict) else asdict(data_profile)
     if field_relationships is not None:
@@ -747,8 +749,10 @@ def assess_evaluation_case_support(
                 "truth_source": truth_source,
                 "data_profile": profile,
                 "evaluator_capability_fingerprint": capability_fingerprint,
+                "assessment_scope": assessment_scope,
             }
         )[:20],
+        assessment_scope=assessment_scope,
         evaluator_capability_fingerprint=capability_fingerprint,
         requirement_results=requirement_results,
         deviations=deviations,

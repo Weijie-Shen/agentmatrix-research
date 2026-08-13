@@ -296,6 +296,36 @@ class PaperEvaluationPlanningTest(unittest.TestCase):
             persisted["alpha_from_paper"]["ic"]["assessment_id"],
         )
 
+    def test_stage3_assessment_identity_is_scoped_to_factor_and_truth(self) -> None:
+        case = self._case("shared_ic", "ic_analysis", {"rank_ic_mean": 0.04})
+        case["required_data"] = {"evaluation": ["forward_return_20d"]}
+        first = self._spec_with_cases([case])
+        second = FactorResearchSpec(
+            factor_name="second_factor",
+            library=first.library,
+            version=first.version,
+            formula=first.formula,
+            required_fields=list(first.required_fields),
+            metadata={"selected_truth_sources": [dict(case)]},
+        )
+        profile = {
+            "columns": ["date", "code", "forward_return_20d"],
+            "missingness": {"forward_return_20d": 0.0},
+        }
+
+        plan = build_paper_evaluation_plan(
+            [first, second],
+            data_profiles={first.factor_name: profile, second.factor_name: profile},
+        )
+
+        assessments = [
+            factor_plan.assessed_evaluation_cases[0]["support_assessment"]
+            for factor_plan in plan.factor_plans
+        ]
+        self.assertNotEqual(assessments[0]["assessment_id"], assessments[1]["assessment_id"])
+        self.assertEqual(assessments[0]["assessment_scope"], "factor=alpha_from_paper|truth=shared_ic")
+        self.assertEqual(assessments[1]["assessment_scope"], "factor=second_factor|truth=shared_ic")
+
     def test_selection_rule_allows_unselected_feasible_truth_source(self) -> None:
         selected = self._case("unsupported_selected", "layered_portfolio_backtest", {"long_short_mean": 0.01})
         fallback = self._case("feasible_ic", "ic_analysis", {"rank_ic_mean": 0.04})

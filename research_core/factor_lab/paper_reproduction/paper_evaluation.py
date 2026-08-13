@@ -134,6 +134,7 @@ def _build_factor_evaluation_plan(
     ) = _select_evaluation_cases(
         cases,
         data_profile=profile,
+        factor_name=spec.factor_name,
         persisted_support_assessments=persisted_support_assessments,
         reassess_support=reassess_support,
     )
@@ -335,6 +336,7 @@ def _select_evaluation_cases(
     cases: list[dict[str, Any]],
     *,
     data_profile: dict[str, Any] | None = None,
+    factor_name: str = "",
     persisted_support_assessments: dict[str, dict[str, Any]] | None = None,
     reassess_support: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -351,6 +353,7 @@ def _select_evaluation_cases(
             valid_cases,
             skipped,
             data_profile=data_profile,
+            factor_name=factor_name,
             persisted_support_assessments=persisted_support_assessments or {},
             reassess_support=reassess_support,
         )
@@ -393,14 +396,21 @@ def _select_evaluation_cases_by_support(
     skipped: list[dict[str, Any]],
     *,
     data_profile: dict[str, Any],
+    factor_name: str,
     persisted_support_assessments: dict[str, dict[str, Any]],
     reassess_support: bool,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     assessed: list[dict[str, Any]] = []
     for case in valid_cases:
         descriptor = evaluator_capabilities_for_case(case) or {}
-        current_assessment = assess_evaluation_case_support(case, data_profile, descriptor).to_dict()
         truth_id = str(case.get("truth_id") or case.get("truth_case_id") or "")
+        assessment_scope = f"factor={factor_name}|truth={truth_id}"
+        current_assessment = assess_evaluation_case_support(
+            case,
+            data_profile,
+            descriptor,
+            assessment_scope=assessment_scope,
+        ).to_dict()
         persisted = copy.deepcopy(persisted_support_assessments.get(truth_id, {}) or {})
         persisted_fingerprint = str(persisted.get("evaluator_capability_fingerprint", "") or "")
         current_fingerprint = str(current_assessment.get("evaluator_capability_fingerprint", "") or "")
@@ -434,8 +444,27 @@ def _select_evaluation_cases_by_support(
         else:
             assessment = current_assessment
             if persisted and reassess_support:
-                assessment["supersedes_assessment_id"] = persisted.get("assessment_id", "")
-                assessment["reassessment_reason"] = "evaluator_capabilities_changed"
+                persisted_scope = str(persisted.get("assessment_scope", "") or "")
+                prior_id = str(persisted.get("assessment_id", "") or "")
+                prior_lineage = [
+                    str(value)
+                    for value in persisted.get("assessment_lineage", []) or []
+                    if str(value)
+                ]
+                if persisted_scope != assessment_scope:
+                    assessment["reassessment_required"] = True
+                    assessment["case_executable"] = False
+                    assessment["lifecycle_state"] = "support_reassessment_required"
+                    assessment["selection_reason"] = (
+                        "Persisted Stage-3 assessment belongs to another factor/truth scope"
+                    )
+                elif str(assessment.get("assessment_id", "")) in prior_lineage:
+                    assessment["reuses_prior_assessment_id"] = assessment.get("assessment_id", "")
+                    assessment["assessment_lineage"] = prior_lineage
+                else:
+                    assessment["supersedes_assessment_id"] = prior_id
+                    assessment["assessment_lineage"] = [*prior_lineage, prior_id]
+                    assessment["reassessment_reason"] = "evaluator_capabilities_changed"
         assessed_case = dict(case)
         assessed_case["support_assessment"] = assessment
         assessed_case["support_score"] = assessment["support_score"]

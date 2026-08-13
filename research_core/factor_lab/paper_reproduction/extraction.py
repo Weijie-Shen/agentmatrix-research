@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from research_core.factor_lab.paper_reproduction.methodology import (
+    canonical_ic_type,
     validate_neutralization_spec,
     validate_universe_protocol,
 )
@@ -521,6 +522,14 @@ def _validate_ic_analysis_extraction(extraction: ICAnalysisPaperExtraction) -> E
         errors.append("scope.supported_evaluator_types must contain only 'ic_analysis'")
     if str(extraction.ic_analysis_contract.get("evaluator_type", "")) != IC_EVALUATOR_TYPE:
         errors.append("ic_analysis_contract.evaluator_type must be 'ic_analysis'")
+    correlation_statistic = str(extraction.ic_analysis_contract.get("cross_sectional_statistic", "")).strip()
+    if not correlation_statistic:
+        errors.append("ic_analysis_contract.cross_sectional_statistic is required")
+    else:
+        if canonical_ic_type(correlation_statistic) == "pearson_ic" and "rank" not in correlation_statistic.lower() and "spearman" not in correlation_statistic.lower():
+            warnings.append(
+                "ic_analysis_contract.cross_sectional_statistic has no rank evidence; it will be evaluated as Pearson correlation"
+            )
 
     factor_ids = _unique_registry_ids(
         extraction.factor_definitions,

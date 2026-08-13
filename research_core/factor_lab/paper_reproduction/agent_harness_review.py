@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import math
@@ -8,6 +9,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from research_core.factor_lab.paper_reproduction.methodology import canonical_ic_type, canonical_transform_method
 
 
 EXPECTED_STAGES = (
@@ -505,6 +508,54 @@ def _deep_completion_defects(
     ):
         defects.append("[tests] recorded test commands do not identify a test bound to the certified module")
 
+    test_result_payloads = [
+        payload
+        for path in test_result_paths
+        if path.suffix.lower() == ".json" and (payload := _load_json(path))
+    ]
+    asserted_factors: set[str] = set()
+    bound_source_hashes: dict[str, str] = {}
+    for path in bound_test_sources:
+        bound_source_hashes[path.name] = _sha256_file(path)
+        asserted_factors.update(_factors_with_test_assertions(path, expected_factors))
+    for test in tests_run:
+        if not isinstance(test, dict):
+            continue
+        if test.get("exit_code") != 0:
+            defects.append("[tests] formula-test evidence has no successful runner exit code")
+        source_name = Path(str(test.get("test_source", ""))).name
+        source_hash = str(test.get("test_source_hash", ""))
+        if not source_name or bound_source_hashes.get(source_name) != source_hash:
+            defects.append("[tests] formula-test source hash does not match a bound harvested test source")
+        if str(test.get("frozen_implementation_hash", "")) != str(
+            implementation_payload.get("source_hash", "")
+        ):
+            defects.append("[tests] formula-test evidence is not tied to the frozen implementation source hash")
+        coverage = test.get("assertion_coverage", {}) or {}
+        if not isinstance(coverage, dict):
+            coverage = {}
+        missing_claimed_assertions = [factor for factor in expected_factors if not (coverage.get(factor) or [])]
+        if missing_claimed_assertions:
+            defects.append(
+                "[tests] formula-test evidence lacks assertion coverage IDs for: "
+                f"{missing_claimed_assertions}"
+            )
+        durable_match = any(
+            payload.get("command") == test.get("command")
+            and payload.get("exit_code") == 0
+            and payload.get("test_source_hash") == source_hash
+            and payload.get("frozen_implementation_hash") == test.get("frozen_implementation_hash")
+            for payload in test_result_payloads
+        )
+        if not durable_match:
+            defects.append("[tests] report test claim has no matching durable runner-evidence artifact")
+    missing_source_assertions = [factor for factor in expected_factors if factor not in asserted_factors]
+    if missing_source_assertions:
+        defects.append(
+            "[tests] bound test source has no factor-specific assertion for: "
+            f"{missing_source_assertions}"
+        )
+
     execution_by_factor: dict[str, list[dict[str, Any]]] = {
         factor: [] for factor in expected_factors
     }
@@ -559,6 +610,7 @@ def _deep_completion_defects(
 
     defects.extend(_sample_boundary_defects(view_profiles, factor_plans))
     defects.extend(_comparison_coverage_defects(report, execution_by_factor))
+    defects.extend(_comparison_identity_defects(report, canonical_execution_records))
     defects.extend(_truth_denominator_defects(report))
     if not truth_path:
         defects.append("[truth] no standalone truth-match artifact was found")
@@ -612,6 +664,39 @@ def _bound_test_sources(
         except OSError:
             continue
     return sorted(set(bound))
+
+
+def _factors_with_test_assertions(path: Path, factors: list[str]) -> set[str]:
+    """Return factor tokens appearing in test functions that contain assertions."""
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return set()
+    found: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("test"):
+            continue
+        has_assertion = any(isinstance(item, ast.Assert) for item in ast.walk(node))
+        has_assertion_call = any(
+            isinstance(item, ast.Call)
+            and (
+                (isinstance(item.func, ast.Name) and item.func.id.startswith("assert"))
+                or (isinstance(item.func, ast.Attribute) and item.func.attr.startswith("assert"))
+            )
+            for item in ast.walk(node)
+        )
+        if not (has_assertion or has_assertion_call):
+            continue
+        tokens = {node.name}
+        tokens.update(
+            str(item.value)
+            for item in ast.walk(node)
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        )
+        text = "\n".join(tokens)
+        found.update(factor for factor in factors if factor in text)
+    return found
 
 
 def _canonical_evaluation_bundle_defects(
@@ -885,6 +970,106 @@ def _execution_protocol_defects(
     transform_steps = (selected_protocol.get("transform_spec", {}) or {}).get("steps", []) or []
     if transform_steps and output.get("transform_applied") is not True:
         defects.append(f"[protocol] {factor} executed without its selected transform pipeline")
+    expected_ic_type = _immutable_ic_type(selected)
+    effective_ic_type = str((selected_protocol.get("evaluation_spec", {}) or {}).get("ic_type", "")).strip()
+    output_ic_type = str((output.get("resolved_parameters", {}).get("evaluation_spec", {}) or {}).get("ic_type", "")).strip()
+    for label, observed in (("resolved", effective_ic_type), ("executed", output_ic_type)):
+        if expected_ic_type and observed and canonical_ic_type(observed) != expected_ic_type:
+            defects.append(
+                f"[protocol] {factor} {label} IC type {observed!r} contradicts immutable paper correlation method"
+            )
+    metrics = _evaluator_metrics_for_review(output)
+    if expected_ic_type == "pearson_ic" and "rank_ic_mean" in metrics:
+        defects.append(f"[protocol] {factor} executed rank IC despite paper correlation without rank evidence")
+    if expected_ic_type == "spearman_rank_ic" and "ic_mean" in metrics:
+        defects.append(f"[protocol] {factor} executed Pearson IC despite immutable rank correlation")
+    expected_operations = _immutable_operation_trace(selected)
+    executed_operations = (output.get("resolved_parameters", {}) or {}).get("operation_pipeline_trace", []) or []
+    if expected_operations and expected_operations != executed_operations:
+        defects.append(
+            f"[protocol] {factor} executed operation pipeline does not preserve immutable order and semantics"
+        )
+    return defects
+
+
+def _immutable_ic_type(selected_case: dict[str, Any]) -> str:
+    paper = selected_case.get("paper_protocol", {}) or {}
+    if not isinstance(paper, dict):
+        paper = {}
+    method = str(paper.get("evaluation_method", "") or "")
+    if any(token in method.lower() for token in ("spearman", "rank", "pearson", "ordinary", "corr")):
+        return canonical_ic_type(method)
+    evaluation_spec = paper.get("evaluation_spec", {}) or {}
+    if isinstance(evaluation_spec, dict) and evaluation_spec.get("ic_type"):
+        return canonical_ic_type(evaluation_spec["ic_type"])
+    return ""
+
+
+def _immutable_operation_trace(selected_case: dict[str, Any]) -> list[dict[str, Any]]:
+    paper = selected_case.get("paper_protocol", {}) or {}
+    pipeline = paper.get("operation_pipeline", {}) if isinstance(paper, dict) else {}
+    operations = pipeline.get("operations", []) if isinstance(pipeline, dict) else []
+    trace: list[dict[str, Any]] = []
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        try:
+            order = int(operation.get("order", 0))
+        except (TypeError, ValueError):
+            continue
+        operation_type = str(operation.get("type", ""))
+        method = str(operation.get("method", ""))
+        if operation_type == "winsorize":
+            method = "median_mad"
+        elif operation_type == "standardize":
+            method = "cross_section_zscore"
+        elif operation_type == "missing_values":
+            method = canonical_transform_method(method or "do_not_fill")
+        elif operation_type == "neutralize":
+            method = "cross_sectional_regression_residual"
+        else:
+            method = canonical_transform_method(method)
+        trace.append(
+            {
+                "order": order,
+                "type": operation_type,
+                "target": str(operation.get("target", "factor")),
+                "method": method,
+            }
+        )
+    return sorted(trace, key=lambda item: item["order"])
+
+
+def _comparison_identity_defects(
+    report: dict[str, Any],
+    canonical_execution_records: dict[tuple[str, str, str], dict[str, Any]],
+) -> list[str]:
+    """Every report comparison must identify exactly one canonical execution."""
+
+    defects: list[str] = []
+    comparison_results = report.get("comparison_results", {}) or {}
+    rows = comparison_results.get("metric_rows", []) or comparison_results.get("all_metric_rows", []) or []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        factor = str(row.get("factor_name", ""))
+        scenario = str(row.get("scenario_id", ""))
+        execution_id = str(row.get("execution_id", ""))
+        if not scenario or not execution_id:
+            defects.append(f"[truth] {factor or '-'} comparison row lacks scenario_id or execution_id")
+            continue
+        canonical = canonical_execution_records.get((factor, scenario, execution_id))
+        if canonical is None:
+            defects.append(
+                f"[truth] {factor or '-'} comparison row is not bound to a canonical scenario/execution record"
+            )
+            continue
+        truth_id = str(row.get("truth_id") or row.get("source_truth_id") or "")
+        canonical_truth_id = str(canonical.get("source_truth_id") or canonical.get("truth_case_id") or "")
+        if truth_id != canonical_truth_id:
+            defects.append(
+                f"[truth] {factor or '-'} comparison row truth source does not match canonical execution {execution_id}"
+            )
     return defects
 
 

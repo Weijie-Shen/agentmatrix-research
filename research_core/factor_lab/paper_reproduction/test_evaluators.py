@@ -151,6 +151,36 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
         self.assertTrue(result["transform_applied"])
         self.assertEqual(result["neutralization_diagnostics"]["control_transforms"][0]["methods"], ["log"])
 
+    def test_evaluator_reports_compiled_operation_trace_in_immutable_order(self) -> None:
+        frame = self._base_frame()
+        case = {
+            "evaluation_family": "ic_analysis",
+            "evaluation_spec": {"return_col": "forward_return_1d", "ic_type": "pearson_ic"},
+            "required_data": {"evaluation": ["forward_return_1d"]},
+            "transform_spec": {
+                "steps": [{"name": "winsorization", "method": "median_mad", "source_operation_order": 1, "source_operation_type": "winsorize", "source_operation_target": "factor"}]
+            },
+            "neutralization_spec": {
+                "method": "cross_sectional_regression_residual",
+                "source_operation_order": 2,
+                "source_operation_type": "neutralize",
+                "source_operation_target": "factor",
+                "controls": [{"paper_field": "market_cap", "resolved_field": "market_cap"}],
+                "output_transforms": [{"name": "standardization", "method": "cross_section_zscore", "source_operation_order": 3, "source_operation_type": "standardize", "source_operation_target": "factor_residual"}],
+            },
+        }
+
+        result = evaluate_paper_case(case, frame, factor_col="factor")
+
+        self.assertEqual(
+            result["resolved_parameters"]["operation_pipeline_trace"],
+            [
+                {"order": 1, "type": "winsorize", "target": "factor", "method": "median_mad"},
+                {"order": 2, "type": "neutralize", "target": "factor", "method": "cross_sectional_regression_residual"},
+                {"order": 3, "type": "standardize", "target": "factor_residual", "method": "cross_section_zscore"},
+            ],
+        )
+
     def test_numeric_categorical_control_is_dummy_encoded(self) -> None:
         frame = pd.DataFrame(
             {

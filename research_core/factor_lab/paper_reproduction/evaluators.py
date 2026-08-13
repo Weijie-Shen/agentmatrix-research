@@ -373,6 +373,7 @@ def evaluate_paper_case(
             "evaluation_spec": evaluation_spec,
             "required_data": required_data,
             "neutralization_spec": neutralization_spec,
+            "operation_pipeline_trace": _executed_operation_pipeline_trace(transform_spec, neutralization_spec),
             "return_col": return_col,
             "date_col": date_col,
         },
@@ -401,6 +402,52 @@ def _runtime_case(evaluation_case: dict[str, Any]) -> dict[str, Any]:
         if key in resolved_protocol:
             runtime[key] = resolved_protocol[key]
     return runtime
+
+
+def _executed_operation_pipeline_trace(
+    transform_spec: dict[str, Any],
+    neutralization_spec: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Expose the immutable-source operations actually requested by execution.
+
+    The entries are carried by normalization into the same step objects passed
+    to the evaluator.  We deliberately omit ordinary runtime-only defaults:
+    they have no source order and cannot claim equivalence to a paper pipeline.
+    """
+
+    trace: list[dict[str, Any]] = []
+
+    def collect(step: Any) -> None:
+        if not isinstance(step, dict) or "source_operation_order" not in step:
+            return
+        try:
+            order = int(step["source_operation_order"])
+        except (TypeError, ValueError):
+            return
+        trace.append(
+            {
+                "order": order,
+                "type": str(step.get("source_operation_type", "")),
+                "target": str(step.get("source_operation_target", "factor")),
+                "method": str(step.get("method", "")),
+            }
+        )
+
+    for step in transform_spec.get("steps", []) or []:
+        collect(step)
+    dependent = neutralization_spec.get("dependent_variable", {}) or {}
+    if isinstance(dependent, dict):
+        for step in dependent.get("transforms", []) or []:
+            collect(step)
+    for control in neutralization_spec.get("controls", []) or []:
+        if isinstance(control, dict):
+            for step in control.get("transforms", []) or []:
+                collect(step)
+    if "source_operation_order" in neutralization_spec:
+        collect(neutralization_spec)
+    for step in neutralization_spec.get("output_transforms", []) or []:
+        collect(step)
+    return sorted(trace, key=lambda item: item["order"])
 
 
 def _median_mad_winsorize(series: pd.Series, *, threshold: float) -> pd.Series:

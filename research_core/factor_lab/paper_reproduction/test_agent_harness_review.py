@@ -25,6 +25,37 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             self.assertTrue(assessment.complete)
             self.assertEqual(assessment.defects, [])
 
+    def test_claimed_factor_test_coverage_requires_a_real_source_assertion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            factors = ["exp_wgt_return_3m", "exp_wgt_return_6m"]
+            self._write_complete_fixture(root, factors)
+            test_source = root / "research_core" / "factor_lab" / "libraries" / "demo" / "test_factors.py"
+            test_source.write_text(
+                "from .factors import compute\n\n"
+                "def test_formula_exp_wgt_return_6m():\n"
+                "    values = {'exp_wgt_return_6m': 1}\n"
+                "    assert values['exp_wgt_return_6m'] == 1\n",
+                encoding="utf-8",
+            )
+            source_hash = hashlib.sha256(test_source.read_bytes()).hexdigest()
+            result_path = root / "runtime" / "factor_lab" / "test_results" / "pytest.json"
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["test_source_hash"] = source_hash
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            report_path = root / "runtime" / "factor_lab" / "reports" / "demo_paper_reproduction_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["tests_run"][0]["test_source_hash"] = source_hash
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            assessment = assess_agent_harness_run(root, expected_factors=factors)
+
+            self.assertFalse(assessment.complete)
+            self.assertTrue(
+                any("no factor-specific assertion" in item for item in assessment.defects),
+                assessment.defects,
+            )
+
     def test_complete_run_accepts_shared_registry_ic_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -104,6 +135,58 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
 
             self.assertFalse(assessment.complete)
             self.assertTrue(any("omits comparison row for" in item for item in assessment.defects))
+
+    def test_comparison_row_requires_canonical_scenario_and_execution_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_complete_fixture(root, ["Alpha3"])
+            report_path = root / "runtime" / "factor_lab" / "reports" / "demo_paper_reproduction_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["comparison_results"]["metric_rows"][0]["scenario_id"] = ""
+            report["comparison_results"]["primary_metric_rows"][0]["scenario_id"] = ""
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            assessment = assess_agent_harness_run(root, expected_factors=["Alpha3"])
+
+            self.assertFalse(assessment.complete)
+            self.assertTrue(any("comparison row lacks scenario_id" in item for item in assessment.defects))
+
+    def test_gate_rejects_execution_with_reordered_immutable_operation_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_complete_fixture(root, ["Alpha3"])
+            runtime = root / "runtime" / "factor_lab"
+            pipeline_path = runtime / "evaluation_plans" / "plan.json"
+            plan = json.loads(pipeline_path.read_text(encoding="utf-8"))
+            selected = plan["factor_plans"][0]["selected_evaluation_cases"][0]
+            selected["paper_protocol"] = {
+                "operation_pipeline": {
+                    "operations": [
+                        {"order": 1, "type": "winsorize", "target": "factor"},
+                        {"order": 2, "type": "standardize", "target": "factor"},
+                        {"order": 3, "type": "neutralize", "target": "factor"},
+                    ]
+                }
+            }
+            pipeline_path.write_text(json.dumps(plan), encoding="utf-8")
+            report_path = runtime / "reports" / "demo_paper_reproduction_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["evaluation_plan"] = plan
+            report["factors"][0]["selected_evaluation_cases"] = plan["factor_plans"][0]["selected_evaluation_cases"]
+            output = report["factors"][0]["evaluation_executions"][0]["evaluator_output"]
+            output["resolved_parameters"] = {
+                "operation_pipeline_trace": [
+                    {"order": 1, "type": "winsorize", "target": "factor", "method": "median_mad"},
+                    {"order": 2, "type": "neutralize", "target": "factor", "method": "cross_sectional_regression_residual"},
+                    {"order": 3, "type": "standardize", "target": "factor", "method": "cross_section_zscore"},
+                ]
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            assessment = assess_agent_harness_run(root, expected_factors=["Alpha3"])
+
+            self.assertFalse(assessment.complete)
+            self.assertTrue(any("operation pipeline does not preserve" in item for item in assessment.defects))
 
     def test_missing_report_is_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -319,11 +402,19 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
         module = root / "research_core" / "factor_lab" / "libraries" / "demo" / "factors.py"
         module.parent.mkdir(parents=True, exist_ok=True)
         module.write_text("def compute(panel):\n    return panel\n", encoding="utf-8")
-        (module.parent / "test_factors.py").write_text(
-            "from .factors import compute\n\ndef test_compute_exists():\n    assert callable(compute)\n",
+        test_source = module.parent / "test_factors.py"
+        test_source.write_text(
+            "from .factors import compute\n\n"
+            + "\n".join(
+                f"def test_formula_{factor}():\n"
+                f"    values = {{'{factor}': 1}}\n"
+                f"    assert values['{factor}'] == 1\n"
+                for factor in factors
+            ),
             encoding="utf-8",
         )
         source_hash = hashlib.sha256(module.read_bytes()).hexdigest()
+        test_source_hash = hashlib.sha256(test_source.read_bytes()).hexdigest()
         specification_hash = hashlib.sha256(b"demo-factor-specification").hexdigest()
         truth_id = {factor: f"{factor}_truth" for factor in factors}
         def selected_case(factor: str) -> dict[str, object]:
@@ -519,8 +610,13 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             "tests_run": [
                 {
                     "command": "python -m pytest research_core/factor_lab/libraries/demo/test_factors.py -q",
+                    "exit_code": 0,
                     "outcome": f"{len(factors)} passed",
                     "covered_factors": factors,
+                    "test_source": str(test_source),
+                    "test_source_hash": test_source_hash,
+                    "frozen_implementation_hash": source_hash,
+                    "assertion_coverage": {factor: ["exact_value"] for factor in factors},
                 }
             ],
         }
@@ -569,7 +665,19 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
         )
         (runtime / "truth_matches" / "truth.json").write_text(json.dumps({"results": []}), encoding="utf-8")
         (runtime / "test_results" / "pytest.json").write_text(
-            json.dumps({"outcome": f"{len(factors)} passed", "covered_factors": factors}), encoding="utf-8"
+            json.dumps(
+                {
+                    "command": "python -m pytest research_core/factor_lab/libraries/demo/test_factors.py -q",
+                    "exit_code": 0,
+                    "outcome": f"{len(factors)} passed",
+                    "covered_factors": factors,
+                    "test_source": str(test_source),
+                    "test_source_hash": test_source_hash,
+                    "frozen_implementation_hash": source_hash,
+                    "assertion_coverage": {factor: ["exact_value"] for factor in factors},
+                }
+            ),
+            encoding="utf-8",
         )
         report_path = runtime / "reports" / "demo_paper_reproduction_report.json"
         report_path.write_text(json.dumps(report), encoding="utf-8")

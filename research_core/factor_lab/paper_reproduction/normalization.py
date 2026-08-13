@@ -20,6 +20,7 @@ from research_core.factor_lab.paper_reproduction.extraction import (
     summarize_factor_truth_sources,
     validate_paper_extraction,
 )
+from research_core.factor_lab.paper_reproduction.methodology import canonical_ic_type
 
 PAPER_REPRODUCTION_BASE_THRESHOLDS = [
     ValidationThreshold("formula_match_ratio", ">=", 1.0, "Implementation formula must match the extracted paper formula."),
@@ -402,8 +403,8 @@ def _project_v2_truth_source_for_factor(
         else {"semantic_field_id": item, "kind": "universe_filter", "concept": item}
         for item in required_semantic_ids
     ]
-    correlation_method = str(extraction.ic_analysis_contract.get("cross_sectional_statistic", "Spearman rank correlation"))
-    ic_type = "spearman_rank_ic" if "spearman" in correlation_method.lower() else "pearson_ic"
+    correlation_method = str(extraction.ic_analysis_contract.get("cross_sectional_statistic", "Pearson correlation"))
+    ic_type = canonical_ic_type(correlation_method)
     conflict = bool(truth_source.conflict_group_id in unresolved_conflicts)
     metric_definitions = {
         metric_id: asdict(metric_by_id[metric_id])
@@ -535,12 +536,12 @@ def _compile_v2_operation_pipeline(
             method = _runtime_transform_method(item)
             transforms_by_output[output] = (
                 target,
-                [{"method": method, "source": "compiled_from_operation_pipeline"}],
+                [_with_operation_identity({"method": method, "source": "compiled_from_operation_pipeline"}, item)],
             )
         elif str(item.get("type", "")) == "winsorize":
             target = str(item.get("target", ""))
             if target in transforms_by_output:
-                transforms_by_output[target][1].append(_runtime_winsor_step(item))
+                transforms_by_output[target][1].append(_with_operation_identity(_runtime_winsor_step(item), item))
 
     controls: list[dict[str, Any]] = []
     required_controls: list[str] = []
@@ -576,6 +577,9 @@ def _compile_v2_operation_pipeline(
             "method": "cross_sectional_regression_residual",
             "source": "compiled_from_operation_pipeline",
             "compiled_from_operation_pipeline_id": pipeline.operation_pipeline_id,
+            "source_operation_order": int(neutralize.get("order", 0)),
+            "source_operation_type": str(neutralize.get("type", "neutralize")),
+            "source_operation_target": str(neutralize.get("target", "factor")),
             "dependent_variable": {
                 "field": "factor_value",
                 "transforms": dependent_transforms,
@@ -596,17 +600,26 @@ def _factor_transform_step(operation: dict[str, Any]) -> dict[str, Any] | None:
     if target not in {"factor", "factor_residual"} and operation_type not in {"missing_values"}:
         return None
     if operation_type == "winsorize":
-        return _runtime_winsor_step(operation)
+        return _with_operation_identity(_runtime_winsor_step(operation), operation)
     if operation_type == "standardize":
-        return {"name": "standardization", "method": "cross_section_zscore", "source": "compiled_from_operation_pipeline"}
+        return _with_operation_identity(
+            {"name": "standardization", "method": "cross_section_zscore", "source": "compiled_from_operation_pipeline"},
+            operation,
+        )
     if operation_type == "missing_values":
-        return {
-            "name": "missing_value_policy",
-            "method": _runtime_missing_value_method(operation),
-            "source": "compiled_from_operation_pipeline",
-        }
+        return _with_operation_identity(
+            {
+                "name": "missing_value_policy",
+                "method": _runtime_missing_value_method(operation),
+                "source": "compiled_from_operation_pipeline",
+            },
+            operation,
+        )
     if operation_type == "transform":
-        return {"name": "transform", "method": _runtime_transform_method(operation), "source": "compiled_from_operation_pipeline"}
+        return _with_operation_identity(
+            {"name": "transform", "method": _runtime_transform_method(operation), "source": "compiled_from_operation_pipeline"},
+            operation,
+        )
     return None
 
 
@@ -617,6 +630,16 @@ def _runtime_winsor_step(operation: dict[str, Any]) -> dict[str, Any]:
         "threshold": float(operation.get("threshold_mad", 5)),
         "source": "compiled_from_operation_pipeline",
     }
+
+
+def _with_operation_identity(step: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
+    """Keep the immutable operation position through runtime compilation."""
+
+    payload = dict(step)
+    payload["source_operation_order"] = int(operation.get("order", 0))
+    payload["source_operation_type"] = str(operation.get("type", ""))
+    payload["source_operation_target"] = str(operation.get("target", "factor"))
+    return payload
 
 
 def _runtime_transform_method(operation: dict[str, Any]) -> str:
