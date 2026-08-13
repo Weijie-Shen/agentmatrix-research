@@ -713,8 +713,12 @@ def _canonical_evaluation_bundle_defects(
         if not isinstance(output.get("metrics"), dict) or not output.get("metrics"):
             defects.append(f"[evaluation] {label} {factor or '-'} has no calculated metrics")
         defects.extend(_ic_summary_invariant_defects(label, factor, output))
-        if not record.get("truth_match_eligible_metrics"):
+        eligible_metrics = record.get("truth_match_eligible_metrics")
+        diagnostic_metrics = record.get("diagnostic_only_metrics")
+        if not isinstance(eligible_metrics, list) or not isinstance(diagnostic_metrics, list):
             defects.append(f"[evaluation] {label} {factor or '-'} has no metric eligibility lineage")
+        elif not eligible_metrics and not diagnostic_metrics:
+            defects.append(f"[evaluation] {label} {factor or '-'} has empty metric eligibility lineage")
         alignment = record.get("alignment_diagnostics", {}) or {}
         if int(alignment.get("matched_rows", 0) or 0) <= 0:
             defects.append(f"[evaluation] {label} {factor or '-'} has no matched-row alignment evidence")

@@ -169,6 +169,64 @@ class PaperTruthMatchingTest(unittest.TestCase):
         self.assertFalse(result.passed)
         self.assertEqual(result.status, "inconclusive_due_to_protocol_gap")
 
+    def test_bundle_preserves_explicit_diagnostic_only_metric_policy(self) -> None:
+        extraction = PaperExtraction(
+            paper_id="diagnostic-policy",
+            title="Diagnostic policy",
+            authors=["Test"],
+            source="unit test",
+            year=2026,
+            factor_family_name="diagnostic_policy",
+            target_factors=[
+                ExtractedFactor(
+                    factor_name="alpha",
+                    formula="close",
+                    required_fields=["close"],
+                    frequency="day",
+                    sample_period="2020",
+                    universe="all",
+                    truth_sources=[
+                        ExtractedTruthSource(
+                            truth_id="table",
+                            truth_type="evaluation_results",
+                            metrics={"rank_ic_mean": 0.04},
+                        )
+                    ],
+                )
+            ],
+        )
+        bundle = EvaluationBundle(
+            library="diagnostic_policy",
+            scenario_id="qfq",
+            data_snapshot_hash="snapshot",
+            implementation_artifact={},
+            records=[
+                EvaluationExecutionRecord(
+                    execution_id="execution-diagnostic",
+                    truth_case_id="table",
+                    source_truth_id="table",
+                    factor_id="alpha",
+                    factor_name="alpha",
+                    scenario_id="qfq",
+                    evaluator_id="generic",
+                    lifecycle_state="executed",
+                    implementation_source_hash="source",
+                    factor_specification_hash="spec",
+                    data_snapshot_hash="snapshot",
+                    comparability="proxy",
+                    truth_match_eligible_metrics=[],
+                    diagnostic_only_metrics=["rank_ic_mean"],
+                    evaluator_output={"metrics": {"rank_ic_mean": 0.01}},
+                )
+            ],
+        )
+
+        result = compare_evaluation_bundle_to_paper_truth(bundle, extraction)["alpha"][0]
+
+        self.assertEqual(result.status, "inconclusive_due_to_protocol_gap")
+        self.assertEqual(result.diagnostics["eligible_metrics"], [])
+        self.assertEqual(result.diagnostics["diagnostic_only_metrics"], ["rank_ic_mean"])
+
     def test_truth_quality_interpreter_separates_passed_acceptable_and_failed(self) -> None:
         self.assertEqual(interpret_truth_match_quality(True, {}), "exact_match")
         self.assertEqual(

@@ -164,8 +164,8 @@ def compare_evaluation_bundle_to_paper_truth(
                 metrics,
                 truth,
                 comparability=record.comparability,
-                eligible_metrics=record.truth_match_eligible_metrics or None,
-                diagnostic_only_metrics=record.diagnostic_only_metrics or None,
+                eligible_metrics=list(record.truth_match_eligible_metrics),
+                diagnostic_only_metrics=list(record.diagnostic_only_metrics),
             )
         )
     return results
