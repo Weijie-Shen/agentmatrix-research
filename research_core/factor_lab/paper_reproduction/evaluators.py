@@ -379,7 +379,9 @@ def evaluate_paper_case(
             "evaluation_spec": evaluation_spec,
             "required_data": required_data,
             "neutralization_spec": neutralization_spec,
-            "operation_pipeline_trace": _executed_operation_pipeline_trace(transform_spec, neutralization_spec),
+            "operation_pipeline_trace": _append_executed_evaluator_operations(
+                _executed_operation_pipeline_trace(transform_spec, neutralization_spec), runtime_case
+            ),
             "return_col": return_col,
             "date_col": date_col,
         },
@@ -454,6 +456,52 @@ def _executed_operation_pipeline_trace(
     for step in neutralization_spec.get("output_transforms", []) or []:
         collect(step)
     return sorted(trace, key=lambda item: item["order"])
+
+
+def _append_executed_evaluator_operations(
+    trace: list[dict[str, Any]],
+    runtime_case: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Append immutable evaluation-stage operations that the evaluator executes.
+
+    Preprocessing and neutralization carry source-order metadata directly on
+    runtime steps. Correlation/regression is the evaluator call itself, so its
+    source operation remains only in the immutable paper pipeline. Record that
+    operation when its type matches the evaluator family; never infer an
+    operation absent from the source pipeline.
+    """
+
+    result = list(trace)
+    seen_orders = {int(item.get("order", 0)) for item in result}
+    paper_protocol = runtime_case.get("paper_protocol", {}) or {}
+    pipeline = paper_protocol.get("operation_pipeline", {}) if isinstance(paper_protocol, dict) else {}
+    operations = pipeline.get("operations", []) if isinstance(pipeline, dict) else []
+    family = str(runtime_case.get("evaluation_family", ""))
+    supported_types = {"correlate", "correlation"} if family in {"ic_analysis", "ic_regression"} else set()
+    if family == "ic_regression":
+        supported_types.update({"regress", "regression"})
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        operation_type = str(operation.get("type", "")).lower()
+        if operation_type not in supported_types:
+            continue
+        try:
+            order = int(operation.get("order", 0))
+        except (TypeError, ValueError):
+            continue
+        if order in seen_orders:
+            continue
+        result.append(
+            {
+                "order": order,
+                "type": str(operation.get("type", "")),
+                "target": str(operation.get("target", "factor")),
+                "method": canonical_transform_method(str(operation.get("method", ""))),
+            }
+        )
+        seen_orders.add(order)
+    return sorted(result, key=lambda item: item["order"])
 
 
 def _median_mad_winsorize(series: pd.Series, *, threshold: float) -> pd.Series:

@@ -181,6 +181,53 @@ class PaperReproductionEvaluatorsTest(unittest.TestCase):
             ],
         )
 
+    def test_evaluator_trace_includes_source_correlation_stage(self) -> None:
+        frame = self._base_frame()
+        case = {
+            "evaluation_family": "ic_analysis",
+            "evaluation_spec": {"return_col": "forward_return_1d", "ic_type": "pearson_ic"},
+            "required_data": {"evaluation": ["forward_return_1d"]},
+            "paper_protocol": {
+                "operation_pipeline": {
+                    "operations": [
+                        {"order": 1, "type": "winsorize", "target": "factor", "method": "median_mad"},
+                        {
+                            "order": 2,
+                            "type": "correlate",
+                            "target": "neutralized_factor",
+                            "method": "ordinary_corr",
+                        },
+                    ]
+                }
+            },
+            "transform_spec": {
+                "steps": [
+                    {
+                        "name": "winsorization",
+                        "method": "median_mad",
+                        "source_operation_order": 1,
+                        "source_operation_type": "winsorize",
+                        "source_operation_target": "factor",
+                    }
+                ]
+            },
+        }
+
+        result = evaluate_paper_case(case, frame, factor_col="factor")
+
+        self.assertEqual(
+            result["resolved_parameters"]["operation_pipeline_trace"],
+            [
+                {"order": 1, "type": "winsorize", "target": "factor", "method": "median_mad"},
+                {
+                    "order": 2,
+                    "type": "correlate",
+                    "target": "neutralized_factor",
+                    "method": "ordinary_corr",
+                },
+            ],
+        )
+
     def test_numeric_categorical_control_is_dummy_encoded(self) -> None:
         frame = pd.DataFrame(
             {

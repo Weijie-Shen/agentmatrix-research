@@ -249,6 +249,82 @@ class PaperInputDataValidationTest(unittest.TestCase):
         self.assertNotEqual(assessment.comparability, "exact")
         self.assertIn("rank_ic_mean", assessment.diagnostic_only_metrics)
 
+    def test_capitalization_inference_uses_control_lineage_not_formula_capitalization(self) -> None:
+        profile = {
+            "columns": [
+                "date",
+                "code",
+                "forward_return_1d",
+                "market_cap_control",
+                "circulating_market_cap",
+            ],
+            "missingness": {
+                "forward_return_1d": 0.0,
+                "market_cap_control": 0.0,
+                "circulating_market_cap": 0.0,
+            },
+            "conventions": {
+                "market_cap_control": {
+                    "physical_field": "market_cap_3",
+                    "basis": "provider total market cap",
+                }
+            },
+        }
+        truth_source = {
+            "truth_id": "separate_formula_and_control_capitalization",
+            "evaluation_family": "ic_analysis",
+            "evaluation_method": "Pearson correlation",
+            "evaluation_spec": {"return_col": "forward_return_1d", "ic_type": "pearson_ic"},
+            "required_data": {
+                "evaluation": ["forward_return_1d"],
+                "controls": ["market_cap_control"],
+            },
+            "semantic_requirements": [
+                {
+                    "semantic_field_id": "market_cap_control",
+                    "kind": "capitalization",
+                    "concept": "market_cap",
+                    "cap_basis": "not_specified",
+                },
+                {
+                    "semantic_field_id": "circulating_a_market_cap",
+                    "kind": "capitalization",
+                    "concept": "circulating_a_market_cap",
+                    "purpose": "derive_turnover",
+                },
+            ],
+            "metrics": {"ic_mean": 0.01},
+        }
+        relationships = [
+            FieldRelationship(
+                "market_cap_control",
+                "market_cap_control",
+                "proxy_substitute",
+                reason="Paper omits capitalization basis; runtime uses provider total market cap.",
+                requires_reporting=True,
+            ),
+            FieldRelationship(
+                "circulating_a_market_cap",
+                "circulating_market_cap",
+                "derived_equivalent",
+            ),
+        ]
+
+        assessment = assess_evaluation_case_support(
+            truth_source,
+            profile,
+            get_generic_evaluator_capabilities(),
+            field_relationships=relationships,
+        )
+
+        inferred = [
+            item
+            for item in assessment.deviations
+            if item["category"] == "capitalization_basis_inference"
+        ]
+        self.assertEqual(len(inferred), 1)
+        self.assertEqual(inferred[0]["resolved_value"], "total_market_capitalization")
+
     def test_semantic_resolver_honors_declared_exact_market_data_alias(self) -> None:
         frame = self._valid_frame().assign(close_raw=lambda value: value["close"], forward_return_1d=0.01)
         profile = build_data_profile(

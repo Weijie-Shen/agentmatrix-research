@@ -1443,30 +1443,44 @@ def _capitalization_inference_deviations(
         for item in profile.get("derived_fields", []) or []
         if isinstance(item, dict) and item.get("field")
     }
+    profile_conventions = profile.get("conventions", {}) or {}
+    market_cap_control = profile_conventions.get("market_cap_control", {}) or {}
+
+    def _basis_from_text(value: Any) -> str:
+        lowered = str(value or "").lower().replace("-", "_").replace(" ", "_")
+        if "free_float" in lowered or "freefloat" in lowered:
+            return "free_float_market_capitalization"
+        if "circulating" in lowered:
+            return "circulating_market_capitalization"
+        if "a_share" in lowered or "ashare" in lowered:
+            return "a_share_market_capitalization"
+        if "total" in lowered:
+            return "total_market_capitalization"
+        return ""
+
     for result in results:
         definition = result.semantic_definition or {}
         cap_basis = str(definition.get("cap_basis", "") or "").lower()
+        concept = str(definition.get("concept", "") or "").lower()
         generic_requirement = result.requirement in {
             "market_cap",
             "market_cap_or_log_market_cap",
+            "market_cap_control",
         } or (
             str(definition.get("kind", "")).lower() == "capitalization"
             and cap_basis in {"", "generic", "unspecified", "not_specified"}
+            and concept in {"", "market_cap", "market_capitalization"}
         )
         physical_field = str(result.available_value or "")
         if not generic_requirement or not physical_field or not result.execution_ready:
             continue
         lowered = physical_field.lower()
-        basis = ""
-        if "free_float" in lowered or "freefloat" in lowered:
-            basis = "free_float_market_capitalization"
-        elif "circulating" in lowered:
-            basis = "circulating_market_capitalization"
-        elif "a_share" in lowered or "ashare" in lowered:
-            basis = "a_share_market_capitalization"
-        elif "total" in lowered:
-            basis = "total_market_capitalization"
-        elif lowered.startswith(("log_market_cap", "sqrt_market_cap")):
+        basis = _basis_from_text(physical_field)
+        if not basis and result.requirement == "market_cap_control":
+            basis = _basis_from_text(market_cap_control.get("basis"))
+            if not basis:
+                basis = _basis_from_text(market_cap_control.get("physical_field"))
+        if not basis and lowered.startswith(("log_market_cap", "sqrt_market_cap")):
             basis = "basis_under_transformed_market_cap_not_declared"
         if basis:
             deviations.append(
