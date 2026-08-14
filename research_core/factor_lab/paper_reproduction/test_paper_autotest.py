@@ -272,6 +272,7 @@ class PaperAutotestTest(unittest.TestCase):
             fixture_files = {
                 "runtime/factor_lab/paper_jobs/job.json": "{}",
                 "runtime/factor_lab/paper_specs/extraction.json": "{}",
+                "runtime/factor_lab/source_evidence/source_manifest.json": "{}",
                 "runtime/factor_lab/specs/specs.json": "{}",
                 "runtime/factor_lab/data_profiles/qfq.json": "{}",
                 "runtime/factor_lab/implementation_artifacts/implementation.json": json.dumps(
@@ -310,6 +311,7 @@ class PaperAutotestTest(unittest.TestCase):
             self.assertIn("runtime/factor_lab/truth_matches/matches.json", paths)
             self.assertIn("runtime/factor_lab/truth_comparisons/comparison.json", paths)
             self.assertIn("runtime/factor_lab/test_evidence/formula.json", paths)
+            self.assertIn("runtime/factor_lab/source_evidence/source_manifest.json", paths)
             self.assertIn("scripts/run_demo.py", paths)
             self.assertNotIn("research_core/factor_lab/libraries/demo/__pycache__/test_factors.pyc", paths)
             self.assertEqual(manifest["observed_git_head"], plan.base_commit)

@@ -617,6 +617,7 @@ def _deep_completion_defects(
     defects.extend(_markdown_consistency_defects(report, report.get("data_profile_summaries", []) or []))
     if harvest_manifest_path is not None:
         defects.extend(_harvest_durability_defects(harvest_manifest_path))
+        defects.extend(_harvested_pipeline_artifact_defects(report, harvest_manifest_path))
     return defects
 
 
@@ -1199,6 +1200,52 @@ def _harvest_durability_defects(path: str | Path) -> list[str]:
         defects.append(f"[harvest] required artifact families were not harvested: {missing}")
     if payload.get("omitted_files"):
         defects.append("[harvest] one or more eligible artifacts were omitted")
+    return defects
+
+
+def _harvested_pipeline_artifact_defects(
+    report: dict[str, Any],
+    harvest_manifest_path: str | Path,
+) -> list[str]:
+    """Require completed-stage runtime artifacts to survive worktree cleanup."""
+
+    payload = _load_json(Path(harvest_manifest_path).expanduser().resolve())
+    worktree_text = str(payload.get("worktree", "")).strip()
+    if not worktree_text:
+        return ["[harvest] harvest manifest has no source worktree identity"]
+    worktree = Path(worktree_text).expanduser().resolve()
+    harvested = {
+        Path(str(item.get("path", ""))).as_posix()
+        for item in payload.get("files", []) or []
+        if isinstance(item, dict) and item.get("path")
+    }
+    defects: list[str] = []
+    for stage in (report.get("pipeline", {}) or {}).get("stages", []) or []:
+        if not isinstance(stage, dict):
+            continue
+        execution_status = str(stage.get("execution_status") or stage.get("status", ""))
+        if execution_status not in COMPLETED_EXECUTION_STATUSES:
+            continue
+        for raw_path in stage.get("artifact_paths", []) or []:
+            text = str(raw_path).strip()
+            if not text or text.isdigit() or "://" in text:
+                continue
+            candidate = Path(text).expanduser()
+            if candidate.is_absolute():
+                try:
+                    relative = candidate.resolve().relative_to(worktree)
+                except ValueError:
+                    continue
+            else:
+                relative = candidate
+            relative_text = relative.as_posix()
+            if not relative_text.startswith("runtime/factor_lab/"):
+                continue
+            if relative_text not in harvested:
+                defects.append(
+                    "[harvest] completed stage "
+                    f"{stage.get('name', '-')} artifact was not harvested: {relative_text}"
+                )
     return defects
 
 

@@ -9,7 +9,7 @@ Audit artifacts, not agent assertions. Build the final report only from persiste
 
 ## Reconcile the run
 
-Load the extraction, normalized specs, data assessments, implementation manifest and artifact, tests, evaluation plan/results, truth matches, and pipeline state. Verify every path exists and every serialized artifact reloads.
+Load the extraction, normalized specs, data assessments, implementation manifest and artifact, tests, evaluation plan/results, truth matches, and pipeline state. Verify every path exists and every serialized artifact reloads. In an autotest, also verify every completed-stage runtime artifact appears in `harvest_manifest.json`; existence only inside the disposable worktree is not durable evidence.
 
 For autotest reviews, also load `reviewer_assignment.json`, `harvest_manifest.json`, and the deterministic assessment before reviewing. Treat the control-plane assignment as the authority for reviewer task identity and requested model. Do not self-attest identity or model provenance in the review body. If actual runtime-model evidence is unavailable, preserve `actual_model_status=unverified`. The control plane writes and hashes `reviewer_completion.json` after the review returns.
 
@@ -53,6 +53,7 @@ For truth matching verify:
 - every explicit missing-value operation survives normalization and execution in the same order;
 - signed and absolute metric conventions are reconciled before comparison;
 - any companion formula source is authorized, hashed, and distinct from the selected evaluation-truth paper.
+- every formula source locator matches the visible source table/figure title or number, and every paper-level formula gap is linked through `affects` and each affected factor's `formula_gap_ids`;
 - every formula parameter retains its source symbol, literal value, unit, and algebraic role; derived observation counts or calendar conversions are separate, justified, and independently tested rather than substituted into the source equation;
 - exchange-trading-day distances advance on an evidenced exchange calendar, not merely across retained/non-null security observations;
 - ratio/percentage rows have been checked for an implied observation denominator and any conflict with the stated sample schedule is explicit;

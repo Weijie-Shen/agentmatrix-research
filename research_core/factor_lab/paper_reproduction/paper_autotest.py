@@ -37,6 +37,7 @@ ARTIFACT_ROOTS = (
     "runtime/factor_lab/proofs",
     "runtime/factor_lab/reports",
     "runtime/factor_lab/resource_evidence",
+    "runtime/factor_lab/source_evidence",
     "runtime/factor_lab/specs",
     "runtime/factor_lab/test_evidence",
     "runtime/factor_lab/test_results",

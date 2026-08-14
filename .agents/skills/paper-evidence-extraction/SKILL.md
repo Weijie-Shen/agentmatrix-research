@@ -32,6 +32,8 @@ Formula-required fields must be factor-specific. Do not copy a family-wide OHLCV
 
 Do not invent missing formula semantics. Classify material ambiguity and retain source text or location.
 
+Record every formula source locator literally: page plus the visible table or figure title/number. When a paper-level known gap affects a formula, give it `scope: formula` and an `affects` list, then include the same `gap_id` in every affected factor's `formula_gap_ids`. Do not leave formula ambiguity only in paper-level notes where normalization and review cannot bind it to factors.
+
 Preserve every formula parameter as a source-level symbol with its literal value, unit, and domain. Keep derived runtime quantities—such as an estimated number of trading observations in a month—in separate fields with explicit conversion provenance. Never substitute a derived observation count for a parameter stated in months, years, calendar days, or another unit merely because the rolling window is implemented with observations. If a formula combines variables whose units or indexing conventions are unclear, record a formula gap instead of silently making the expression dimensionally convenient.
 
 If the selected paper reports a factor only as a comparison row and cites a companion paper for its formula, do not treat the row as formula evidence. Locate the cited source only within the user's authorized paper set, record its path and SHA-256 identity as formula provenance, and keep the selected paper as the evaluation-truth source. If the cited source is unavailable, leave formula fidelity unverified.
@@ -107,3 +109,4 @@ Export and reload artifacts to verify serialization. Generated `specs.py` must i
 - `runtime/factor_lab/catalogs/<family>_catalog.json`
 - `research_core/factor_lab/libraries/<family>/specs.py` when generated
 - Stage 1-2 pipeline updates with diagnostics and limitations
+- every pipeline-cited source manifest under `runtime/factor_lab/source_evidence/`; never cite an artifact that is not persisted

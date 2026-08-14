@@ -76,6 +76,7 @@ An executed case exists only when it is present in the unmodified `evaluation_bu
 - For exchange-trading-day distances, use the exchange calendar rather than counting only observed security rows; suspended or missing observations must not collapse elapsed trading sessions.
 - Distinguish ordinary/Pearson IC from Spearman/rank IC, preserve explicit zero-fill versus drop-missing behavior in order, and preserve signed versus absolute metric conventions.
 - When formula evidence comes from a cited companion paper, use it only when that document is inside the authorized source set and persist its path/hash separately from the selected paper's evaluation truth.
+- Persist every source manifest cited by a completed stage under `runtime/factor_lab/source_evidence/`. Bind paper-level formula gaps to affected factor IDs and mirror those IDs in each factor's `formula_gap_ids`.
 - Distinguish exact data, constructed equivalents, proxies, rejected substitutes, and missing requirements.
 - Resolve capitalization basis from paper wording; never conflate total, A-share, circulating-A, and free-float capitalization or rescale them with price-adjustment multipliers.
 - Resolve point-in-time industry controls by paper taxonomy source, level, and evaluation/formation date. Never silently select among `sws`, `citics`, `citics_2019`, and `gildata`, and never use numeric industry codes as continuous values.

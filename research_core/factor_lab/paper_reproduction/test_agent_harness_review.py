@@ -384,6 +384,43 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
                 any(action.startswith("Resolve and apply every required transform") for action in assessment.repair_actions)
             )
 
+    def test_harvest_must_include_every_completed_stage_runtime_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_complete_fixture(root, ["Alpha3"])
+            report_path = root / "runtime" / "factor_lab" / "reports" / "demo_paper_reproduction_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            source_manifest = root / "runtime" / "factor_lab" / "source_evidence" / "source_manifest.json"
+            source_manifest.parent.mkdir(parents=True, exist_ok=True)
+            source_manifest.write_text("{}", encoding="utf-8")
+            report["pipeline"]["stages"][0]["artifact_paths"] = [str(source_manifest)]
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            harvest_path = root / "harvest_manifest.json"
+            harvest_path.write_text(
+                json.dumps(
+                    {
+                        "review_ready": True,
+                        "worktree": str(root),
+                        "files": [],
+                        "missing_required_artifact_families": [],
+                        "omitted_files": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            assessment = assess_agent_harness_run(
+                root,
+                expected_factors=["Alpha3"],
+                harvest_manifest_path=harvest_path,
+            )
+
+            self.assertFalse(assessment.complete)
+            self.assertTrue(
+                any("source_evidence/source_manifest.json" in item for item in assessment.defects),
+                assessment.defects,
+            )
+
     def _write_complete_fixture(self, root: Path, factors: list[str]) -> None:
         runtime = root / "runtime" / "factor_lab"
         for directory in (
