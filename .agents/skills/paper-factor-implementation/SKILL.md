@@ -32,6 +32,8 @@ For formulas mixing cross-sectional ranks and time-series operators, preserve op
 
 Keep source parameters and derived runtime constants distinct. Use a parameter in the exact unit and algebraic position stated by the paper; converting a lookback window to observations does not authorize replacing a separate month-valued decay parameter with that observation count. When a conversion is explicitly supported, document its dimensional rationale and provenance in the implementation artifact and test the converted value independently. Leave an unresolved unit/index mismatch as a formula limitation rather than choosing a convenient interpretation.
 
+When a paper measures an operator distance in exchange trading days, advance the distance on the exchange calendar, including sessions where a security has no valid observation. Do not count only retained or non-null stock rows. Preserve a calendar/session index or the full per-security calendar grid through factor calculation, and test that a suspension or missing stock observation advances distance while a market holiday does not.
+
 Use safe rolling correlation/covariance wrappers on sparse or low-variance panels. Scrub infinity immediately after the rolling operation so downstream ranks and sums do not propagate it.
 
 ## TDD sequence

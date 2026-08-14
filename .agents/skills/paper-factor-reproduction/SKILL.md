@@ -73,6 +73,7 @@ An executed case exists only when it is present in the unmodified `evaluation_bu
 - Keep raw factor definitions separate from transforms, universes, return horizons, controls, weights, portfolio rules, and evaluation data.
 - Preserve narrow source locations and provenance for formulas, transforms, methods, and metrics.
 - Preserve formula parameter symbols, values, units, and domains literally. Record observation-count or calendar conversions separately; never replace a source month/year/day parameter with a rolling-window row count without explicit source-backed conversion semantics.
+- For exchange-trading-day distances, use the exchange calendar rather than counting only observed security rows; suspended or missing observations must not collapse elapsed trading sessions.
 - Distinguish ordinary/Pearson IC from Spearman/rank IC, preserve explicit zero-fill versus drop-missing behavior in order, and preserve signed versus absolute metric conventions.
 - When formula evidence comes from a cited companion paper, use it only when that document is inside the authorized source set and persist its path/hash separately from the selected paper's evaluation truth.
 - Distinguish exact data, constructed equivalents, proxies, rejected substitutes, and missing requirements.

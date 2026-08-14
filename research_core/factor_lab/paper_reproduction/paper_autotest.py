@@ -38,8 +38,10 @@ ARTIFACT_ROOTS = (
     "runtime/factor_lab/reports",
     "runtime/factor_lab/resource_evidence",
     "runtime/factor_lab/specs",
+    "runtime/factor_lab/test_evidence",
     "runtime/factor_lab/test_results",
     "runtime/factor_lab/truth",
+    "runtime/factor_lab/truth_comparisons",
     "runtime/factor_lab/truth_matches",
     "research_core/factor_lab/libraries",
     "scripts",
@@ -782,13 +784,19 @@ def _artifact_families(path: str) -> set[str]:
         families.add("evaluation_plan")
     if path.startswith(("runtime/factor_lab/evaluation_bundles/", "runtime/factor_lab/evaluations/")):
         families.add("evaluation_bundle")
-    if path.startswith(("runtime/factor_lab/truth_matches/", "runtime/factor_lab/truth/")):
+    if path.startswith(
+        (
+            "runtime/factor_lab/truth_matches/",
+            "runtime/factor_lab/truth_comparisons/",
+            "runtime/factor_lab/truth/",
+        )
+    ):
         families.add("truth_match")
     if path.startswith("runtime/factor_lab/reports/") and path.endswith(".json"):
         families.add("report_json")
     if path.startswith("runtime/factor_lab/reports/") and path.endswith(".md"):
         families.add("report_markdown")
-    if path.startswith("runtime/factor_lab/test_results/"):
+    if path.startswith(("runtime/factor_lab/test_results/", "runtime/factor_lab/test_evidence/")):
         families.add("implementation_test_result")
     name = Path(path).name
     is_test_source = path.endswith(".py") and (

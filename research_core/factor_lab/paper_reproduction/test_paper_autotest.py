@@ -281,9 +281,11 @@ class PaperAutotestTest(unittest.TestCase):
                     }
                 ),
                 "runtime/factor_lab/test_results/pytest.txt": "2 passed",
+                "runtime/factor_lab/test_evidence/formula.json": "{}",
                 "runtime/factor_lab/evaluation_plans/plan.json": "{}",
                 "runtime/factor_lab/evaluation_bundles/qfq.json": "{}",
                 "runtime/factor_lab/truth_matches/matches.json": "{}",
+                "runtime/factor_lab/truth_comparisons/comparison.json": "{}",
                 "runtime/factor_lab/reports/report.json": "{}",
                 "runtime/factor_lab/reports/report.md": "# report",
                 "research_core/factor_lab/libraries/demo/test_factors.py": "def test_factor(): pass\n",
@@ -306,6 +308,8 @@ class PaperAutotestTest(unittest.TestCase):
             self.assertIn("runtime/factor_lab/data_profiles/qfq.json", paths)
             self.assertIn("runtime/factor_lab/implementation_artifacts/implementation.json", paths)
             self.assertIn("runtime/factor_lab/truth_matches/matches.json", paths)
+            self.assertIn("runtime/factor_lab/truth_comparisons/comparison.json", paths)
+            self.assertIn("runtime/factor_lab/test_evidence/formula.json", paths)
             self.assertIn("scripts/run_demo.py", paths)
             self.assertNotIn("research_core/factor_lab/libraries/demo/__pycache__/test_factors.pyc", paths)
             self.assertEqual(manifest["observed_git_head"], plan.base_commit)

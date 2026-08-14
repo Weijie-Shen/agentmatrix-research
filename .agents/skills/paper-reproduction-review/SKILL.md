@@ -54,6 +54,7 @@ For truth matching verify:
 - signed and absolute metric conventions are reconciled before comparison;
 - any companion formula source is authorized, hashed, and distinct from the selected evaluation-truth paper.
 - every formula parameter retains its source symbol, literal value, unit, and algebraic role; derived observation counts or calendar conversions are separate, justified, and independently tested rather than substituted into the source equation;
+- exchange-trading-day distances advance on an evidenced exchange calendar, not merely across retained/non-null security observations;
 - ratio/percentage rows have been checked for an implied observation denominator and any conflict with the stated sample schedule is explicit;
 - natural-month labels were not silently approximated by a fixed trading-day count;
 - inferred/defaulted operations appear as structured deviations and downgrade comparability.
