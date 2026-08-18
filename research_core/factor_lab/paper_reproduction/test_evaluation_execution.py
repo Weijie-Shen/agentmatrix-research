@@ -209,6 +209,35 @@ class CanonicalEvaluationExecutionTest(unittest.TestCase):
         self.assertEqual(bundle.records[0].lifecycle_state, "insufficient_data")
         self.assertEqual(bundle.records[0].error["type"], "MissingEvaluationInputs")
 
+    def test_v3_execution_rejects_uncertified_stage3_contract_before_factor_compute(self) -> None:
+        calculation = self._calculation_panel()
+        evaluation = pd.DataFrame(
+            {
+                "date": ["2026-01-03", "2026-01-03"],
+                "code": ["A", "B"],
+                "forward_return_1d": [0.1, -0.1],
+            }
+        )
+        case = self._case()
+        case["paper_protocol_refs"] = {"schema_version": "paper_extraction.ic_recipe.v3"}
+        case["resolved_protocol"]["executable_contract"] = {
+            "schema_version": "stage3_executable_evaluation_contract/v1",
+            "status": "blocked",
+            "required_physical_fields": ["forward_return_1d", "industry_code"],
+            "errors": ["industry binding is unresolved"],
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact = self._artifact(Path(tmp_dir), calculation)
+            with self.assertRaisesRegex(ValueError, "Stage-3 executable contract is not certified"):
+                execute_evaluation_plan(
+                    self._plan(case),
+                    artifact,
+                    EvaluationDataContext(
+                        calculation_panel=calculation,
+                        evaluation_inputs=evaluation,
+                    ),
+                )
+
     def test_st_and_suspension_filters_run_after_full_history_factor_calculation(self) -> None:
         calculation = self._calculation_panel()
         evaluation = pd.DataFrame(
@@ -269,6 +298,7 @@ class CanonicalEvaluationExecutionTest(unittest.TestCase):
             "preprocessing_steps": [{"order": 1, "method_id": "factor_missing.drop"}],
             "return_label": {
                 "method_id": "return.forward_close_to_close",
+                "interval_type": "exchange_calendar_days",
                 "horizon_exchange_days": 1,
                 "output_field": "forward_return_1d",
             },

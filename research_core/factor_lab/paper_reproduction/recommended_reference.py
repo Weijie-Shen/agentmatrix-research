@@ -23,6 +23,65 @@ RECOMMENDED_INDEX_WEIGHTS_DAILY_DIR = "index_weights_daily_rqdata"
 IndexWeightFrequency = Literal["monthly", "daily"]
 
 
+def materialize_typed_forward_return(
+    frame: pd.DataFrame,
+    return_label: dict[str, object],
+    *,
+    trading_calendar: pd.DataFrame | Sequence[object] | None = None,
+    price_col: str = "close",
+    date_col: str = "date",
+    security_col: str = "code",
+    copy: bool = True,
+) -> pd.DataFrame:
+    """Dispatch label construction strictly from the extracted interval type."""
+
+    interval_type = str(return_label.get("interval_type", ""))
+    output_col = str(return_label.get("output_field", "")) or None
+    if interval_type == "security_observation_days":
+        from research_core.factor_lab.paper_reproduction.data_validation import materialize_forward_return
+
+        return materialize_forward_return(
+            frame,
+            int(return_label.get("horizon_security_observations", 0)),
+            price_col=price_col,
+            output_col=output_col,
+            date_col=date_col,
+            security_col=security_col,
+            copy=copy,
+        )
+    if interval_type == "exchange_calendar_days":
+        if trading_calendar is None:
+            raise ValueError("exchange-calendar forward return requires trading_calendar")
+        return materialize_calendar_forward_return(
+            frame,
+            int(return_label.get("horizon_exchange_days", 0)),
+            trading_calendar=trading_calendar,
+            price_col=price_col,
+            output_col=output_col,
+            date_col=date_col,
+            security_col=security_col,
+            copy=copy,
+        )
+    if interval_type == "following_whole_natural_month":
+        if trading_calendar is None:
+            raise ValueError("natural-month forward return requires trading_calendar")
+        return materialize_natural_month_forward_return(
+            frame,
+            int(return_label.get("horizon_natural_months", 0)),
+            trading_calendar=trading_calendar,
+            price_col=price_col,
+            output_col=output_col,
+            date_col=date_col,
+            security_col=security_col,
+            copy=copy,
+        )
+    if interval_type in {"next_evaluation_period", "fixed_date_interval"}:
+        raise ValueError(
+            f"{interval_type} requires an explicit Stage-3 target-date resolver; it cannot be coerced to days"
+        )
+    raise ValueError(f"unsupported or missing return interval_type: {interval_type or '<missing>'}")
+
+
 def load_recommended_trading_calendar(
     *,
     start_date: str | pd.Timestamp,

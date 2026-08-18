@@ -22,6 +22,6 @@ Each factor definition is formula-only. Each truth source owns one homogeneous e
 }
 ```
 
-A recipe contains `global_policy_ref`, `sampling`, ordered `preprocessing_steps`, `return_label`, `ic_method`, and `metric_methods`. Steps have contiguous one-based `order`, a catalog `method_id`, named semantic inputs/outputs, parameters, scope, and evidence. Split a printed table into multiple truth sources when row blocks use different recipes.
+A recipe contains `global_policy_ref`, `sampling`, ordered `preprocessing_steps`, `return_label`, `ic_method`, and `metric_methods`. Steps have contiguous one-based `order`, a catalog `method_id`, named semantic inputs/outputs, parameters, scope, and evidence. `return_label` must use one typed interval from `return-label-method-catalog.md`; a bare horizon number is invalid. Split a printed table into multiple truth sources when row blocks use different recipes.
 
 Extraction never stores local columns, physical files, resolved fields, or data value states.

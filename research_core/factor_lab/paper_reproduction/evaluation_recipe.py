@@ -65,6 +65,16 @@ METHOD_CATALOG: dict[str, dict[str, Any]] = {
     "metric.rank_ic_positive_ratio": {"category": "metric", "executor_support": "native"},
 }
 
+RETURN_INTERVAL_TYPES = {
+    "security_observation_days",
+    "exchange_calendar_days",
+    "following_whole_natural_month",
+    "next_evaluation_period",
+    "fixed_date_interval",
+}
+
+STAGE3_EXECUTABLE_CONTRACT_VERSION = "stage3_executable_evaluation_contract/v1"
+
 
 @dataclass(slots=True)
 class DataValueState:
@@ -113,6 +123,7 @@ def validate_evaluation_recipe(recipe: dict[str, Any], *, prefix: str = "evaluat
                 errors.append(f"{prefix}.{section} custom method requires source_text and evidence")
         elif METHOD_CATALOG.get(method_id, {}).get("category") != category:
             errors.append(f"{prefix}.{section}.method_id has wrong or unknown category: {method_id}")
+    errors.extend(_validate_return_interval(recipe, prefix=prefix))
     metrics = recipe.get("metric_methods", [])
     if not isinstance(metrics, list) or not metrics:
         errors.append(f"{prefix}.metric_methods must not be empty")
@@ -155,6 +166,7 @@ def project_recipe_truth_source_for_factor(source: dict[str, Any], factor_id: st
     ic_method_id = str((recipe.get("ic_method", {}) or {}).get("method_id", "ic.spearman_rank"))
     return_label = recipe.get("return_label", {}) or {}
     return_col = str(return_label.get("output_field") or _default_return_field(recipe))
+    interval = canonical_return_interval(return_label, sampling=recipe.get("sampling", {}) or {})
     sampling = recipe.get("sampling", {}) or {}
     return {
         "truth_id": truth_id,
@@ -170,8 +182,9 @@ def project_recipe_truth_source_for_factor(source: dict[str, Any], factor_id: st
         "evaluation_family": "ic_analysis",
         "evaluation_recipe": recipe,
         "evaluation_spec": {
-            "return_horizon": int(return_label.get("horizon_exchange_days", 1)),
-            "return_horizon_unit": "trading_day",
+            "return_horizon": interval["horizon"],
+            "return_horizon_unit": interval["legacy_unit"],
+            "return_interval_type": interval["interval_type"],
             "return_col": return_col,
             "ic_type": "spearman_rank_ic" if ic_method_id == "ic.spearman_rank" else "pearson_ic",
             "ic_ir_convention": str((recipe.get("ic_method", {}) or {}).get("ic_ir_convention", "signed")),
@@ -195,17 +208,21 @@ def project_recipe_truth_source_for_factor(source: dict[str, Any], factor_id: st
 def resolve_recipe_value_states(
     recipe: dict[str, Any],
     data_profile: dict[str, Any],
+    *,
+    semantic_bindings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Bind recipe inputs to physical fields and prevent duplicate materialized transforms."""
 
     resolved = copy.deepcopy(recipe)
     states = _value_states_from_profile(data_profile)
+    binding_registry, binding_errors = authoritative_semantic_bindings(data_profile)
     bindings = _semantic_bindings_from_profile(data_profile)
+    bindings.update({str(key): str(value) for key, value in (semantic_bindings or {}).items() if str(value)})
     resolved["global_policy_bindings"] = {
         semantic: bindings.get(semantic, semantic)
         for semantic in ("st_or_pt_status", "next_day_suspension_status")
     }
-    blocked: list[str] = []
+    blocked: list[str] = list(binding_errors)
     trace: list[dict[str, Any]] = []
     for step in resolved.get("preprocessing_steps", []) or []:
         if not isinstance(step, dict):
@@ -243,8 +260,234 @@ def resolve_recipe_value_states(
         "blocked_reasons": blocked,
         "value_states": states,
         "execution_trace": trace,
+        "semantic_bindings": {
+            semantic: {
+                **binding_registry.get(semantic, {}),
+                "physical_field": physical,
+            }
+            for semantic, physical in bindings.items()
+        },
     }
     return resolved
+
+
+def authoritative_semantic_bindings(
+    data_profile: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Normalize the one selected semantic-to-physical binding registry.
+
+    Candidate ``field_relationships`` are deliberately not treated as selected
+    bindings.  Only the profile-level registry (or its legacy conventions
+    location) owns that decision.
+    """
+
+    sources: list[tuple[str, Any]] = [
+        ("data_profile.semantic_bindings", data_profile.get("semantic_bindings", {})),
+    ]
+    conventions = data_profile.get("conventions", {})
+    if isinstance(conventions, dict):
+        sources.append(("data_profile.conventions.semantic_bindings", conventions.get("semantic_bindings", {})))
+    candidates: dict[str, list[dict[str, Any]]] = {}
+    for source, raw_bindings in sources:
+        if not isinstance(raw_bindings, dict):
+            continue
+        for semantic, raw in raw_bindings.items():
+            if isinstance(raw, dict):
+                physical = str(raw.get("physical_field") or raw.get("resolved_field") or "")
+                record = dict(raw)
+            else:
+                physical = str(raw or "")
+                record = {}
+            if not str(semantic) or not physical:
+                continue
+            candidates.setdefault(str(semantic), []).append(
+                {
+                    "semantic_input": str(semantic),
+                    "physical_field": physical,
+                    "relationship": str(record.get("relationship", "exact_alias")),
+                    "selection_mode": str(record.get("selection_mode", "stage3_explicit")),
+                    "source": str(record.get("source", source)),
+                    **{key: value for key, value in record.items() if key not in {"resolved_field"}},
+                }
+            )
+    registry: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    columns = {str(value) for value in data_profile.get("columns", []) or []}
+    for semantic, records in candidates.items():
+        physical_fields = sorted({str(record["physical_field"]) for record in records})
+        if len(physical_fields) != 1:
+            errors.append(
+                f"conflicting Stage-3 bindings for {semantic}: {physical_fields}"
+            )
+            continue
+        selected = dict(records[0])
+        physical = physical_fields[0]
+        selected["sources"] = sorted({str(record.get("source", "")) for record in records if record.get("source")})
+        selected["materialized"] = physical in columns
+        registry[semantic] = selected
+    return registry, errors
+
+
+def certify_resolved_evaluation_recipe(
+    recipe: dict[str, Any],
+    data_profile: dict[str, Any],
+    support_assessment: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Create and structurally certify the Stage-3 executable recipe contract."""
+
+    registry, binding_errors = authoritative_semantic_bindings(data_profile)
+    assessment_bindings: dict[str, dict[str, Any]] = {}
+    required_semantics = {
+        str(value)
+        for values in recipe_required_semantic_inputs(recipe).values()
+        for value in values
+        if str(value)
+    }
+    for result in support_assessment.get("requirement_results", []) or []:
+        if not isinstance(result, dict) or not result.get("execution_ready"):
+            continue
+        semantic = str(result.get("requirement", ""))
+        physical = str(result.get("available_value") or result.get("candidate_field") or "")
+        if not semantic or not physical or semantic not in required_semantics:
+            continue
+        assessment_bindings[semantic] = {
+            "semantic_input": semantic,
+            "physical_field": physical,
+            "relationship": str(result.get("relationship", "exact_alias")),
+            "selection_mode": "stage3_support_assessment",
+            "source": "support_assessment.requirement_results",
+        }
+    errors = list(binding_errors)
+    for semantic, assessed in assessment_bindings.items():
+        declared = registry.get(semantic)
+        if declared and declared.get("physical_field") != assessed["physical_field"]:
+            errors.append(
+                f"Stage-3 binding for {semantic} conflicts with support assessment: "
+                f"{declared.get('physical_field')} != {assessed['physical_field']}"
+            )
+        else:
+            registry.setdefault(semantic, assessed)
+    binding_map = {
+        semantic: str(record.get("physical_field", ""))
+        for semantic, record in registry.items()
+        if str(record.get("physical_field", ""))
+    }
+    resolved = resolve_recipe_value_states(
+        recipe,
+        data_profile,
+        semantic_bindings=binding_map,
+    )
+    for semantic, record in (
+        (resolved.get("resolution", {}) or {}).get("semantic_bindings", {}) or {}
+    ).items():
+        if isinstance(record, dict) and record.get("physical_field"):
+            registry.setdefault(str(semantic), dict(record))
+    errors.extend(str(value) for value in (resolved.get("resolution", {}) or {}).get("blocked_reasons", []) or [])
+    columns = {str(value) for value in data_profile.get("columns", []) or []}
+    required = set(recipe_required_semantic_inputs(resolved)["evaluation"])
+    required.update(str(value) for value in (resolved.get("global_policy_bindings", {}) or {}).values() if value)
+    for step in resolved.get("preprocessing_steps", []) or []:
+        if not isinstance(step, dict):
+            continue
+        for control in step.get("controls", []) or []:
+            if isinstance(control, dict) and control.get("resolved_field"):
+                required.add(str(control["resolved_field"]))
+            for transform in (control.get("transforms", []) if isinstance(control, dict) else []) or []:
+                if isinstance(transform, dict) and transform.get("execution_mode") == "reuse_materialized":
+                    required.add(str(transform.get("resolved_field", "")))
+    missing = sorted(field for field in required if field and field not in columns)
+    if missing:
+        errors.append(f"resolved physical fields are absent from the profiled panel: {missing}")
+    errors.extend(_validate_return_interval(recipe, prefix="evaluation_recipe"))
+    errors = list(dict.fromkeys(error for error in errors if error))
+    contract = {
+        "schema_version": STAGE3_EXECUTABLE_CONTRACT_VERSION,
+        "status": "blocked" if errors else "certified",
+        "profile_source_id": str(data_profile.get("source_id", "")),
+        "support_assessment_id": str(support_assessment.get("assessment_id", "")),
+        "semantic_bindings": registry,
+        "required_physical_fields": sorted(required),
+        "errors": errors,
+    }
+    resolution = resolved.setdefault("resolution", {})
+    resolution["status"] = "blocked" if errors else "resolved"
+    resolution["blocked_reasons"] = errors
+    resolution["executable_contract_status"] = contract["status"]
+    resolution["semantic_bindings"] = registry
+    return resolved, contract
+
+
+def canonical_return_interval(
+    return_label: dict[str, Any],
+    *,
+    sampling: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the typed interval while retaining a narrow legacy projection."""
+
+    interval_type = str(return_label.get("interval_type", ""))
+    if interval_type == "following_whole_natural_month":
+        horizon = int(return_label.get("horizon_natural_months", 1))
+        legacy_unit = "natural_month"
+    elif interval_type == "security_observation_days":
+        horizon = int(return_label.get("horizon_security_observations", 1))
+        legacy_unit = "security_observation"
+    elif interval_type == "next_evaluation_period":
+        horizon = int(return_label.get("horizon_periods", 1))
+        legacy_unit = "evaluation_period"
+    elif interval_type == "fixed_date_interval":
+        horizon = int(return_label.get("horizon_periods", 1))
+        legacy_unit = "fixed_date_interval"
+    else:
+        interval_type = interval_type or "exchange_calendar_days"
+        horizon = int(return_label.get("horizon_exchange_days", 1))
+        legacy_unit = "trading_day"
+    return {
+        "interval_type": interval_type,
+        "horizon": horizon,
+        "legacy_unit": legacy_unit,
+        "signal_schedule": str((sampling or {}).get("signal_schedule", "")),
+    }
+
+
+def _validate_return_interval(recipe: dict[str, Any], *, prefix: str) -> list[str]:
+    label = recipe.get("return_label", {}) or {}
+    if not isinstance(label, dict):
+        return [f"{prefix}.return_label must be an object"]
+    interval_type = str(label.get("interval_type", ""))
+    errors: list[str] = []
+    if not interval_type:
+        errors.append(f"{prefix}.return_label.interval_type is required")
+        return errors
+    if interval_type not in RETURN_INTERVAL_TYPES:
+        errors.append(f"{prefix}.return_label.interval_type is unknown: {interval_type}")
+        return errors
+    required_horizon = {
+        "security_observation_days": "horizon_security_observations",
+        "exchange_calendar_days": "horizon_exchange_days",
+        "following_whole_natural_month": "horizon_natural_months",
+        "next_evaluation_period": "horizon_periods",
+        "fixed_date_interval": "horizon_periods",
+    }[interval_type]
+    try:
+        if int(label.get(required_horizon, 0)) <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        errors.append(f"{prefix}.return_label.{required_horizon} must be a positive integer")
+    schedule = str((recipe.get("sampling", {}) or {}).get("signal_schedule", "")).lower()
+    evidence = " ".join(
+        str(label.get(key, "")) for key in ("evidence", "source_text", "target_rule")
+    ).lower()
+    if (
+        interval_type == "exchange_calendar_days"
+        and schedule in {"monthly", "month_end", "monthly_last_trading_day"}
+        and "t+1" in evidence.replace(" ", "")
+        and not any(token in evidence for token in ("trading day", "exchange day", "交易日"))
+    ):
+        errors.append(
+            f"{prefix}.return_label ambiguously maps monthly T+1 period to exchange days; "
+            "use next_evaluation_period or following_whole_natural_month unless trading-day evidence is explicit"
+        )
+    return errors
 
 
 def _resolve_transform_execution(
@@ -326,9 +569,12 @@ def _value_states_from_profile(profile: dict[str, Any]) -> dict[str, dict[str, A
 
 
 def _semantic_bindings_from_profile(profile: dict[str, Any]) -> dict[str, str]:
-    conventions = profile.get("conventions", {}) if isinstance(profile.get("conventions", {}), dict) else {}
-    raw = conventions.get("semantic_bindings", {})
-    bindings = {str(key): str(value) for key, value in raw.items()} if isinstance(raw, dict) else {}
+    registry, _ = authoritative_semantic_bindings(profile)
+    bindings = {
+        semantic: str(record.get("physical_field", ""))
+        for semantic, record in registry.items()
+        if str(record.get("physical_field", ""))
+    }
     columns = {str(value) for value in profile.get("columns", []) or []}
     for relationship in profile.get("field_relationships", []) or []:
         if not isinstance(relationship, dict):
@@ -356,8 +602,18 @@ def _semantic_bindings_from_profile(profile: dict[str, Any]) -> dict[str, str]:
 
 
 def _default_return_field(recipe: dict[str, Any]) -> str:
-    horizon = int(((recipe.get("return_label", {}) or {}).get("horizon_exchange_days", 1)))
-    return f"forward_return_{horizon}d"
+    interval = canonical_return_interval(
+        recipe.get("return_label", {}) or {},
+        sampling=recipe.get("sampling", {}) or {},
+    )
+    suffix = {
+        "following_whole_natural_month": "m",
+        "exchange_calendar_days": "d",
+        "security_observation_days": "obs",
+        "next_evaluation_period": "p",
+        "fixed_date_interval": "interval",
+    }.get(interval["interval_type"], "d")
+    return f"forward_return_{interval['horizon']}{suffix}"
 
 
 def _format_source_location(source: dict[str, Any]) -> str:

@@ -43,6 +43,8 @@ For industry controls, resolve both taxonomy source and level from paper evidenc
 
 Consume the Stage-1 `semantic_requirements` registry and the Stage-2 factor/truth-source projections. Resolve each semantic ID to local data once per data scenario, then reuse that relationship across every candidate protocol that references it. Never write a resolved column or selected truth ID back into the immutable extraction.
 
+Persist one authoritative `semantic_bindings` registry per data profile. Each selected entry records `semantic_input`, `physical_field`, relationship class, selection mode, and source. `field_relationships` are candidates and lineage, not competing selected bindings. Generate the support assessment, resolved recipe, preflight projection, and evaluator inputs from the authoritative registry. If any two persisted selected-binding locations disagree, block Stage 3; do not let a later component choose among them.
+
 Translate paper fields into semantic roles before choosing physical columns. Record:
 
 - paper name and definition;
@@ -82,6 +84,8 @@ Use `build_data_profile(...)`, `assess_evaluation_case_support(...)`, and `resol
 
 Persist one authoritative assessment and resolved recipe for every selected factor/source pair. If the selected source is unsupported, report that limitation or blocker rather than switching to another result block.
 
+Certify a `stage3_executable_evaluation_contract/v1` before marking a selected case executable. Require every resolved physical field to exist in the profiled panel, every accepted replacement to appear identically in the resolved recipe, all value-state modes to be executable, and the typed return interval to be internally consistent with the signal schedule. Persist the contract, required physical fields, binding registry, assessment ID, and blocking errors. A missing or blocked contract makes Stage 3 incomplete.
+
 For every bound evaluation input record `physical_field`, `semantic_concept`, unit, price basis, `value_space`, `transform_chain`, temporal semantics, and lineage. Mark every recipe transform `apply`, `reuse_materialized`, `blocked_unknown_state`, or `incompatible`. Keep the requested paper operation even when a materialized value is reused. Never log a field whose state already contains `transform.natural_log`.
 
 Before building the profile used for evaluation planning, materialize runtime labels required by the candidate cases. For ordinary trading-observation horizons use `materialize_forward_return(...)`, then record the derived field and lineage in the profile. Prose such as “20-day forward return” or a raw `close` field is not an executable `return_col`.
@@ -89,6 +93,8 @@ Before building the profile used for evaluation planning, materialize runtime la
 When the paper defines `T+h` in market trading days, load the exchange calendar with `load_recommended_trading_calendar(...)` including the required look-ahead and use `materialize_calendar_forward_return(...)`. Do not approximate an exchange-calendar horizon with each security's next surviving observations.
 
 When the paper defines the following whole natural month, use `materialize_natural_month_forward_return(...)` with the exchange calendar so the target is that month's last trading day. Do not replace a natural-month interval with 20 or 21 trading observations. Persist the target-date rule and any missing target prices in label lineage.
+
+Dispatch label materialization from the extracted typed interval. Do not reinterpret `next_evaluation_period` as a trading day merely because its horizon value is one. If its schedule-to-target rule remains ambiguous, stop at Stage 3 and return the ambiguity to extraction review.
 
 Evaluation-only gaps include forward-return labels, controls, weights, industry, market cap, benchmark, historical index membership, index-weight convention, risk-free rate/tenor, execution price, ST/PT, suspension, and future-tradability masks. Record them as selected-case limitations, replacements, or unsupported requirements.
 

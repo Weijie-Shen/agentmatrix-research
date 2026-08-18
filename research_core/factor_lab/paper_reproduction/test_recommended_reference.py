@@ -17,6 +17,7 @@ from research_core.factor_lab.paper_reproduction.recommended_reference import (
     load_recommended_yield_curve,
     materialize_calendar_forward_return,
     materialize_natural_month_forward_return,
+    materialize_typed_forward_return,
 )
 
 
@@ -68,6 +69,23 @@ class RecommendedReferenceTest(unittest.TestCase):
             "last exchange trading date of the Nth following natural month",
         )
         self.assertEqual(result.attrs["forward_return_lineage"]["horizon_unit"], "natural_month")
+
+    def test_typed_dispatcher_never_coerces_next_period_to_days(self) -> None:
+        panel = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2020-01-31", "2020-02-28"]),
+                "code": ["A", "A"],
+                "close": [10.0, 11.0],
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "explicit Stage-3 target-date resolver"):
+            materialize_typed_forward_return(
+                panel,
+                {
+                    "interval_type": "next_evaluation_period",
+                    "horizon_periods": 1,
+                },
+            )
 
     def test_loads_calendar_index_levels_constituents_and_explicit_weight_family(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

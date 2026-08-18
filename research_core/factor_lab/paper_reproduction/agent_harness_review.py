@@ -1674,6 +1674,18 @@ def _v3_resolved_recipe_defects(
     resolution = resolved.get("resolution", {}) or {}
     if resolution.get("status") != "resolved":
         defects.append(f"[stage3] {factor} recipe value-state resolution is not executable")
+    executable_contract = (
+        resolved_protocol.get("executable_contract")
+        or selected_case.get("executable_contract")
+        or {}
+    )
+    if executable_contract.get("status") != "certified":
+        defects.append(f"[stage3] {factor} executable evaluation contract is not certified")
+    if executable_contract.get("errors"):
+        defects.append(
+            f"[stage3] {factor} executable evaluation contract errors: "
+            f"{executable_contract.get('errors')}"
+        )
     bindings = resolved.get("global_policy_bindings", {}) or {}
     for semantic in ("st_or_pt_status", "next_day_suspension_status"):
         if not str(bindings.get(semantic, "")):
@@ -1691,6 +1703,12 @@ def _v3_resolved_recipe_defects(
             if not str(control.get("resolved_field", "")):
                 defects.append(
                     f"[stage3] {factor} recipe control {control.get('semantic_input', '-')} has no resolved field"
+                )
+            semantic = str(control.get("semantic_input", ""))
+            binding = (executable_contract.get("semantic_bindings", {}) or {}).get(semantic, {})
+            if semantic and str(binding.get("physical_field", "")) != str(control.get("resolved_field", "")):
+                defects.append(
+                    f"[stage3] {factor} recipe control {semantic} disagrees with executable-contract binding"
                 )
             for transform in control.get("transforms", []) or []:
                 if not isinstance(transform, dict):

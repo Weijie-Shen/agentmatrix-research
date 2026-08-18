@@ -103,6 +103,12 @@ def execute_evaluation_plan(
 
     if implementation_artifact.validation_status not in {"completed", "completed_with_limitations"}:
         raise ValueError("implementation artifact must be probe-validated before canonical evaluation")
+    _require_certified_v3_contracts(
+        plan,
+        data_context.calculation_panel
+        if data_context.evaluation_inputs is None
+        else data_context.evaluation_inputs,
+    )
     missing_inputs = [
         column
         for column in implementation_artifact.required_input_columns
@@ -487,6 +493,8 @@ def _missing_runtime_columns(case: dict[str, Any], frame: pd.DataFrame) -> list[
     evaluation_spec = dict(runtime.get("evaluation_spec", {}) or {})
     required_data = dict(runtime.get("required_data", {}) or {})
     required: list[str] = []
+    contract = dict(runtime.get("executable_contract", {}) or {})
+    required.extend(str(value) for value in contract.get("required_physical_fields", []) or [])
     return_col = str(evaluation_spec.get("return_col", "") or "")
     if not return_col:
         evaluation_values = required_data.get("evaluation", []) or []
@@ -537,6 +545,8 @@ def _runtime_input_columns(case: dict[str, Any]) -> list[str]:
     evaluation_spec = dict(runtime.get("evaluation_spec", {}) or {})
     required_data = dict(runtime.get("required_data", {}) or {})
     columns: list[str] = []
+    contract = dict(runtime.get("executable_contract", {}) or {})
+    columns.extend(_string_values(contract.get("required_physical_fields", [])))
     return_col = str(evaluation_spec.get("return_col", "") or "")
     if return_col:
         columns.append(return_col)
@@ -566,6 +576,40 @@ def _runtime_input_columns(case: dict[str, Any]) -> list[str]:
         if isinstance(item, dict):
             columns.extend(_string_values(item.get("resolved_field") or item.get("field")))
     return list(dict.fromkeys(column for column in columns if column))
+
+
+def _require_certified_v3_contracts(
+    plan: PaperEvaluationPlan,
+    evaluation_inputs: pd.DataFrame,
+) -> None:
+    """Reject stale or structurally invalid Stage-3 plans before full execution."""
+
+    available = {str(column) for column in evaluation_inputs.columns}
+    errors: list[str] = []
+    for factor_plan in plan.factor_plans:
+        for case in factor_plan.selected_evaluation_cases:
+            refs = case.get("paper_protocol_refs", {}) or {}
+            if str(refs.get("schema_version", "")) != "paper_extraction.ic_recipe.v3":
+                continue
+            runtime = case.get("resolved_protocol", {}) or {}
+            contract = runtime.get("executable_contract", {}) or case.get("executable_contract", {}) or {}
+            truth_id = str(case.get("truth_id") or case.get("truth_case_id") or "-")
+            if contract.get("status") != "certified":
+                errors.append(
+                    f"{factor_plan.factor_name}/{truth_id}: Stage-3 executable contract is not certified"
+                )
+                continue
+            missing = sorted(
+                str(field)
+                for field in contract.get("required_physical_fields", []) or []
+                if str(field) and str(field) not in available
+            )
+            if missing:
+                errors.append(
+                    f"{factor_plan.factor_name}/{truth_id}: certified fields are absent from evaluation inputs: {missing}"
+                )
+    if errors:
+        raise ValueError("Stage-3 executable contract validation failed: " + "; ".join(errors))
 
 
 def _string_values(value: Any) -> list[str]:

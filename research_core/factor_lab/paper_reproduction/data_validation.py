@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 
 from research_core.factor_lab.paper_reproduction.extraction import ExtractedFactor, ExtractedFactorDefinition
+from research_core.factor_lab.paper_reproduction.evaluation_recipe import authoritative_semantic_bindings
 from research_core.factor_lab.paper_reproduction.methodology import canonical_transform_method, transformed_input_methods
 
 
@@ -206,6 +207,7 @@ class DataProfile:
     derived_fields: list[dict[str, Any]] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
     field_relationships: list[dict[str, Any]] = field(default_factory=list)
+    semantic_bindings: dict[str, dict[str, Any] | str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -319,6 +321,7 @@ def build_data_profile(
     conventions: dict[str, Any] | None = None,
     derived_fields: list[dict[str, Any]] | None = None,
     field_relationships: list[FieldRelationship | dict[str, Any]] | None = None,
+    semantic_bindings: dict[str, dict[str, Any] | str] | None = None,
 ) -> DataProfile:
     parsed_dates = pd.to_datetime(frame[date_column], errors="coerce") if date_column in frame.columns else pd.Series(dtype="datetime64[ns]")
     duplicate_count = (
@@ -414,6 +417,7 @@ def build_data_profile(
         conventions=resolved_conventions,
         derived_fields=resolved_derived_fields,
         field_relationships=[asdict(item) if isinstance(item, FieldRelationship) else dict(item) for item in (field_relationships or [])],
+        semantic_bindings=dict(semantic_bindings or {}),
         limitations=limitations,
     )
 
@@ -875,6 +879,10 @@ def _resolve_semantic_requirement(definition: dict[str, Any], profile: dict[str,
     columns = set(str(column) for column in profile.get("columns", []) or [])
     conventions = profile.get("conventions", {}) if isinstance(profile.get("conventions", {}), dict) else {}
 
+    selected_binding = _selected_binding_resolution(semantic_id, profile)
+    if selected_binding is not None:
+        return selected_binding
+
     # Stage 3 may explicitly bind an otherwise paper-specific semantic ID to a
     # materialized field. Preserve the declared relationship class verbatim:
     # proxies stay proxies and unsupported substitutes stay unavailable. Exact
@@ -1062,6 +1070,9 @@ def _resolve_requirement(field: str, profile: dict[str, Any]) -> dict[str, Any]:
         for item in (profile.get("derived_fields", []) or [])
         if isinstance(item, dict) and item.get("field")
     }
+    selected_binding = _selected_binding_resolution(field, profile)
+    if selected_binding is not None:
+        return selected_binding
     relationships = _relationships_for_requirement(field, profile)
     custom_self_relationship = next(
         (
@@ -1166,6 +1177,53 @@ def _resolve_requirement(field: str, profile: dict[str, Any]) -> dict[str, Any]:
         "coverage_ratio": 0.0,
         "execution_ready": False,
     }
+
+
+def _selected_binding_resolution(field: str, profile: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve a Stage-3 selected binding before considering alias candidates."""
+
+    registry, conflicts = authoritative_semantic_bindings(profile)
+    matching_conflicts = [error for error in conflicts if f"for {field}:" in error]
+    if matching_conflicts:
+        result = _missing_semantic_resolution()
+        result["binding_errors"] = matching_conflicts
+        return result
+    record = registry.get(field)
+    if not record:
+        return None
+    physical = str(record.get("physical_field", ""))
+    columns = {str(column) for column in profile.get("columns", []) or []}
+    relationship_type = str(record.get("relationship", "exact_alias"))
+    try:
+        relationship = FieldRelationship(
+            field,
+            physical,
+            relationship_type,
+            reason=str(record.get("reason", "Selected by the authoritative Stage-3 binding registry.")),
+            expected_effect=str(record.get("expected_effect", "")),
+            requires_reporting=relationship_type != "exact_alias",
+            selection_mode=str(record.get("selection_mode", "stage3_explicit")),
+            source=str(record.get("source", "data_profile.semantic_bindings")),
+        )
+    except ValueError:
+        result = _missing_semantic_resolution(candidate_field=physical)
+        result["binding_errors"] = [f"unsupported relationship for {field}: {relationship_type}"]
+        return result
+    if physical not in columns or relationship_type == "unsupported_substitute":
+        return _relationship_resolution(
+            relationship,
+            availability="missing",
+            semantic_availability="missing" if physical not in columns else "not_assessed",
+            execution_ready=False,
+            profile=profile,
+        )
+    return _available_field_resolution(
+        physical,
+        profile,
+        relationship=relationship_type,
+        paper_field=field,
+        relationship_record=relationship,
+    )
 
 
 def _relationships_for_requirement(field: str, profile: dict[str, Any]) -> list[FieldRelationship]:

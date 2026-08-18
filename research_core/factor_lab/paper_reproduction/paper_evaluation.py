@@ -8,7 +8,10 @@ from typing import Any
 from contracts.factor_research import FactorResearchSpec
 from research_core.factor_lab.paper_reproduction.data_validation import assess_evaluation_case_support
 from research_core.factor_lab.paper_reproduction.evaluators import evaluator_capabilities_for_case
-from research_core.factor_lab.paper_reproduction.evaluation_recipe import resolve_recipe_value_states
+from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
+    certify_resolved_evaluation_recipe,
+    resolve_recipe_value_states,
+)
 
 GENERIC_EVALUATION_FAMILIES = {"ic_analysis", "ic_regression"}
 EVALUATION_METHOD_PRIORITY = {
@@ -147,6 +150,15 @@ def _build_factor_evaluation_plan(
         reassess_support=reassess_support,
     )
     requires_paper_local_evaluator = bool(implementation_targets)
+    blocked_contracts = [
+        case
+        for case in assessed_cases
+        if (case.get("executable_contract", {}) or {}).get("status") == "blocked"
+    ]
+    if blocked_contracts:
+        blocked_reasons.append(
+            "Stage-3 executable evaluation contract is blocked for the selected truth source"
+        )
 
     if blocked_reasons:
         status = "needs_human_review"
@@ -490,6 +502,34 @@ def _select_evaluation_cases_by_support(
         assessed_case["diagnostic_only_metrics"] = assessment["diagnostic_only_metrics"]
         assessed_case["replacement_records"] = assessment.get("replacement_records", [])
         assessed_case["case_executable"] = assessment.get("case_executable", True)
+        recipe = assessed_case.get("evaluation_recipe", {}) or {}
+        if recipe and assessed_case.get("paper_protocol_refs"):
+            resolved_recipe, executable_contract = certify_resolved_evaluation_recipe(
+                recipe,
+                data_profile,
+                assessment,
+            )
+            assessed_case["resolved_evaluation_recipe"] = resolved_recipe
+            assessed_case["executable_contract"] = executable_contract
+            assessment["executable_contract"] = executable_contract
+            if executable_contract["status"] != "certified":
+                assessment["case_executable"] = False
+                assessment["lifecycle_state"] = "stage3_contract_blocked"
+                assessment["selection_reason"] = "Stage-3 executable contract is not certified"
+                assessment.setdefault("deviations", []).append(
+                    {
+                        "category": "stage3_executable_contract",
+                        "paper_value": "selected truth-source recipe",
+                        "resolved_value": executable_contract,
+                        "reason": "Stage 3 could not produce one internally consistent physical-field contract.",
+                        "severity": "fundamental",
+                        "affected_metrics": ["*"],
+                        "truth_matching_policy": "not_evaluated",
+                        "source": "stage3_contract_certification",
+                    }
+                )
+                assessed_case["case_executable"] = False
+                assessed_case["deviations"] = assessment["deviations"]
         assessed.append(assessed_case)
 
     ordered = sorted(assessed, key=_support_priority)
@@ -629,6 +669,7 @@ def _resolved_case(case: dict[str, Any], *, selection_reason: str) -> dict[str, 
         "universe_protocol": resolved_universe_protocol,
         "evaluation_recipe": copy.deepcopy(payload.get("evaluation_recipe", {}) or {}),
         "resolved_evaluation_recipe": copy.deepcopy(payload.get("resolved_evaluation_recipe", {}) or {}),
+        "executable_contract": copy.deepcopy(payload.get("executable_contract", {}) or {}),
         "paper_protocol_refs": dict(payload.get("paper_protocol_refs", {}) or {}),
         "operation_pipeline_id": payload.get("operation_pipeline_id", ""),
         "timing": {

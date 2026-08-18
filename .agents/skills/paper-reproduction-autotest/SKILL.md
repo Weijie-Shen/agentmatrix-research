@@ -73,6 +73,8 @@ Immediately persist each dispatched task with `record_worker_started(...)`. When
 
 The generated harness contains a deterministic pre-return command. Require the worker to run it, repair from `earliest_invalid_stage`, and rerun dependent stages while the same task and worktree remain active. When the worker announces completion, `record_worker_stopped(..., outcome="completed")` independently reruns this gate. If it raises because `complete=false`, do not stop, harvest, or create a retry attempt: send the persisted defects and repair actions back to that same active worker. For fresh v3 runs, the gate rejects v2 extraction, Stage 3 or Stage 6 truth-source reselection, unresolved value states, a missing global-policy trace, reordered preprocessing, collapsed sequential neutralizations, and transformed controls that lack reuse/apply lineage. A genuine hard blocker may instead be recorded as `failed`; scientific metric drift must not be repaired by tuning formulas to paper answers.
 
+The gate must also reject untyped return labels, schedule/return-interval contradictions, missing or blocked Stage-3 executable contracts, and any disagreement between a recipe control's `resolved_field` and the contract's authoritative semantic binding. Attribute these to extraction or Stage 3 before accepting Stage-6 execution artifacts.
+
 ## 4. Harvest and review
 
 After a worker stops, call `harvest_run_artifacts(...)` before cleanup. It copies changed reproduction artifacts to the batch control root, records hashes and omissions, and preserves Git status and a source patch.

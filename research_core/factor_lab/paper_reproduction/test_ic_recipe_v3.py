@@ -12,6 +12,7 @@ import pandas as pd
 from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
     GLOBAL_EVALUATION_POLICY_ID,
     METHOD_CATALOG,
+    certify_resolved_evaluation_recipe,
     resolve_recipe_value_states,
 )
 from research_core.factor_lab.paper_reproduction.evaluators import apply_evaluation_recipe, evaluate_paper_case
@@ -40,6 +41,7 @@ def _recipe(*steps: dict) -> dict:
         "preprocessing_steps": list(steps),
         "return_label": {
             "method_id": "return.forward_close_to_close",
+            "interval_type": "exchange_calendar_days",
             "horizon_exchange_days": 1,
             "output_field": "forward_return_1d",
         },
@@ -128,6 +130,22 @@ class ICRecipeExtractionTests(unittest.TestCase):
         self.assertFalse(validation.valid)
         self.assertTrue(any("missing factors" in error for error in validation.errors))
 
+    def test_v3_return_label_requires_typed_interval(self) -> None:
+        extraction = _extraction()
+        extraction.truth_sources[0].evaluation_recipe["return_label"].pop("interval_type")
+        validation = validate_paper_extraction(extraction)
+        self.assertFalse(validation.valid)
+        self.assertTrue(any("interval_type is required" in error for error in validation.errors))
+
+    def test_monthly_t_plus_one_is_not_silently_coerced_to_one_exchange_day(self) -> None:
+        extraction = _extraction()
+        recipe = extraction.truth_sources[0].evaluation_recipe
+        recipe["sampling"]["signal_schedule"] = "monthly"
+        recipe["return_label"]["evidence"] = "T+1 period return"
+        validation = validate_paper_extraction(extraction)
+        self.assertFalse(validation.valid)
+        self.assertTrue(any("ambiguously maps monthly T+1" in error for error in validation.errors))
+
     def test_v3_json_round_trip_preserves_recipe_and_selection(self) -> None:
         extraction = _extraction()
         with tempfile.TemporaryDirectory() as directory:
@@ -160,6 +178,103 @@ class ICRecipeExtractionTests(unittest.TestCase):
             selected = factor_plan.selected_evaluation_cases[0]
             self.assertEqual(selected["truth_id"], "table_52_plain")
             self.assertIn("fixed during Stage 1", selected["selection_reason"])
+
+    def test_stage3_plan_uses_same_industry_binding_in_assessment_recipe_and_contract(self) -> None:
+        extraction = _extraction()
+        extraction.semantic_requirements.append(
+            ExtractedSemanticRequirement(
+                "industry_classification",
+                "industry",
+                "industry dummy classification",
+            )
+        )
+        extraction.truth_sources[0].evaluation_recipe["preprocessing_steps"].append(
+            {
+                "order": 4,
+                "method_id": "neutralize.cross_sectional_regression_residual",
+                "semantic_input": "factor_exposure",
+                "controls": [
+                    {
+                        "semantic_input": "industry_classification",
+                        "encoding": "categorical",
+                    }
+                ],
+            }
+        )
+        specs = normalize_extraction_to_specs(extraction)
+        profile = {
+            "source_id": "industry-profile",
+            "columns": [
+                "date",
+                "code",
+                "industry_code",
+                "forward_return_1d",
+                "is_st",
+                "next_is_suspended",
+            ],
+            "date_min": "2020-01-01",
+            "date_max": "2020-12-31",
+            "missingness": {
+                "industry_code": 0.1,
+                "forward_return_1d": 0.0,
+                "is_st": 0.0,
+                "next_is_suspended": 0.0,
+            },
+            "semantic_bindings": {
+                "industry_classification": {
+                    "physical_field": "industry_code",
+                    "relationship": "proxy_substitute",
+                }
+            },
+            "derived_fields": [{"field": "forward_return_1d", "method": "calendar_forward_return"}],
+            "conventions": {},
+        }
+        plan = build_paper_evaluation_plan(specs, data_profiles={"*": profile})
+        for factor_plan in plan.factor_plans:
+            selected = factor_plan.selected_evaluation_cases[0]
+            assessment_result = next(
+                item
+                for item in selected["support_assessment"]["requirement_results"]
+                if item["requirement"] == "industry_classification"
+            )
+            recipe_control = selected["resolved_protocol"]["resolved_evaluation_recipe"][
+                "preprocessing_steps"
+            ][3]["controls"][0]
+            contract_binding = selected["resolved_protocol"]["executable_contract"][
+                "semantic_bindings"
+            ]["industry_classification"]
+            self.assertEqual(assessment_result["available_value"], "industry_code")
+            self.assertEqual(recipe_control["resolved_field"], "industry_code")
+            self.assertEqual(contract_binding["physical_field"], "industry_code")
+            self.assertEqual(selected["resolved_protocol"]["executable_contract"]["status"], "certified")
+
+    def test_stage3_plan_blocks_conflicting_profile_binding_locations(self) -> None:
+        specs = normalize_extraction_to_specs(_extraction())
+        profile = {
+            "source_id": "conflicting-profile",
+            "columns": [
+                "date",
+                "code",
+                "forward_return_1d",
+                "is_st",
+                "next_is_suspended",
+            ],
+            "date_min": "2020-01-01",
+            "date_max": "2020-12-31",
+            "missingness": {
+                "forward_return_1d": 0.0,
+                "is_st": 0.0,
+                "next_is_suspended": 0.0,
+            },
+            "semantic_bindings": {"st_or_pt_status": "is_st"},
+            "conventions": {"semantic_bindings": {"st_or_pt_status": "other_status"}},
+            "derived_fields": [{"field": "forward_return_1d", "method": "calendar_forward_return"}],
+        }
+        plan = build_paper_evaluation_plan(specs, data_profiles={"*": profile})
+        self.assertEqual(plan.status, "needs_human_review")
+        for factor_plan in plan.factor_plans:
+            self.assertEqual(factor_plan.selected_evaluation_cases, [])
+            self.assertTrue(any("executable evaluation contract" in reason for reason in factor_plan.blocked_reasons))
 
 
 class RecipeValueStateTests(unittest.TestCase):
@@ -204,6 +319,68 @@ class RecipeValueStateTests(unittest.TestCase):
         logged_resolved = resolve_recipe_value_states(recipe, logged_profile)
         logged_transform = logged_resolved["preprocessing_steps"][0]["controls"][0]["transforms"][0]
         self.assertEqual(logged_transform["execution_mode"], "reuse_materialized")
+
+    def test_stage3_contract_propagates_one_authoritative_industry_binding(self) -> None:
+        recipe = _recipe(
+            {
+                "order": 1,
+                "method_id": "neutralize.cross_sectional_regression_residual",
+                "controls": [
+                    {
+                        "semantic_input": "industry_classification",
+                        "encoding": "categorical",
+                    }
+                ],
+            }
+        )
+        profile = {
+            "source_id": "industry-profile",
+            "columns": [
+                "industry_code",
+                "forward_return_1d",
+                "is_st",
+                "next_is_suspended",
+            ],
+            "semantic_bindings": {
+                "industry_classification": {
+                    "physical_field": "industry_code",
+                    "relationship": "proxy_substitute",
+                }
+            },
+        }
+        assessment = {
+            "assessment_id": "support-industry",
+            "requirement_results": [
+                {
+                    "requirement": "industry_classification",
+                    "available_value": "industry_code",
+                    "relationship": "proxy_substitute",
+                    "execution_ready": True,
+                }
+            ],
+        }
+        resolved, contract = certify_resolved_evaluation_recipe(recipe, profile, assessment)
+        control = resolved["preprocessing_steps"][0]["controls"][0]
+        self.assertEqual(control["resolved_field"], "industry_code")
+        self.assertEqual(contract["status"], "certified")
+        self.assertEqual(
+            contract["semantic_bindings"]["industry_classification"]["physical_field"],
+            "industry_code",
+        )
+
+    def test_stage3_contract_blocks_conflicting_selected_bindings(self) -> None:
+        profile = {
+            "columns": ["industry", "industry_code", "forward_return_1d", "is_st", "next_is_suspended"],
+            "semantic_bindings": {"industry_classification": "industry_code"},
+            "conventions": {"semantic_bindings": {"industry_classification": "industry"}},
+        }
+        _, contract = certify_resolved_evaluation_recipe(
+            _recipe(),
+            profile,
+            {"assessment_id": "support", "requirement_results": []},
+        )
+        self.assertEqual(contract["status"], "blocked")
+        self.assertTrue(any("conflicting Stage-3 bindings" in error for error in contract["errors"]))
 
 
 class RecipeExecutionTests(unittest.TestCase):

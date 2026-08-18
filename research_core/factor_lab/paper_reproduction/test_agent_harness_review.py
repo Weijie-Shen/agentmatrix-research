@@ -44,6 +44,7 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             ],
             "return_label": {
                 "method_id": "return.forward_close_to_close",
+                "interval_type": "exchange_calendar_days",
                 "horizon_exchange_days": 1,
             },
             "ic_method": {"method_id": "ic.spearman_rank"},
@@ -93,7 +94,23 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             "evaluation_recipe": immutable_recipe,
             "selection_reason": "truth source fixed during Stage 1 extraction",
             "support_assessment": {"assessment_id": "support-1"},
-            "resolved_protocol": {"resolved_evaluation_recipe": recipe},
+            "resolved_protocol": {
+                "resolved_evaluation_recipe": recipe,
+                "executable_contract": {
+                    "schema_version": "stage3_executable_evaluation_contract/v1",
+                    "status": "certified",
+                    "semantic_bindings": {
+                        "market_cap": {"physical_field": "market_cap"}
+                    },
+                    "required_physical_fields": [
+                        "market_cap",
+                        "forward_return_1d",
+                        "is_st",
+                        "next_is_suspended",
+                    ],
+                    "errors": [],
+                },
+            },
         }
         self.assertEqual(
             _v3_resolved_recipe_defects("alpha", selected, extraction["truth_sources"][0]),

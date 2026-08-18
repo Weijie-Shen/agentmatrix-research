@@ -60,6 +60,7 @@ For reported count ratios or percentages, test whether multiple rows imply one u
 
 Keep paper protocol immutable. Do not rewrite WLS as OLS, a paper sample as local coverage, or an unavailable field as a proxy during extraction.
 Encode the paper's return interval semantically. “Following whole natural month” is a natural-month horizon, not a conventional 20/21-trading-day approximation.
+Read `references/return-label-method-catalog.md` before encoding any return label. Treat `T+1` as the next declared evaluation period until nearby evidence establishes a trading-day, exchange-calendar, natural-month, or fixed-date interval. Run recipe validation before normalization; a missing typed interval or a monthly-`T+1`/one-day contradiction is blocking extraction evidence, not a Stage-3 guess.
 
 Extract the result blocks needed to support the Stage-1 selection and preserve relevant alternatives only when they provide necessary provenance or expose a paper conflict. Apply `truth-source-selection.md` during extraction. Stage 3 assesses the selected source's support and Stage 6 executes it; neither stage reselects truth.
 

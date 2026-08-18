@@ -19,6 +19,8 @@ Read the Stage-1 selected IC truth, resolved recipe, data profile, Stage-3 suppo
 6. assign comparability and metric eligibility;
 7. execute only selected cases.
 
+For every v3 case, require a certified `stage3_executable_evaluation_contract/v1`. Stage 6 must consume its physical fields and resolved recipe unchanged. Do not dynamically rename a missing semantic field, choose another alias, or repair a conflicting binding during execution; return the case to Stage 3.
+
 Every truth case needs one lifecycle outcome: `selected`, `executed`, `deferred_by_budget`, `unsupported_evaluator`, `insufficient_data`, `paper_truth_conflict`, `superseded_by_better_supported_truth`, or `evaluation_error`.
 
 Do not substitute another paper result block because the selected source is data-heavy. Materialize constructible labels and resolve accepted proxies first; otherwise report the selected source as unsupported or deferred with evidence.
