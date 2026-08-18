@@ -77,6 +77,8 @@ Run long full-panel evaluations in a persistent command session. If the command 
 
 Persist each completed scenario immediately with `export_evaluation_bundle(...)`. On resume, use `load_evaluation_bundle(...)`, validate implementation identity and scenario coverage, and run only missing work. Use `merge_evaluation_bundles(...)` before combined reporting/truth matching. A later failure must not downgrade or erase earlier durable `executed` records.
 
+Stage 6 is not the end of an evaluation runner. Once all scenario processes have exited, reload and merge their durable bundles, run `compare_evaluation_bundle_to_paper_truth(...)`, and persist the result with `export_paper_truth_matches(...)` before updating Stage 7. A runner that only exports bundles is incomplete even if every metric was calculated.
+
 Only the direct `EvaluationBundle` returned by `execute_evaluation_plan(...)` is execution evidence. Never hand-author, reshape, summarize, or backfill an `executed` record or calculated metric from paper truth. A reviewable bundle retains its `evaluation_bundle/v2` schema, canonical execution IDs, `canonical_plan_executor` mode, certified source/specification hashes, SHA-256 snapshot identity, resource preflight/telemetry, requested/executed sample lineage, alignment diagnostics, universe diagnostics, persisted cross-sectional IC values, and every per-record field. Paper values enter only the subsequent truth-matching call.
 
 ## Truth matching

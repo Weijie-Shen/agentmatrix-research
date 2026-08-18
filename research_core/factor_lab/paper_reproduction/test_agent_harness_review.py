@@ -336,7 +336,42 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             assessment = assess_agent_harness_run(tmp_dir, expected_factors=["Alpha3"])
             self.assertFalse(assessment.complete)
             self.assertIn("[report] no JSON paper reproduction report was produced", assessment.defects)
-            self.assertEqual(assessment.earliest_invalid_stage, "final_report")
+            self.assertIn(
+                "[evaluation] no canonical evaluation bundle was found",
+                assessment.defects,
+            )
+            self.assertIn(
+                "[truth] no standalone truth-match artifact was found",
+                assessment.defects,
+            )
+            self.assertEqual(assessment.earliest_invalid_stage, "paper_extraction")
+            self.assertEqual(assessment.diagnostics["deterministic_gate_version"], "v3")
+
+    def test_missing_report_reports_earliest_missing_upstream_family(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_complete_fixture(root, ["Alpha3"])
+            runtime = root / "runtime" / "factor_lab"
+            for path in (runtime / "reports").glob("*"):
+                path.unlink()
+            for path in (runtime / "evaluation_bundles").glob("*"):
+                path.unlink()
+            for path in (runtime / "truth_matches").glob("*"):
+                path.unlink()
+
+            assessment = assess_agent_harness_run(root, expected_factors=["Alpha3"])
+
+            self.assertFalse(assessment.complete)
+            self.assertEqual(assessment.earliest_invalid_stage, "evaluation")
+            self.assertIn(
+                "[evaluation] no canonical evaluation bundle was found",
+                assessment.defects,
+            )
+            self.assertIn(
+                "[truth] no standalone truth-match artifact was found",
+                assessment.defects,
+            )
+            self.assertIn("[report] no JSON paper reproduction report was produced", assessment.defects)
 
     def test_formula_wide_required_field_superset_is_incomplete(self) -> None:
         records = [{"factor_name": "alpha", "formula": "rank(close)", "required_fields": ["open", "close", "volume"]}]

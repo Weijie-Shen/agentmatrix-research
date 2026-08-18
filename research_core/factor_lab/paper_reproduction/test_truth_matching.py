@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from research_core.factor_lab.paper_reproduction.evaluation_execution import (
     EvaluationBundle,
@@ -14,11 +17,32 @@ from research_core.factor_lab.paper_reproduction.extraction import (
 from research_core.factor_lab.paper_reproduction.truth_matching import (
     compare_evaluation_bundle_to_paper_truth,
     compare_evaluation_metrics_to_paper_truth,
+    export_paper_truth_matches,
     interpret_truth_match_quality,
 )
 
 
 class PaperTruthMatchingTest(unittest.TestCase):
+    def test_truth_match_export_is_a_durable_stage7_artifact(self) -> None:
+        result = compare_evaluation_metrics_to_paper_truth(
+            {"rank_ic_mean": 0.05},
+            ExtractedTruthSource(
+                truth_id="table_7",
+                truth_type="evaluation_results",
+                metrics={"rank_ic_mean": 0.05},
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = export_paper_truth_matches(
+                {"Alpha3": [result]},
+                Path(tmp_dir) / "truth_matches" / "matches.json",
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["schema_version"], "paper_truth_matches/v1")
+        self.assertEqual(payload["results"]["Alpha3"][0]["truth_id"], "table_7")
+        self.assertEqual(payload["results"]["Alpha3"][0]["status"], "exact_match")
+
     def test_durable_bundle_truth_matching_uses_record_comparability_and_eligibility(self) -> None:
         truth = ExtractedTruthSource(
             truth_id="table_3_eval",

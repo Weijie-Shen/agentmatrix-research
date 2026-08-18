@@ -145,6 +145,7 @@ from research_core.factor_lab.paper_reproduction.paper_autotest import (
     record_reviewer_started,
     record_worker_started,
     record_worker_stopped,
+    scientific_process_lease,
     validate_selection,
 )
 from research_core.factor_lab.paper_reproduction.pipeline import (
@@ -220,6 +221,7 @@ from research_core.factor_lab.paper_reproduction.truth_matching import (
     PaperTruthMatchResult,
     compare_evaluation_bundle_to_paper_truth,
     compare_evaluation_metrics_to_paper_truth,
+    export_paper_truth_matches,
 )
 
 __all__ = [
@@ -319,6 +321,7 @@ __all__ = [
     "build_paper_reproduction_report",
     "compare_evaluation_metrics_to_paper_truth",
     "compare_evaluation_bundle_to_paper_truth",
+    "export_paper_truth_matches",
     "cleanup_test_worktree",
     "create_batch_manifest",
     "canonical_transform_method",
@@ -376,6 +379,7 @@ __all__ = [
     "record_reviewer_started",
     "record_worker_started",
     "record_worker_stopped",
+    "scientific_process_lease",
     "assess_agent_harness_run",
     "process_peak_rss_bytes",
     "recommended_data_available",

@@ -89,16 +89,25 @@ def assess_agent_harness_run(
             harness_mtime = harness_metadata_path.stat().st_mtime
             report_paths = [path for path in report_paths if path.stat().st_mtime >= harness_mtime]
     if not report_paths:
-        early_defects = [*defects, "[report] no JSON paper reproduction report was produced"]
-        earliest, actions = _repair_guidance(early_defects)
+        stage_statuses, standalone_limitations = _standalone_pipeline_status(runtime_root)
+        defects.extend(_pre_report_artifact_defects(runtime_root))
+        defects.append("[report] no JSON paper reproduction report was produced")
+        defects = _unique(defects)
+        earliest, actions = _repair_guidance(defects)
         return AgentHarnessRunAssessment(
             complete=False,
             worktree=str(root),
             expected_factors=list(expected_factors),
             harness_metadata_path=str(harness_metadata_path) if harness_metadata_path else "",
-            defects=early_defects,
+            stage_statuses=stage_statuses,
+            defects=defects,
+            limitations=standalone_limitations,
             earliest_invalid_stage=earliest,
             repair_actions=actions,
+            diagnostics={
+                "deterministic_gate_version": "v3",
+                "report_available": False,
+            },
         )
 
     report_path = report_paths[-1]
@@ -109,8 +118,11 @@ def assess_agent_harness_run(
     try:
         report = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        early_defects = [*defects, f"[report] JSON report could not be loaded: {exc}"]
-        earliest, actions = _repair_guidance(early_defects)
+        stage_statuses, standalone_limitations = _standalone_pipeline_status(runtime_root)
+        defects.extend(_pre_report_artifact_defects(runtime_root))
+        defects.append(f"[report] JSON report could not be loaded: {exc}")
+        defects = _unique(defects)
+        earliest, actions = _repair_guidance(defects)
         return AgentHarnessRunAssessment(
             complete=False,
             worktree=str(root),
@@ -118,9 +130,16 @@ def assess_agent_harness_run(
             report_json_path=str(report_path),
             report_markdown_path=str(markdown_path) if markdown_path.is_file() else "",
             harness_metadata_path=str(harness_metadata_path) if harness_metadata_path else "",
-            defects=early_defects,
+            stage_statuses=stage_statuses,
+            defects=defects,
+            limitations=standalone_limitations,
             earliest_invalid_stage=earliest,
             repair_actions=actions,
+            diagnostics={
+                "deterministic_gate_version": "v3",
+                "report_available": True,
+                "report_loadable": False,
+            },
         )
 
     pipeline = report.get("pipeline", {}) or {}
@@ -227,7 +246,7 @@ def assess_agent_harness_run(
                 "evaluation_execution_counts", {}
             ),
             "truth_status_counts": (report.get("summary", {}) or {}).get("truth_status_counts", {}),
-            "deterministic_gate_version": "v2",
+            "deterministic_gate_version": "v3",
         }
     )
     return AgentHarnessRunAssessment(
@@ -245,6 +264,61 @@ def assess_agent_harness_run(
         repair_actions=repair_actions,
         diagnostics=diagnostics,
     )
+
+
+def _pre_report_artifact_defects(runtime_root: Path) -> list[str]:
+    """Inventory every required stage even when Stage 8 output is absent.
+
+    The completion gate used to return immediately on a missing report. That
+    made an evaluation/truth-matching failure look like a report-only failure
+    and sent workers to the wrong repair stage. This deliberately performs a
+    shallow, report-independent inventory; the full semantic audit still runs
+    once a loadable report exists.
+    """
+
+    checks = (
+        ("extraction", runtime_root / "paper_specs", "standalone paper-extraction JSON"),
+        ("specs", runtime_root / "specs", "standalone normalized-spec JSON"),
+        ("stage3", runtime_root / "data_profiles", "standalone Stage 3 data profile"),
+        (
+            "implementation",
+            runtime_root / "implementation_artifacts",
+            "FactorImplementationArtifact JSON",
+        ),
+        ("tests", runtime_root / "test_results", "durable implementation-test result"),
+        ("evaluation-plan", runtime_root / "evaluation_plans", "standalone evaluation plan"),
+        ("evaluation", runtime_root / "evaluation_bundles", "canonical evaluation bundle"),
+    )
+    defects = [
+        f"[{category}] no {description} was found"
+        for category, directory, description in checks
+        if _latest_json_path(directory) is None
+    ]
+    if _latest_json_path(runtime_root / "paper_jobs") is None:
+        defects.append("[pipeline] no standalone pipeline state was found")
+    truth_path = _latest_json_path(runtime_root / "truth_matches") or _latest_json_path(
+        runtime_root / "truth"
+    )
+    if truth_path is None:
+        defects.append("[truth] no standalone truth-match artifact was found")
+    return defects
+
+
+def _standalone_pipeline_status(runtime_root: Path) -> tuple[dict[str, str], list[str]]:
+    pipeline_path = _latest_json_path(runtime_root / "paper_jobs")
+    if pipeline_path is None:
+        return {}, []
+    payload = _load_json(pipeline_path)
+    statuses: dict[str, str] = {}
+    limitations: list[str] = []
+    for stage in payload.get("stages", []) or []:
+        if not isinstance(stage, dict):
+            continue
+        name = str(stage.get("name", ""))
+        if name:
+            statuses[name] = str(stage.get("execution_status") or stage.get("status", ""))
+        limitations.extend(str(item) for item in stage.get("limitations", []) or [])
+    return statuses, _unique(limitations)
 
 
 def _deep_completion_defects(
@@ -1376,7 +1450,10 @@ def _repair_guidance(defects: list[str]) -> tuple[str, list[str]]:
         ("input_dataframe_validation", {"stage3"}),
         ("factor_implementation", {"implementation"}),
         ("implementation_tests", {"tests"}),
-        ("evaluation", {"evaluation-plan", "evaluation-lineage", "evaluation", "protocol"}),
+        (
+            "evaluation",
+            {"evaluation-plan", "evaluation-lineage", "evaluation", "protocol", "process"},
+        ),
         ("paper_truth_validation", {"truth"}),
         ("final_report", {"pipeline", "report", "harvest", "provenance"}),
     )
@@ -1397,6 +1474,7 @@ def _repair_guidance(defects: list[str]) -> tuple[str, list[str]]:
         "evaluation-lineage": "Restore Stage-1 factor-to-truth selection, assess only that source in Stage 3, and execute it without reselection.",
         "evaluation": "Rerun every required scenario through the certified implementation and persist successful records.",
         "protocol": "Apply the mandatory global policy, then execute the resolved ordered recipe with all controls and value-state decisions.",
+        "process": "Poll the same persistent evaluation process to exit, verify artifacts are stable, then rerun the completion gate before stopping or harvesting.",
         "truth": "Rebuild truth matching from executed selected cases and exclude diagnostic-only metrics from denominators.",
         "pipeline": "Reconcile pipeline stage claims and artifact paths with files that actually exist.",
         "report": "Regenerate both final reports from reconciled persisted artifacts after upstream repairs.",

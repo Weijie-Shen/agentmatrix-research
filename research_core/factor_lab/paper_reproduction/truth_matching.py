@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -170,6 +172,28 @@ def compare_evaluation_bundle_to_paper_truth(
             )
         )
     return results
+
+
+def export_paper_truth_matches(
+    results: dict[str, list[PaperTruthMatchResult]],
+    path: str | Path,
+) -> Path:
+    """Persist canonical Stage-7 output separately from the final report."""
+
+    destination = Path(path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "paper_truth_matches/v1",
+        "results": {
+            str(factor): [asdict(result) for result in factor_results]
+            for factor, factor_results in results.items()
+        },
+    }
+    destination.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    return destination
 
 
 def _truth_sources_by_factor(

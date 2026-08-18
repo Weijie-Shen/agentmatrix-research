@@ -24,11 +24,23 @@ from research_core.factor_lab.paper_reproduction.paper_autotest import (
     record_reviewer_started,
     record_worker_started,
     record_worker_stopped,
+    scientific_process_lease,
     validate_selection,
 )
 
 
 class PaperAutotestTest(unittest.TestCase):
+    def test_scientific_process_lease_persists_terminal_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            with scientific_process_lease(root, process_name="qfq-evaluation") as receipt_path:
+                running = json.loads(receipt_path.read_text(encoding="utf-8"))
+                self.assertEqual(running["status"], "running")
+
+            completed = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(completed["status"], "completed")
+            self.assertTrue(completed["completed_at"])
+
     def test_bundled_skill_self_test_is_not_factor_implementation_test_source(self) -> None:
         bundled = (
             "runtime/factor_lab/agent_harness/run/skills/"
@@ -314,6 +326,15 @@ class PaperAutotestTest(unittest.TestCase):
                 "runtime/factor_lab/test_evidence/formula.json": "{}",
                 "runtime/factor_lab/evaluation_plans/plan.json": "{}",
                 "runtime/factor_lab/evaluation_bundles/qfq.json": "{}",
+                "runtime/factor_lab/process_receipts/run-demo.json": json.dumps(
+                    {
+                        "schema_version": "scientific_process_receipt/v1",
+                        "receipt_id": "run-demo",
+                        "process_name": "run-demo",
+                        "status": "completed",
+                        "completed_at": "2026-08-18T00:00:00Z",
+                    }
+                ),
                 "runtime/factor_lab/truth_matches/matches.json": "{}",
                 "runtime/factor_lab/truth_comparisons/comparison.json": "{}",
                 "runtime/factor_lab/reports/report.json": "{}",
@@ -501,6 +522,130 @@ class PaperAutotestTest(unittest.TestCase):
             self.assertEqual(len(gate_history), 2)
             latest = json.loads((Path(plan.control_root) / "worker_completion_gate.json").read_text(encoding="utf-8"))
             self.assertTrue(latest["complete"])
+
+    def test_completed_worker_is_rejected_while_scientific_process_is_active(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            papers = root / "papers"
+            worktrees = root / "worktrees"
+            repo.mkdir()
+            papers.mkdir()
+            (papers / "Demo Paper.pdf").write_bytes(b"paper")
+            self._init_framework_repo(repo)
+            plan = create_batch_manifest(
+                batch_id="worker-process-gate",
+                papers_root=papers,
+                repository_root=repo,
+                base_ref="HEAD",
+                selections=[
+                    PaperSelectionArtifact(
+                        paper=discover_test_papers(papers)[0],
+                        selected_factors=[self._factor("FactorA")],
+                    )
+                ],
+                worktree_root=worktrees,
+            ).runs[0]
+            prepare_test_worktree(plan)
+            prepare_run_harness(plan)
+            record_worker_started(plan, worker_task_id="terra-worker-live-process")
+            passed = AgentHarnessRunAssessment(
+                complete=True,
+                worktree=plan.worktree,
+                expected_factors=["FactorA"],
+            )
+            active = [{"pid": 4242, "name": "python", "cwd": plan.worktree}]
+            with patch(
+                "research_core.factor_lab.paper_reproduction.agent_harness_review.assess_agent_harness_run",
+                return_value=passed,
+            ), patch(
+                "research_core.factor_lab.paper_reproduction.paper_autotest._active_worktree_processes",
+                return_value=(active, ""),
+            ):
+                with self.assertRaisesRegex(ValueError, "keep the worker active"):
+                    record_worker_stopped(plan, outcome="completed")
+
+            latest = json.loads(
+                (Path(plan.control_root) / "worker_completion_gate.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse(latest["complete"])
+            self.assertEqual(latest["earliest_invalid_stage"], "evaluation")
+            self.assertTrue(any("still active" in defect for defect in latest["defects"]))
+            self.assertEqual(plan.status, "running")
+
+    def test_harvest_rejects_a_live_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            papers = root / "papers"
+            worktrees = root / "worktrees"
+            repo.mkdir()
+            papers.mkdir()
+            (papers / "Demo Paper.pdf").write_bytes(b"paper")
+            self._init_framework_repo(repo)
+            plan = create_batch_manifest(
+                batch_id="harvest-process-gate",
+                papers_root=papers,
+                repository_root=repo,
+                base_ref="HEAD",
+                selections=[
+                    PaperSelectionArtifact(
+                        paper=discover_test_papers(papers)[0],
+                        selected_factors=[self._factor("FactorA")],
+                    )
+                ],
+                worktree_root=worktrees,
+            ).runs[0]
+            prepare_test_worktree(plan)
+            prepare_run_harness(plan)
+            record_worker_started(plan, worker_task_id="terra-worker-failed-live")
+            record_worker_stopped(plan, outcome="failed")
+            active = [{"pid": 4343, "name": "python", "cwd": plan.worktree}]
+            with patch(
+                "research_core.factor_lab.paper_reproduction.paper_autotest._active_worktree_processes",
+                return_value=(active, ""),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "cannot harvest"):
+                    harvest_run_artifacts(plan)
+
+            self.assertEqual(plan.status, "worker_stopped")
+            self.assertFalse((Path(plan.control_root) / "harvest_manifest.json").exists())
+
+    def test_harvest_rejects_runner_without_terminal_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo = root / "repo"
+            papers = root / "papers"
+            worktrees = root / "worktrees"
+            repo.mkdir()
+            papers.mkdir()
+            (papers / "Demo Paper.pdf").write_bytes(b"paper")
+            self._init_framework_repo(repo)
+            plan = create_batch_manifest(
+                batch_id="harvest-missing-receipt",
+                papers_root=papers,
+                repository_root=repo,
+                base_ref="HEAD",
+                selections=[
+                    PaperSelectionArtifact(
+                        paper=discover_test_papers(papers)[0],
+                        selected_factors=[self._factor("FactorA")],
+                    )
+                ],
+                worktree_root=worktrees,
+            ).runs[0]
+            worktree = prepare_test_worktree(plan)
+            prepare_run_harness(plan)
+            runner = worktree / "scripts" / "run_evaluation.py"
+            runner.parent.mkdir(parents=True, exist_ok=True)
+            runner.write_text("print('evaluation')\n", encoding="utf-8")
+            record_worker_started(plan, worker_task_id="terra-worker-no-receipt")
+            record_worker_stopped(plan, outcome="failed")
+
+            with self.assertRaisesRegex(RuntimeError, "terminal scientific-process receipt"):
+                harvest_run_artifacts(plan)
+
+            self.assertEqual(plan.status, "worker_stopped")
 
     def _init_framework_repo(self, repo: Path) -> None:
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)

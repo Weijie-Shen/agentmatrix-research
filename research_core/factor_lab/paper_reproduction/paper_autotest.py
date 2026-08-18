@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
+from uuid import uuid4
 
 from research_core.factor_lab.paper_reproduction.agent_harness import (
     PaperReproductionAgentHarnessRequest,
@@ -38,6 +41,7 @@ ARTIFACT_ROOTS = (
     "runtime/factor_lab/jobs",
     "runtime/factor_lab/paper_jobs",
     "runtime/factor_lab/paper_specs",
+    "runtime/factor_lab/process_receipts",
     "runtime/factor_lab/proofs",
     "runtime/factor_lab/reports",
     "runtime/factor_lab/resource_evidence",
@@ -438,13 +442,64 @@ def assess_worker_completion_gate(plan: PaperTestRunPlan):
 
     if plan.status != "running":
         raise ValueError(f"worker completion gate can run only from running, not {plan.status}")
-    from research_core.factor_lab.paper_reproduction.agent_harness_review import assess_agent_harness_run
+    from research_core.factor_lab.paper_reproduction.agent_harness_review import (
+        _repair_guidance,
+        assess_agent_harness_run,
+    )
 
+    worktree = Path(plan.worktree).resolve()
+    ownership = _load_and_validate_ownership(plan)
+    artifact_state_before = _artifact_hashes(worktree)
+    active_before, inspection_error_before = _active_worktree_processes(plan.worktree)
+    receipt_state_before = _scientific_process_receipt_state(worktree)
     assessment = assess_agent_harness_run(
         plan.worktree,
         expected_factors=list(plan.selected_factors),
         harness_id=plan.run_id,
     )
+    active_after, inspection_error_after = _active_worktree_processes(plan.worktree)
+    receipt_state_after = _scientific_process_receipt_state(worktree)
+    artifact_state_after = _artifact_hashes(worktree)
+    process_defects: list[str] = []
+    inspection_error = inspection_error_before or inspection_error_after
+    active_processes = _unique_processes([*active_before, *active_after])
+    active_receipts = _unique_receipts(
+        [*receipt_state_before["active"], *receipt_state_after["active"]]
+    )
+    requires_receipt = _worktree_requires_process_receipt(
+        worktree,
+        baseline=ownership.get("baseline_artifacts", {}) or {},
+    )
+    terminal_receipts = receipt_state_after["terminal"]
+    if requires_receipt and not terminal_receipts:
+        process_defects.append(
+            "[process] worker-authored evaluation runners lack a terminal scientific-process receipt"
+        )
+    if active_receipts:
+        process_defects.append(
+            "[process] scientific-process receipts are still active: "
+            + str([item["receipt_id"] for item in active_receipts])
+        )
+    if active_processes:
+        process_defects.append(
+            "[process] worker-owned scientific processes are still active in the worktree: "
+            + str([f"{item['pid']}:{item['name']}" for item in active_processes])
+        )
+    if artifact_state_before != artifact_state_after:
+        process_defects.append(
+            "[process] scientific artifacts changed while the completion gate was running"
+        )
+    assessment.diagnostics["active_worktree_processes"] = active_processes
+    assessment.diagnostics["active_scientific_process_receipts"] = active_receipts
+    assessment.diagnostics["terminal_scientific_process_receipts"] = terminal_receipts
+    assessment.diagnostics["artifact_state_stable"] = artifact_state_before == artifact_state_after
+    assessment.diagnostics["process_inspection_error"] = inspection_error
+    if process_defects:
+        assessment.complete = False
+        assessment.defects = list(dict.fromkeys([*assessment.defects, *process_defects]))
+        assessment.earliest_invalid_stage, assessment.repair_actions = _repair_guidance(
+            assessment.defects
+        )
     destination = Path(plan.control_root).resolve()
     plan.worker_gate_pass_count += 1
     history_path = destination / "worker_gate_assessments" / f"gate-{plan.worker_gate_pass_count:02d}.json"
@@ -458,6 +513,10 @@ def assess_worker_completion_gate(plan: PaperTestRunPlan):
 def harvest_run_artifacts(plan: PaperTestRunPlan, *, maximum_file_bytes: int = 256 * 1024 * 1024) -> Path:
     worktree = Path(plan.worktree).resolve()
     ownership = _load_and_validate_ownership(plan)
+    _require_worktree_quiescent(
+        worktree,
+        baseline=ownership.get("baseline_artifacts", {}) or {},
+    )
     if not (Path(plan.control_root).resolve() / "worker_stop.json").is_file():
         raise FileNotFoundError("record worker stop before harvesting artifacts")
     baseline = ownership.get("baseline_artifacts", {}) or {}
@@ -545,6 +604,185 @@ def harvest_run_artifacts(plan: PaperTestRunPlan, *, maximum_file_bytes: int = 2
     plan.status = "harvested"
     _persist_run_state(plan)
     return manifest_path
+
+
+def _require_worktree_quiescent(
+    worktree: str | Path,
+    *,
+    baseline: dict[str, str] | None = None,
+) -> None:
+    root = Path(worktree).expanduser().resolve()
+    receipts = _scientific_process_receipt_state(root)
+    if receipts["active"]:
+        receipt_ids = [item["receipt_id"] for item in receipts["active"]]
+        raise RuntimeError(
+            "cannot harvest while scientific-process receipts are active: " + str(receipt_ids)
+        )
+    if _worktree_requires_process_receipt(root, baseline=baseline or {}) and not receipts["terminal"]:
+        raise RuntimeError(
+            "cannot harvest worker-authored evaluation runners without a terminal scientific-process receipt"
+        )
+    active, _inspection_error = _active_worktree_processes(worktree)
+    if active:
+        labels = [f"{item['pid']}:{item['name']}" for item in active]
+        raise RuntimeError(
+            "cannot harvest while worker-owned scientific processes are active: " + str(labels)
+        )
+
+
+@contextmanager
+def scientific_process_lease(
+    worktree: str | Path,
+    *,
+    process_name: str,
+):
+    """Create durable lifecycle evidence around a long scientific runner.
+
+    A yielded command leaves the receipt in ``running``. Normal completion or
+    a caught exception writes a terminal receipt; abrupt process death leaves
+    the active receipt behind so the control plane refuses to harvest.
+    """
+
+    root = Path(worktree).expanduser().resolve()
+    receipt_id = f"{_slug(process_name)}-{uuid4().hex[:12]}"
+    path = root / "runtime" / "factor_lab" / "process_receipts" / f"{receipt_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "schema_version": "scientific_process_receipt/v1",
+        "receipt_id": receipt_id,
+        "process_name": process_name,
+        "pid": os.getpid(),
+        "worktree": str(root),
+        "status": "running",
+        "started_at": now_iso(),
+        "completed_at": "",
+        "error_type": "",
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        yield path
+    except BaseException as exc:
+        payload["status"] = "failed"
+        payload["error_type"] = type(exc).__name__
+        raise
+    else:
+        payload["status"] = "completed"
+    finally:
+        payload["completed_at"] = now_iso()
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _active_worktree_processes(worktree: str | Path) -> tuple[list[dict[str, Any]], str]:
+    """Return Python/scientific processes whose current directory is inside a run worktree."""
+
+    try:
+        import psutil
+    except ImportError:
+        return [], "psutil is unavailable"
+
+    root = Path(worktree).expanduser().resolve()
+    excluded_pids = {os.getpid()}
+    try:
+        current = psutil.Process(os.getpid())
+        excluded_pids.update(parent.pid for parent in current.parents())
+    except (psutil.Error, OSError):
+        pass
+    active: list[dict[str, Any]] = []
+    try:
+        processes = psutil.process_iter(["pid", "name", "cmdline"])
+    except (psutil.Error, OSError, PermissionError) as exc:
+        return [], f"{type(exc).__name__}: {exc}"
+    try:
+        process_iterator = iter(processes)
+    except TypeError as exc:
+        return [], f"{type(exc).__name__}: {exc}"
+    while True:
+        try:
+            process = next(process_iterator)
+        except StopIteration:
+            break
+        except (psutil.Error, OSError, PermissionError) as exc:
+            return [], f"{type(exc).__name__}: {exc}"
+        try:
+            if process.pid in excluded_pids:
+                continue
+            cwd_text = process.cwd()
+            if not cwd_text:
+                continue
+            cwd = Path(cwd_text).resolve()
+            if cwd != root and not cwd.is_relative_to(root):
+                continue
+            name = str(process.info.get("name", "") or "")
+            cmdline = [str(item) for item in process.info.get("cmdline", []) or []]
+            command = " ".join(cmdline).lower()
+            scientific = (
+                "python" in name.lower()
+                or "pytest" in name.lower()
+                or "python" in command
+                or "pytest" in command
+                or "research_core" in command
+                or "scripts/" in command
+            )
+            if not scientific:
+                continue
+            active.append({"pid": process.pid, "name": name or "unknown", "cwd": str(cwd)})
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
+            continue
+    return sorted(active, key=lambda item: int(item["pid"])), ""
+
+
+def _scientific_process_receipt_state(worktree: Path) -> dict[str, list[dict[str, Any]]]:
+    active: list[dict[str, Any]] = []
+    terminal: list[dict[str, Any]] = []
+    receipt_root = worktree / "runtime" / "factor_lab" / "process_receipts"
+    for path in sorted(receipt_root.glob("*.json")) if receipt_root.exists() else []:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            active.append({"receipt_id": path.stem, "status": "unreadable", "path": str(path)})
+            continue
+        record = {
+            "receipt_id": str(payload.get("receipt_id") or path.stem),
+            "status": str(payload.get("status", "")),
+            "process_name": str(payload.get("process_name", "")),
+            "path": str(path),
+        }
+        if record["status"] in {"completed", "failed"} and payload.get("completed_at"):
+            terminal.append(record)
+        else:
+            active.append(record)
+    return {"active": active, "terminal": terminal}
+
+
+def _worktree_requires_process_receipt(
+    worktree: Path,
+    *,
+    baseline: dict[str, str],
+) -> bool:
+    current = _artifact_hashes(worktree)
+    changed = [path for path, digest in current.items() if baseline.get(path) != digest]
+    for path in changed:
+        if path.startswith("runtime/factor_lab/evaluation_bundles/"):
+            return True
+        if path.startswith("scripts/") and path.endswith(".py"):
+            script_name = Path(path).name.lower()
+            if any(token in script_name for token in ("run", "execute", "evaluate", "reproduce")):
+                return True
+    return False
+
+
+def _unique_processes(processes: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[int, dict[str, Any]] = {}
+    for process in processes:
+        unique[int(process["pid"])] = process
+    return [unique[pid] for pid in sorted(unique)]
+
+
+def _unique_receipts(receipts: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for receipt in receipts:
+        unique[str(receipt["receipt_id"])] = receipt
+    return [unique[receipt_id] for receipt_id in sorted(unique)]
 
 
 def record_deterministic_assessment(plan: PaperTestRunPlan, assessment: object | None = None) -> Path:

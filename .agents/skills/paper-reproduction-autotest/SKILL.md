@@ -67,6 +67,8 @@ Spawn up to two Terra workers. Use a bounded assignment containing:
 
 Do not give workers selection scores, extracted metric values, golden JSON, another worker's results, suspected pipeline defects, or retry conclusions. A worker must not edit the orchestrator checkout or another worktree. Wait for persistent evaluation processes to exit; a yielded tool call is not completion.
 
+The control plane must verify worktree quiescence before accepting a completed stop and again before harvesting any outcome. Every worker-authored evaluation runner must use `scientific_process_lease(...)`; a running or unreadable receipt blocks stop/harvest, while an abrupt process death deliberately leaves a blocking receipt. OS process inspection is supplementary because some sandboxes cannot enumerate processes. Treat an observed active process, a missing terminal receipt for a runner/bundle, or artifacts changing during the completion gate as a process-lifecycle defect. Keep polling or terminate the owned failed process explicitly; never harvest a live worktree.
+
 Immediately persist each dispatched task with `record_worker_started(...)`. When it finishes, fails, or is interrupted, call `record_worker_stopped(...)` with the lifecycle outcome before inspecting or harvesting its files.
 
 The generated harness contains a deterministic pre-return command. Require the worker to run it, repair from `earliest_invalid_stage`, and rerun dependent stages while the same task and worktree remain active. When the worker announces completion, `record_worker_stopped(..., outcome="completed")` independently reruns this gate. If it raises because `complete=false`, do not stop, harvest, or create a retry attempt: send the persisted defects and repair actions back to that same active worker. For fresh v3 runs, the gate rejects v2 extraction, Stage 3 or Stage 6 truth-source reselection, unresolved value states, a missing global-policy trace, reordered preprocessing, collapsed sequential neutralizations, and transformed controls that lack reuse/apply lineage. A genuine hard blocker may instead be recorded as `failed`; scientific metric drift must not be repaired by tuning formulas to paper answers.
@@ -76,6 +78,8 @@ The generated harness contains a deterministic pre-return command. Require the w
 After a worker stops, call `harvest_run_artifacts(...)` before cleanup. It copies changed reproduction artifacts to the batch control root, records hashes and omissions, and preserves Git status and a source patch.
 
 Treat `review_ready=false` or any `missing_required_artifact_families` as an explicit evidence gap. The harvest must include Stage 3 profiles, evaluation plans, implementation certification, formula-test source and durable test output, evaluation bundles, truth matches, both reports, and worker-authored runners. Cache files and bytecode are not scientific artifacts.
+
+When no final report exists, the deterministic gate must still inventory every standalone stage family and return the earliest missing upstream stage. Do not collapse missing Stage 3, evaluation, or truth artifacts into a report-only defect.
 
 Run `assess_agent_harness_run(...)` against the isolated worktree and pass the harvested manifest path so durability is checked; persist it with `record_deterministic_assessment(...)`. Then spawn a fresh Sol reviewer with only:
 
