@@ -57,6 +57,8 @@ METHOD_CATALOG: dict[str, dict[str, Any]] = {
     "ic.pearson": {"category": "ic", "executor_support": "native"},
     "metric.rank_ic_mean": {"category": "metric", "executor_support": "native"},
     "metric.ic_mean": {"category": "metric", "executor_support": "native"},
+    "metric.rank_ic_std": {"category": "metric", "executor_support": "native"},
+    "metric.ic_std": {"category": "metric", "executor_support": "native"},
     "metric.ic_ir": {"category": "metric", "executor_support": "native"},
     "metric.rank_ic_ir": {"category": "metric", "executor_support": "native"},
     "metric.ic_positive_ratio": {"category": "metric", "executor_support": "native"},

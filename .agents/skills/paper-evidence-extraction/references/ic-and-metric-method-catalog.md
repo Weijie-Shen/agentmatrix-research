@@ -8,6 +8,7 @@ IC methods:
 Metric methods:
 
 - `metric.rank_ic_mean`, `metric.ic_mean`;
+- `metric.rank_ic_std`, `metric.ic_std`;
 - `metric.rank_ic_ir`, `metric.ic_ir`;
 - `metric.rank_ic_positive_ratio`, `metric.ic_positive_ratio`.
 

@@ -11,6 +11,7 @@ import pandas as pd
 
 from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
     GLOBAL_EVALUATION_POLICY_ID,
+    METHOD_CATALOG,
     resolve_recipe_value_states,
 )
 from research_core.factor_lab.paper_reproduction.evaluators import apply_evaluation_recipe, evaluate_paper_case
@@ -104,6 +105,10 @@ def _extraction() -> ICRecipePaperExtraction:
 
 
 class ICRecipeExtractionTests(unittest.TestCase):
+    def test_ic_standard_deviation_metrics_are_catalogued(self) -> None:
+        self.assertEqual(METHOD_CATALOG["metric.rank_ic_std"]["category"], "metric")
+        self.assertEqual(METHOD_CATALOG["metric.ic_std"]["category"], "metric")
+
     def test_one_truth_source_recipe_covers_many_factors_and_selection_is_stage_1(self) -> None:
         extraction = _extraction()
         validation = validate_paper_extraction(extraction)
