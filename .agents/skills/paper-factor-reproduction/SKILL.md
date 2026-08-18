@@ -15,7 +15,7 @@ Coordinate the repository's existing Factor Lab workflow. Do not create a parall
 4. Create or load one persistent `PaperReproductionPipelineState`. Treat it as the only authority for gate status.
 5. Keep paper evidence immutable. Put runtime substitutions and degradation in separate resolved records.
 
-Use paper-reported IC-analysis `evaluation_results` as paper truth. New jobs use `paper_extraction.ic_analysis.v2`; the legacy extraction schema is compatibility input only. Do not add paper factor-value truth matching.
+Use paper-reported IC-analysis `evaluation_results` as paper truth. New jobs use `paper_extraction.ic_recipe.v3`; v2 and the legacy extraction schema are compatibility inputs only. Do not add paper factor-value truth matching.
 
 ## Route work to stage skills
 
@@ -67,9 +67,9 @@ An executed case exists only when it is present in the unmodified `evaluation_bu
 
 ## Cross-paper invariants
 
-- Stage 1 is immutable shared paper evidence: factor definitions, semantic requirements, universe/sample/operation/metric/IC protocol registries, and factor-keyed truth result blocks. It contains neither local column bindings nor selected truth IDs.
+- Stage 1 is immutable shared paper evidence: factor definitions, semantic requirements, metric definitions, truth-source-owned recipes, factor-keyed truth result blocks, and exactly one `factor_truth_selection` ID per factor. It contains no local column or physical-file bindings.
 - The evaluator type is `ic_analysis`; Rank-IC mean, ICIR, IC standard deviation, and positive-ratio statistics are co-reported metrics, not separate evaluator types.
-- Stage 2 preserves registry references and projects candidates without choosing truth or adding transform defaults. Stage 3 resolves typed local semantics and assesses every candidate without metric-value peeking. Stage 6 requires those assessments and selects exactly one unconflicted IC truth source per factor.
+- Stage 1 selects exactly one truth-source-owned recipe per factor. Stage 2 preserves that selection without adding transform defaults. Stage 3 resolves typed local semantics and value states for the selected recipe. Stage 6 executes it without reselection.
 - Keep raw factor definitions separate from transforms, universes, return horizons, controls, weights, portfolio rules, and evaluation data.
 - Preserve narrow source locations and provenance for formulas, transforms, methods, and metrics.
 - Preserve formula parameter symbols, values, units, and domains literally. Record observation-count or calendar conversions separately; never replace a source month/year/day parameter with a rolling-window row count without explicit source-backed conversion semantics.
@@ -84,7 +84,7 @@ An executed case exists only when it is present in the unmodified `evaluation_bu
 - Resolve exact benchmark/index identifiers, constituent effective dates, monthly-versus-daily weight convention, exchange-calendar horizons, and government-curve tenor. Never substitute a current universe, another index, another weight family, or another tenor silently.
 - Keep stock price adjustment isolated from capitalization, statements, valuation ratios, benchmark levels, index weights, and rates.
 - Never shorten the requested sample, reduce the universe, drop controls, or recode categorical controls only to fit resources.
-- Compute forward returns with forward alignment. Keep the factor-calculation panel separate from evaluation filtering. In particular, do not remove ST/PT or next-day-suspended securities from rolling factor history when the extracted universe protocol places those masks at evaluation eligibility.
+- Compute forward returns with forward alignment. Keep the factor-calculation panel separate from evaluation filtering. Never remove ST/PT or next-day-suspended securities from rolling factor history; apply the mandatory global masks only after alignment in evaluation.
 - Preserve the paper's horizon unit: security observations, exact exchange trading days, and following whole natural months are distinct label contracts.
 - Check printed count ratios for an implied observation denominator and carry any disagreement with the stated sample schedule into extraction gaps, comparability, and the report.
 - Run QFQ and HFQ as independent price-view scenarios when price adjustment is relevant; never mix views in one run.
@@ -99,7 +99,7 @@ An executed case exists only when it is present in the unmodified `evaluation_bu
 The run is complete only when:
 
 - all selected factors have exported extraction and normalized specs;
-- the extraction validates as `paper_extraction.ic_analysis.v2`, has no dangling registry references or runtime bindings, and every candidate result block has one IC protocol;
+- the extraction validates as `paper_extraction.ic_recipe.v3`, has no dangling references or runtime bindings, every result block has one homogeneous recipe, and every factor selects exactly one source containing its row;
 - formula-required data passed validation or has an explicit hard blocker;
 - implemented factors are backed by importable `FactorImplementationArtifact` records and passing implementation tests;
 - formula-focused tests cover every selected factor and their machine-readable results are persisted under `runtime/factor_lab/test_results`;

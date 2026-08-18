@@ -5,18 +5,19 @@ description: Extract selected quantitative factor definitions and paper-reported
 
 # Paper Evidence Extraction
 
-Produce faithful `paper_extraction.ic_analysis.v2` evidence artifacts for selected factors. Do not implement factor code in this stage. The legacy factor-local schema may be loaded for old jobs, but new extraction must use the shared-registry IC-analysis schema.
+Produce faithful `paper_extraction.ic_recipe.v3` evidence artifacts for selected factors. Do not implement factor code in this stage. The v2 shared-registry and legacy factor-local schemas remain compatibility inputs; new extraction uses truth-source-owned declarative recipes.
 
 ## Read first
 
 - `contracts/factor_research.py`
 - `research_core/factor_lab/paper_reproduction/extraction.py`
 - `research_core/factor_lab/paper_reproduction/normalization.py`
+- every file in `references/`, especially `evaluation-recipe-schema.md`, the method catalogs, and `truth-source-selection.md`
 - the relevant golden JSON schema tests, without reading a paper-specific golden answer during a fresh forward test
 
-## Build the shared evidence registries
+## Build formula registries and truth-source recipes
 
-Keep immutable paper evidence separate from runtime decisions. Populate paper-level registries for factor definitions, semantic requirements, universe protocols, sample periods, ordered operation pipelines, IC protocols, metric definitions, and truth sources. Use stable IDs and references rather than copying the same method block onto every factor.
+Keep immutable paper evidence separate from runtime decisions. Populate factor definitions, semantic requirements, metric definitions, and truth sources. Each truth source owns one homogeneous evaluation recipe and may cover many factors. Select exactly one source per factor in `factor_truth_selection`; never duplicate a recipe on every factor.
 
 For every selected factor capture:
 
@@ -42,25 +43,25 @@ Semantic requirements describe paper meaning only. They may specify industry pro
 
 ## Model IC analysis truth narrowly
 
-The canonical evaluator type is only `ic_analysis`. Rank-IC mean, ICIR, IC standard deviation, and positive-ratio measures are metrics within that evaluator type, not separate evaluator cases. Define their general formulas and units once in `metric_definitions` and the generic rank/return/alignment contract once in `ic_analysis_contract`.
+The canonical evaluator type is only `ic_analysis`. Rank-IC mean, ICIR, IC standard deviation, and positive-ratio measures are metrics within that evaluator type, not separate evaluator cases. Define formulas and units once in `metric_definitions`; encode rank/return/alignment semantics in each truth-source recipe using catalog method IDs.
 
 Split truth sources whenever the semantic protocol differs: sample, horizon, return alignment, universe, ordered preprocessing, neutralization controls, control timing, or other IC inputs. Do not split a table merely because it reports several IC metrics together. A table block under one protocol is one truth source and lists every reported metric ID; its `reported_results` map stores the values for all factors printed in that block.
 
 Each source should contain:
 
-- stable `truth_source_id` and one `protocol_id`;
+- stable `truth_source_id` and one `evaluation_recipe`;
 - one narrow table/figure/row-block source location;
 - all `reported_metric_ids` printed together for that block;
 - factor-keyed `reported_results`, with normalized values and original labels/units retained as provenance;
-- optional conflict group and notes;
-- no runtime selection or local-data binding.
+- optional notes and extraction gaps;
+- no local-data binding; selection is only the factor-to-source ID map.
 
 For reported count ratios or percentages, test whether multiple rows imply one unique integer observation denominator at the printed precision. Record that inferred denominator and compare it with the stated sample dates/schedule. If they disagree, preserve an explicit paper-evidence gap or conflict; do not silently let execution coverage choose the denominator.
 
 Keep paper protocol immutable. Do not rewrite WLS as OLS, a paper sample as local coverage, or an unavailable field as a proxy during extraction.
 Encode the paper's return interval semantically. “Following whole natural month” is a natural-month horizon, not a conventional 20/21-trading-day approximation.
 
-Extract all relevant IC alternatives, including raw versus neutralized, different preprocessing for different factor groups, different horizons, and different samples. Do not extract only the most data-intensive variant when a raw IC case also carries valid numeric truth. Stage 3 assesses local semantic/data support and Stage 6 selects exactly one unconflicted truth source per factor without looking at metric closeness.
+Extract the result blocks needed to support the Stage-1 selection and preserve relevant alternatives only when they provide necessary provenance or expose a paper conflict. Apply `truth-source-selection.md` during extraction. Stage 3 assesses the selected source's support and Stage 6 executes it; neither stage reselects truth.
 
 Normalize metric names and units to the framework's computational convention while retaining the original paper label/unit as provenance. For example, a percentage IC mean must be represented consistently with the evaluator's decimal output; do not compare `6.29` directly with `0.0629` or invent incompatible metric keys. Extract whether IC is ordinary Pearson correlation or Spearman/rank correlation; never infer rank IC merely from the label `IC`. Preserve signed-versus-absolute conventions for IR and other derived metrics in their definitions.
 
@@ -68,7 +69,7 @@ Missing daily factor values or curves are limitations, not blockers, when aggreg
 
 ## Extract transforms and controls
 
-Define each reusable operation pipeline once and preserve ordered operations on:
+Define one ordered preprocessing list on each truth-source recipe and preserve operations on:
 
 - factor exposure;
 - neutralization and regression controls;
@@ -82,21 +83,20 @@ For every industry control, extract the taxonomy/provider, taxonomy version wher
 
 For financial inputs, extract the exact statement field/definition, report-period convention, announcement timing, original/restated policy, and whether a flow is fiscal-year-to-date, standalone quarter, or TTM. For benchmark or risk-free inputs, extract the exact identifier, constituent timing, monthly/daily weight convention, return horizon/calendar, yield-curve tenor, rate unit, and conversion rule. Preserve unspecified details as ambiguity rather than choosing a convenient local default.
 
-Universe protocols must contain distinct `calculation_universe` and `evaluation_universe` objects. A filter records its application stage and effective date. ST/PT and next-evaluation-day suspension exclusions are normally evaluation-eligibility filters: retain full valid security history for factor calculation, compute the factor first, then apply those masks to the factor/return cross-section. Only place a filter in calculation history when the paper explicitly defines it there.
-
-For Chinese all-A-share language without a more specific pool, record the project default as an assumption rather than paper text: all A-shares excluding ST/PT and securities suspended on the next evaluation trading day. Preserve the exact status semantics and dates as semantic requirements; Stage 3 resolves local fields.
+Every recipe references the project-level `china_a_share_ic_evaluation_v1` policy. Do not extract its ST/PT and next-trading-day suspension masks as if they were paper preprocessing. The runtime always calculates the factor on full valid history, aligns evaluation inputs, applies this global policy first, and only then executes the truth-source recipe. Preserve paper differences as deviations.
 
 ## Validate and normalize
 
-Run extraction validation before normalization. Reject duplicate registry IDs, dangling references, missing formulas/semantic fields, non-IC evaluator types, mismatched truth metrics/results, runtime bindings, and filters that use future status during rolling factor calculation. Preserve unresolved contradictory paper result blocks as explicit conflict groups; conflicted cases remain in the denominator but cannot be exact-match truth until resolved.
+Run extraction validation before normalization. Reject duplicate IDs, dangling references, missing formulas/semantic fields, mismatched covered-factor/result rows, mismatched truth metrics/results, unknown method IDs, non-contiguous preprocessing order, invalid factor truth selections, and runtime bindings. A source row block must be homogeneous; split heterogeneous blocks. Preserve unresolved contradictory evidence as an extraction gap and require review before selection.
 
 Normalize as a preservation mapping into `FactorResearchSpec`:
 
-- keep formulas, semantic IDs, parameters, frequency, provenance, shared evidence references, candidate truth sources, limitations, and ambiguity categories;
+- keep formulas, semantic IDs, parameters, frequency, provenance, the selected truth-source recipe, limitations, and ambiguity categories;
 - set formula and field mapping validation targets;
-- compile ordered operation pipelines into runtime transform/control structures without changing the immutable registries;
-- leave `selected_truth_sources` empty, record Stage 3 as support assessment, and Stage 6 as the selection stage;
-- never invent default transforms while compiling v2;
+- preserve the ordered recipe without flattening neutralization into a separate bucket;
+- populate exactly one `selected_truth_sources` entry from Stage-1 `factor_truth_selection`;
+- record Stage 3 as recipe/data-state resolution and Stage 6 as execution, not selection;
+- never invent default transforms;
 - preserve every explicit missing-value operation and its position, including zero-fill after cross-sectional standardization;
 - never add paper factor-value truth targets.
 

@@ -8,12 +8,155 @@ from pathlib import Path
 
 from research_core.factor_lab.paper_reproduction.agent_harness_review import (
     EXPECTED_STAGES,
+    _execution_protocol_defects,
     _sample_boundary_defects,
+    _v3_extraction_contract_defects,
+    _v3_resolved_recipe_defects,
     assess_agent_harness_run,
 )
 
 
 class AgentHarnessRunAssessmentTest(unittest.TestCase):
+    def _v3_recipe(self) -> dict[str, object]:
+        return {
+            "global_policy_ref": "china_a_share_ic_evaluation_v1",
+            "sampling": {"signal_schedule": "every_trading_day"},
+            "preprocessing_steps": [
+                {"order": 1, "method_id": "factor_missing.drop", "execution_mode": "apply"},
+                {
+                    "order": 2,
+                    "method_id": "neutralize.cross_sectional_regression_residual",
+                    "execution_mode": "apply",
+                    "controls": [
+                        {
+                            "semantic_input": "market_cap",
+                            "resolved_field": "market_cap",
+                            "transforms": [
+                                {
+                                    "method_id": "transform.natural_log",
+                                    "execution_mode": "reuse_materialized",
+                                    "resolved_field": "log_market_cap",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+            "return_label": {
+                "method_id": "return.forward_close_to_close",
+                "horizon_exchange_days": 1,
+            },
+            "ic_method": {"method_id": "ic.spearman_rank"},
+            "metric_methods": [{"method_id": "metric.rank_ic_mean"}],
+            "global_policy_bindings": {
+                "st_or_pt_status": "is_st",
+                "next_day_suspension_status": "next_is_suspended",
+            },
+            "resolution": {"status": "resolved", "blocked_reasons": []},
+        }
+
+    def test_v3_gate_requires_stage1_selection_and_resolved_value_states(self) -> None:
+        recipe = self._v3_recipe()
+        immutable_recipe = json.loads(json.dumps(recipe))
+        immutable_recipe.pop("global_policy_bindings")
+        immutable_recipe.pop("resolution")
+        for step in immutable_recipe["preprocessing_steps"]:
+            step.pop("execution_mode")
+            for control in step.get("controls", []):
+                control.pop("resolved_field", None)
+                for transform in control.get("transforms", []):
+                    transform.pop("execution_mode", None)
+                    transform.pop("resolved_field", None)
+        extraction = {
+            "schema_version": "paper_extraction.ic_recipe.v3",
+            "factor_definitions": [
+                {"factor_id": "alpha", "required_semantic_fields": ["close"]}
+            ],
+            "semantic_requirements": [
+                {"semantic_field_id": "close", "kind": "market_data", "concept": "daily_close_price"}
+            ],
+            "metric_definitions": [{"metric_id": "rank_ic_mean"}],
+            "truth_sources": [
+                {
+                    "truth_source_id": "truth",
+                    "covered_factor_ids": ["alpha"],
+                    "evaluation_recipe": immutable_recipe,
+                    "reported_metric_ids": ["rank_ic_mean"],
+                    "reported_results": {"alpha": {"rank_ic_mean": 0.05}},
+                }
+            ],
+            "factor_truth_selection": {"alpha": "truth"},
+        }
+        self.assertEqual(_v3_extraction_contract_defects(extraction), [])
+        selected = {
+            "truth_id": "truth",
+            "evaluation_recipe": immutable_recipe,
+            "selection_reason": "truth source fixed during Stage 1 extraction",
+            "support_assessment": {"assessment_id": "support-1"},
+            "resolved_protocol": {"resolved_evaluation_recipe": recipe},
+        }
+        self.assertEqual(
+            _v3_resolved_recipe_defects("alpha", selected, extraction["truth_sources"][0]),
+            [],
+        )
+        selected["selection_reason"] = "highest support score"
+        defects = _v3_resolved_recipe_defects("alpha", selected, extraction["truth_sources"][0])
+        self.assertTrue(any("Stage-1 authority" in defect for defect in defects))
+
+    def test_v3_protocol_gate_checks_global_policy_and_ordered_recipe_trace(self) -> None:
+        recipe = self._v3_recipe()
+        selected = {
+            "truth_id": "truth",
+            "paper_protocol": {"evaluation_recipe": recipe},
+            "resolved_protocol": {
+                "resolved_evaluation_recipe": recipe,
+                "evaluation_spec": {"ic_type": "spearman_rank_ic"},
+            },
+        }
+        output = {
+            "status": "passed",
+            "transform_applied": True,
+            "neutralization_diagnostics": [
+                {"order": 2, "controls": [{"resolved_field": "market_cap"}]}
+            ],
+            "metrics": {"rank_ic_mean": 0.01},
+            "resolved_parameters": {
+                "evaluation_recipe": recipe,
+                "evaluation_spec": {"ic_type": "spearman_rank_ic"},
+                "recipe_execution_trace": {
+                    "global_policy": {
+                        "policy_id": "china_a_share_ic_evaluation_v1",
+                        "input_rows": 10,
+                        "eligible_rows": 8,
+                        "excluded_rows": 2,
+                        "status_bindings": {
+                            "st_or_pt_status": "is_st",
+                            "next_day_suspension_status": "next_is_suspended",
+                        },
+                    },
+                    "preprocessing_trace": [
+                        {"order": 1, "method_id": "factor_missing.drop", "execution_mode": "apply"},
+                        {
+                            "order": 2,
+                            "method_id": "neutralize.cross_sectional_regression_residual",
+                            "execution_mode": "apply",
+                        },
+                    ],
+                    "neutralization_steps": [{"order": 2}],
+                },
+            },
+        }
+        execution = {
+            "source_truth_id": "truth",
+            "evaluator_output": output,
+            "universe_diagnostics": {"skipped_filters": []},
+        }
+        factor_plan = {"selected_evaluation_cases": [selected]}
+        self.assertEqual(_execution_protocol_defects("alpha", execution, factor_plan), [])
+        output["resolved_parameters"]["recipe_execution_trace"]["preprocessing_trace"].reverse()
+        defects = _execution_protocol_defects("alpha", execution, factor_plan)
+        self.assertTrue(any("preprocessing trace differs" in defect for defect in defects))
+
     def test_complete_run_requires_reports_stages_factors_evaluation_and_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -381,7 +524,7 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             self.assertTrue(any("zero-row data-profile" in item for item in assessment.defects))
             self.assertTrue(any("eligible denominator 56" in item for item in assessment.defects))
             self.assertTrue(
-                any(action.startswith("Resolve and apply every required transform") for action in assessment.repair_actions)
+                any(action.startswith("Apply the mandatory global policy") for action in assessment.repair_actions)
             )
 
     def test_harvest_must_include_every_completed_stage_runtime_artifact(self) -> None:

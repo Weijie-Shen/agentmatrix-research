@@ -9,6 +9,7 @@ from typing import Any
 from contracts.factor_research import FactorResearchSpec, ValidationThreshold
 from research_core.factor_lab.paper_reproduction.extraction import (
     ICAnalysisPaperExtraction,
+    ICRecipePaperExtraction,
     PaperExtraction,
     ExtractedFactorDefinition,
     ExtractedOperationPipeline,
@@ -19,6 +20,9 @@ from research_core.factor_lab.paper_reproduction.extraction import (
     selected_truth_sources,
     summarize_factor_truth_sources,
     validate_paper_extraction,
+)
+from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
+    project_recipe_truth_source_for_factor,
 )
 from research_core.factor_lab.paper_reproduction.methodology import canonical_ic_type
 
@@ -65,10 +69,12 @@ def _default_ic_sign_convention(ic_type: str) -> str:
 
 
 def normalize_extraction_to_specs(
-    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction,
     *,
     version: str = "v0.1",
 ) -> list[FactorResearchSpec]:
+    if isinstance(extraction, ICRecipePaperExtraction):
+        return _normalize_ic_recipe_extraction_to_specs(extraction, version=version)
     if isinstance(extraction, ICAnalysisPaperExtraction):
         return _normalize_ic_analysis_extraction_to_specs(extraction, version=version)
     validation = validate_paper_extraction(extraction)
@@ -156,6 +162,122 @@ def normalize_extraction_to_specs(
                     "truth_match_required": bool(selected_truth),
                     "proof_status_ceiling": "paper_evaluation_match" if selected_truth else "needs_human_review",
                     "status": spec_status,
+                    "implementation_stage": "spec",
+                },
+            )
+        )
+    return specs
+
+
+def _normalize_ic_recipe_extraction_to_specs(
+    extraction: ICRecipePaperExtraction,
+    *,
+    version: str,
+) -> list[FactorResearchSpec]:
+    """Compile v3 evidence without moving or repeating Stage-1 truth selection."""
+
+    validation = validate_paper_extraction(extraction)
+    if not validation.valid:
+        raise ValueError(f"Invalid IC-recipe paper extraction: {validation.errors}")
+    semantic_by_id = {item.semantic_field_id: item for item in extraction.semantic_requirements}
+    truth_by_id = {item.truth_source_id: item for item in extraction.truth_sources}
+    paper_id = str(extraction.paper.get("paper_id") or extraction.artifact_id)
+    shared_ref = {
+        "schema_version": extraction.schema_version,
+        "artifact_id": extraction.artifact_id,
+        "paper_id": paper_id,
+        "artifact_role": extraction.artifact_role,
+    }
+    source_document = _v2_source_document(extraction)  # both registry schemas share paper metadata
+    specs: list[FactorResearchSpec] = []
+    for factor in extraction.factor_definitions:
+        selected_truth_id = extraction.factor_truth_selection[factor.factor_id]
+        selected_source = truth_by_id[selected_truth_id]
+        projected = project_recipe_truth_source_for_factor(asdict(selected_source), factor.factor_id)
+        canonical_fields = [
+            _canonical_formula_field(semantic_by_id.get(field_id), fallback=field_id)
+            for field_id in factor.required_semantic_fields
+        ]
+        status = "needs_human_review" if factor.formula_gap_ids else "planned"
+        specs.append(
+            FactorResearchSpec(
+                factor_name=factor.factor_id,
+                library=extraction.factor_family_name,
+                version=version,
+                display_name=factor.paper_label or factor.factor_id,
+                factor_id=f"{_slug(extraction.factor_family_name)}_{factor.factor_id}",
+                source_document=source_document,
+                formula=factor.formula,
+                description=factor.description,
+                frequency=factor.native_frequency,
+                sample_scope=projected.get("sample_period", ""),
+                required_fields=canonical_fields,
+                semantic_required_fields=list(factor.required_semantic_fields),
+                paper_evidence_ref={
+                    **shared_ref,
+                    "factor_definition_id": factor.factor_id,
+                    "truth_source_id": selected_truth_id,
+                    "factor_evidence": factor.evidence,
+                },
+                evaluation_case_refs=[selected_truth_id],
+                parameters=dict(factor.parameters),
+                preprocessing=[],
+                neutralization=[],
+                validation_targets=[*PAPER_REPRODUCTION_BASE_THRESHOLDS, PAPER_EVALUATION_THRESHOLD],
+                tags=[
+                    _slug(extraction.factor_family_name),
+                    "paper-reproduction",
+                    "ic-analysis-only",
+                    "declarative-evaluation-recipe",
+                    "paper-evaluation-truth",
+                    *(["needs_human_review"] if status == "needs_human_review" else []),
+                ],
+                notes=[
+                    "The truth source was selected during Stage 1 extraction.",
+                    "Stage 3 resolves recipe inputs and value states; Stage 6 executes this recipe without reselection.",
+                ],
+                metadata={
+                    "paper_id": paper_id,
+                    "authors": list(extraction.paper.get("authors", []) or []),
+                    "source": extraction.paper.get("publisher", ""),
+                    "year": _v2_publication_year(extraction),
+                    "extraction_scope": extraction.scope,
+                    "extraction_schema_version": extraction.schema_version,
+                    "extraction_validation": {
+                        "status": validation.status,
+                        "warnings": list(validation.warnings),
+                        "diagnostics": dict(validation.diagnostics),
+                    },
+                    "paper_evidence_ref": shared_ref,
+                    "data_requirements": {
+                        "formula_required_fields": canonical_fields,
+                        "formula_semantic_field_ids": list(factor.required_semantic_fields),
+                    },
+                    "evaluation_cases": [projected],
+                    "truth_sources": [projected],
+                    "selected_truth_sources": [projected],
+                    "truth_source_summary": {
+                        "available_truth_count": 1,
+                        "available_truth_ids": [selected_truth_id],
+                        "available_truth_types": ["evaluation_results"],
+                        "selected_truth_ids": [selected_truth_id],
+                        "selected_truth_types": ["evaluation_results"],
+                        "selection_stage": 1,
+                        "support_assessment_stage": 3,
+                    },
+                    "known_limitations": [
+                        item for item in extraction.known_gaps if factor.factor_id in set(item.get("affects", []) or [])
+                    ],
+                    "operator_semantics": list(extraction.operator_semantics),
+                    "factor_ambiguities_by_category": {"formula": list(factor.formula_gap_ids)},
+                    "selected_truth_source_ids": [selected_truth_id],
+                    "truth_selection_rule": {
+                        "selection_stage": 1,
+                        "selected_truth_source_id": selected_truth_id,
+                    },
+                    "truth_match_required": True,
+                    "proof_status_ceiling": "needs_human_review" if factor.formula_gap_ids else "paper_evaluation_match",
+                    "status": status,
                     "implementation_stage": "spec",
                 },
             )

@@ -12,6 +12,10 @@ from research_core.factor_lab.paper_reproduction.methodology import (
     validate_neutralization_spec,
     validate_universe_protocol,
 )
+from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
+    IC_RECIPE_SCHEMA_VERSION,
+    validate_evaluation_recipe,
+)
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig
 
 TruthSourceType = Literal["evaluation_results"]
@@ -204,6 +208,42 @@ class ICAnalysisPaperExtraction:
 
 
 @dataclass(slots=True)
+class ExtractedRecipeTruthSource:
+    """One homogeneous result block and its truth-source-owned IC recipe."""
+
+    truth_source_id: str
+    source: dict[str, Any]
+    covered_factor_ids: list[str]
+    evaluation_recipe: dict[str, Any]
+    reported_metric_ids: list[str]
+    reported_results: dict[str, dict[str, Any]]
+    metric_definitions: dict[str, Any] = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ICRecipePaperExtraction:
+    """Stage-1 v3 artifact: factors select exactly one recipe-owning truth source."""
+
+    artifact_id: str
+    paper: dict[str, Any]
+    factor_family_name: str
+    factor_definitions: list[ExtractedFactorDefinition]
+    semantic_requirements: list[ExtractedSemanticRequirement]
+    metric_definitions: list[ExtractedMetricDefinition]
+    truth_sources: list[ExtractedRecipeTruthSource]
+    factor_truth_selection: dict[str, str]
+    schema_version: str = IC_RECIPE_SCHEMA_VERSION
+    artifact_role: str = "immutable_paper_evidence"
+    created_on: str = ""
+    scope: dict[str, Any] = field(default_factory=dict)
+    operator_semantics: list[dict[str, Any]] = field(default_factory=list)
+    extraction_gaps: list[dict[str, Any]] = field(default_factory=list)
+    known_gaps: list[dict[str, Any]] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class ExtractionValidationResult:
     valid: bool
     status: str
@@ -213,8 +253,10 @@ class ExtractionValidationResult:
 
 
 def validate_paper_extraction(
-    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction,
 ) -> ExtractionValidationResult:
+    if isinstance(extraction, ICRecipePaperExtraction):
+        return _validate_ic_recipe_extraction(extraction)
     if isinstance(extraction, ICAnalysisPaperExtraction):
         return _validate_ic_analysis_extraction(extraction)
     errors: list[str] = []
@@ -265,7 +307,7 @@ def validate_paper_extraction(
 
 
 def export_paper_extraction(
-    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction,
     *,
     config: FactorLabWorkspaceConfig | None = None,
 ) -> Path:
@@ -273,16 +315,18 @@ def export_paper_extraction(
     workspace.ensure_directories()
     output_dir = workspace.runtime_root / "paper_specs"
     output_dir.mkdir(parents=True, exist_ok=True)
-    paper_id = extraction.paper_id if isinstance(extraction, PaperExtraction) else _v2_paper_id(extraction)
+    paper_id = extraction.paper_id if isinstance(extraction, PaperExtraction) else _registry_paper_id(extraction)
     path = output_dir / f"{paper_id}_extracted.json"
     path.write_text(json.dumps(asdict(extraction), ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
-def load_paper_extraction(path: str | Path) -> PaperExtraction | ICAnalysisPaperExtraction:
+def load_paper_extraction(path: str | Path) -> PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if str(payload.get("schema_version", "")) == IC_EXTRACTION_SCHEMA_VERSION:
         return _ic_analysis_extraction_from_payload(payload)
+    if str(payload.get("schema_version", "")) == IC_RECIPE_SCHEMA_VERSION:
+        return _ic_recipe_extraction_from_payload(payload)
     factors = [_factor_from_payload(item) for item in payload.pop("target_factors")]
     return PaperExtraction(target_factors=factors, **payload)
 
@@ -736,6 +780,118 @@ def _validate_ic_analysis_extraction(extraction: ICAnalysisPaperExtraction) -> E
     )
 
 
+def _validate_ic_recipe_extraction(extraction: ICRecipePaperExtraction) -> ExtractionValidationResult:
+    errors: list[str] = []
+    warnings: list[str] = []
+    _require_text(extraction.artifact_id, "artifact_id", errors)
+    _require_text(extraction.factor_family_name, "factor_family_name", errors)
+    if extraction.schema_version != IC_RECIPE_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {IC_RECIPE_SCHEMA_VERSION!r}")
+    if extraction.artifact_role != "immutable_paper_evidence":
+        errors.append("artifact_role must be 'immutable_paper_evidence'")
+    _require_text(_registry_paper_id(extraction), "paper.paper_id", errors)
+    _require_text(str(extraction.paper.get("title", "")), "paper.title", errors)
+
+    factor_ids = _unique_registry_ids(extraction.factor_definitions, "factor_id", "factor_definitions", errors)
+    semantic_ids = _unique_registry_ids(
+        extraction.semantic_requirements, "semantic_field_id", "semantic_requirements", errors
+    )
+    metric_ids = _unique_registry_ids(extraction.metric_definitions, "metric_id", "metric_definitions", errors)
+    truth_ids = _unique_registry_ids(extraction.truth_sources, "truth_source_id", "truth_sources", errors)
+    if not factor_ids:
+        errors.append("factor_definitions must not be empty")
+    if not truth_ids:
+        errors.append("truth_sources must not be empty")
+
+    for index, factor in enumerate(extraction.factor_definitions):
+        prefix = f"factor_definitions[{index}]"
+        _require_text(factor.formula, f"{prefix}.formula", errors)
+        unknown = sorted(set(factor.required_semantic_fields) - semantic_ids)
+        if unknown:
+            errors.append(f"{prefix}.required_semantic_fields contains unknown ids: {unknown}")
+
+    factor_occurrences: dict[str, list[str]] = {factor_id: [] for factor_id in factor_ids}
+    for index, truth in enumerate(extraction.truth_sources):
+        prefix = f"truth_sources[{index}]"
+        if not truth.source:
+            warnings.append(f"{prefix}.source is missing")
+        covered = set(truth.covered_factor_ids)
+        duplicated_covered = sorted(
+            {factor_id for factor_id in truth.covered_factor_ids if truth.covered_factor_ids.count(factor_id) > 1}
+        )
+        if duplicated_covered:
+            errors.append(f"{prefix}.covered_factor_ids contains duplicates: {duplicated_covered}")
+        result_factors = set(truth.reported_results)
+        unknown = sorted((covered | result_factors) - factor_ids)
+        if unknown:
+            errors.append(f"{prefix} contains unknown factor ids: {unknown}")
+        if covered != result_factors:
+            errors.append(f"{prefix}.covered_factor_ids must exactly match reported_results factor rows")
+        if not truth.reported_metric_ids:
+            errors.append(f"{prefix}.reported_metric_ids must not be empty")
+        duplicated_metrics = sorted(
+            {metric_id for metric_id in truth.reported_metric_ids if truth.reported_metric_ids.count(metric_id) > 1}
+        )
+        if duplicated_metrics:
+            errors.append(f"{prefix}.reported_metric_ids contains duplicates: {duplicated_metrics}")
+        unknown_metrics = sorted(set(truth.reported_metric_ids) - metric_ids)
+        if unknown_metrics:
+            errors.append(f"{prefix}.reported_metric_ids contains unknown ids: {unknown_metrics}")
+        for factor_id, result in truth.reported_results.items():
+            factor_occurrences.setdefault(factor_id, []).append(truth.truth_source_id)
+            if set(result) != set(truth.reported_metric_ids):
+                errors.append(
+                    f"{prefix}.reported_results[{factor_id!r}] metric ids must exactly match reported_metric_ids"
+                )
+        errors.extend(validate_evaluation_recipe(truth.evaluation_recipe, prefix=f"{prefix}.evaluation_recipe"))
+        recipe_metric_ids = {
+            str(item.get("method_id", "")).removeprefix("metric.")
+            for item in truth.evaluation_recipe.get("metric_methods", []) or []
+            if isinstance(item, dict) and str(item.get("method_id", "")).startswith("metric.")
+        }
+        if recipe_metric_ids and recipe_metric_ids != set(truth.reported_metric_ids):
+            errors.append(
+                f"{prefix}.evaluation_recipe.metric_methods must exactly match reported_metric_ids"
+            )
+
+    selected_factors = set(extraction.factor_truth_selection)
+    if selected_factors != factor_ids:
+        missing = sorted(factor_ids - selected_factors)
+        extra = sorted(selected_factors - factor_ids)
+        if missing:
+            errors.append(f"factor_truth_selection is missing factors: {missing}")
+        if extra:
+            errors.append(f"factor_truth_selection contains unknown factors: {extra}")
+    truth_by_id = {source.truth_source_id: source for source in extraction.truth_sources}
+    for factor_id, truth_id in extraction.factor_truth_selection.items():
+        if truth_id not in truth_ids:
+            errors.append(f"factor_truth_selection[{factor_id!r}] selects unknown truth source: {truth_id}")
+            continue
+        if factor_id not in set(truth_by_id[truth_id].reported_results):
+            errors.append(
+                f"factor_truth_selection[{factor_id!r}] selects {truth_id!r}, but that block has no factor row"
+            )
+
+    binding_hits: list[str] = []
+    _find_forbidden_binding_keys(asdict(extraction), path="$", hits=binding_hits)
+    errors.extend(binding_hits)
+    status = "needs_human_review" if errors or warnings else "implemented"
+    return ExtractionValidationResult(
+        valid=not errors,
+        status=status,
+        errors=errors,
+        warnings=warnings,
+        diagnostics={
+            "schema_version": extraction.schema_version,
+            "factor_count": len(factor_ids),
+            "truth_source_count": len(truth_ids),
+            "selected_truth_count": len(extraction.factor_truth_selection),
+            "selection_stage": 1,
+            "truth_sources_by_factor": factor_occurrences,
+        },
+    )
+
+
 def infer_reported_ratio_denominator(
     values: list[Any],
     *,
@@ -778,6 +934,10 @@ def _looks_like_count_ratio_metric(metric: ExtractedMetricDefinition) -> bool:
 
 
 def _v2_paper_id(extraction: ICAnalysisPaperExtraction) -> str:
+    return str(extraction.paper.get("paper_id") or extraction.artifact_id).strip()
+
+
+def _registry_paper_id(extraction: ICAnalysisPaperExtraction | ICRecipePaperExtraction) -> str:
     return str(extraction.paper.get("paper_id") or extraction.artifact_id).strip()
 
 
@@ -849,6 +1009,28 @@ def _ic_analysis_extraction_from_payload(payload: dict[str, Any]) -> ICAnalysisP
         operation_pipelines=pipelines,
         metric_definitions=metrics,
         ic_protocols=protocols,
+        truth_sources=truth_sources,
+        **constructor,
+    )
+
+
+def _ic_recipe_extraction_from_payload(payload: dict[str, Any]) -> ICRecipePaperExtraction:
+    raw = dict(payload)
+    factors = [ExtractedFactorDefinition(**item) for item in raw.pop("factor_definitions", [])]
+    semantics = [_semantic_requirement_from_payload(item) for item in raw.pop("semantic_requirements", [])]
+    metrics = [_metric_definition_from_payload(item) for item in raw.pop("metric_definitions", [])]
+    truth_sources = [ExtractedRecipeTruthSource(**item) for item in raw.pop("truth_sources", [])]
+    allowed = {field_.name for field_ in ICRecipePaperExtraction.__dataclass_fields__.values()}
+    constructor = {key: value for key, value in raw.items() if key in allowed}
+    ignored = {key: value for key, value in raw.items() if key not in allowed}
+    notes = list(constructor.get("notes", []) or [])
+    if ignored:
+        notes.append(f"Unmodeled top-level extraction fields preserved by source JSON only: {sorted(ignored)}")
+    constructor["notes"] = notes
+    return ICRecipePaperExtraction(
+        factor_definitions=factors,
+        semantic_requirements=semantics,
+        metric_definitions=metrics,
         truth_sources=truth_sources,
         **constructor,
     )

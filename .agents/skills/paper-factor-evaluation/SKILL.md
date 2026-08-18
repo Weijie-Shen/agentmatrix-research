@@ -9,10 +9,10 @@ Evaluate the implemented factor under the paper's protocol or an explicitly reso
 
 ## Plan before computing
 
-Read candidate IC truth, data profiles, Stage-3 support assessments, implementation artifacts, and evaluator capabilities. For `paper_extraction.ic_analysis.v2`, a persisted Stage-3 data profile is mandatory: Stage 6 must not select a case from paper evidence alone. Use `build_paper_evaluation_plan(...)` to:
+Read the Stage-1 selected IC truth, resolved recipe, data profile, Stage-3 support assessment, implementation artifact, and evaluator capabilities. For `paper_extraction.ic_recipe.v3`, Stage 6 must not rank or reselect truth. Use `build_paper_evaluation_plan(...)` to:
 
-1. assess every candidate truth source;
-2. select exactly one highest-supported, unconflicted IC truth source per factor without looking at metric closeness;
+1. verify the selected truth source has an authoritative Stage-3 assessment;
+2. carry that one source forward unchanged;
 3. preserve `paper_protocol`;
 4. create separate `resolved_protocol` records;
 5. record structured deviations and affected metrics;
@@ -21,13 +21,13 @@ Read candidate IC truth, data profiles, Stage-3 support assessments, implementat
 
 Every truth case needs one lifecycle outcome: `selected`, `executed`, `deferred_by_budget`, `unsupported_evaluator`, `insufficient_data`, `paper_truth_conflict`, `superseded_by_better_supported_truth`, or `evaluation_error`.
 
-Do not complete Stage 6 with zero selected cases merely because the first extracted case is data-heavy. Revisit alternative extracted truth, materialize constructible labels, and resolve accepted proxies first. Defer all cases only after those general recovery paths are exhausted and recorded.
+Do not substitute another paper result block because the selected source is data-heavy. Materialize constructible labels and resolve accepted proxies first; otherwise report the selected source as unsupported or deferred with evidence.
 
 If support assessment marks a case executable, Stage 6 requires an actual canonical execution attempt. A resource deferral requires a persisted preflight or caught `ResourceBudgetExceededError`; do not infer it from panel size or the absence of a preferred partition helper.
 
 Resource evidence must describe the actual requested panel. Never substitute a probe or reduced frame while declaring a full-period request, and never choose an artificially tiny memory budget to manufacture a deferral. Set `memory_budget_bytes` from a real runtime limit when one is known; otherwise leave it unset and let the actual execution establish whether the environment can complete it.
 
-The v2 workflow has only the `ic_analysis` evaluator type. Rank-IC mean, ICIR, IC standard deviation, and positive-ratio measures printed in the selected result block are computed together and compared together when eligible. Alternative raw/neutralized/horizon/sample protocols remain report-visible as superseded, conflicted, or unsupported cases; they are not additional selected methods.
+The workflow has only the `ic_analysis` evaluator type. Rank-IC mean, ICIR, IC standard deviation, and positive-ratio measures printed in the selected result block are computed together and compared together when eligible.
 
 ## Resolve protocol safely
 
@@ -51,13 +51,17 @@ Before fundamental, benchmark-relative, universe-constrained, or excess-return e
 
 A diagnostic proxy may execute, but affected metrics must be diagnostic-only or proxy-grade.
 
-## Execute ordered transforms
+## Execute global policy and ordered recipe
 
-Apply the resolved `transform_spec` exactly in order. Preserve structured transforms on factor exposure, controls, weights, labels, and outputs. Capability-check operations and encodings before execution.
+Calculate the factor on full valid history, align factor and evaluation inputs, apply `china_a_share_ic_evaluation_v1`, then execute the resolved truth-source `evaluation_recipe` exactly in order. Preserve structured transforms on factor exposure, controls, weights, labels, and outputs. Capability-check operations and encodings before execution.
 
 Distinguish explicit `none`, inferred method, project default, and unknown. Never override explicit `none`. Do not flatten transformed controls into raw column names.
 
-Keep the full calculation panel separate from evaluation inputs. Join certified factor output only by unique date/security keys. Apply ST/PT, suspension, future-tradability, and portfolio eligibility masks only at their declared evaluation stage. In the common all-A protocol, factor history includes ST and suspended observations when otherwise valid; the evaluation cross-section removes ST/PT at the signal date and securities suspended on the extracted next-evaluation date.
+Keep the full calculation panel separate from evaluation inputs. Join certified factor output only by unique date/security keys. The global policy always removes ST/PT at signal date and securities suspended on the next exchange trading day before recipe preprocessing. Missing eligibility status excludes the row.
+
+The recipe's missing policy applies only to factor exposure and remains in declared order. Non-factor defaults are complete-case neutralization controls, pairwise return-label removal at IC, missing-status exclusion, and invalid-key blocking. `factor_missing.use_previous_exchange_day` may use only the exact preceding exchange session with maximum age one.
+
+Honor each transform's Stage-3 `execution_mode`. `reuse_materialized` preserves the paper operation in lineage but does not execute it again; `blocked_unknown_state` and `incompatible` block evaluation. Never double-log market capitalization.
 
 ## Return and metric correctness
 

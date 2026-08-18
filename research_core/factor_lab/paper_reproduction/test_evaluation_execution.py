@@ -252,6 +252,50 @@ class CanonicalEvaluationExecutionTest(unittest.TestCase):
         self.assertEqual(record.universe_diagnostics["output_rows"], 1)
         self.assertEqual(record.universe_diagnostics["applied_filters"][0]["filter_name"], "exclude_st_pt")
 
+    def test_v3_recipe_applies_global_policy_inside_canonical_execution(self) -> None:
+        calculation = self._calculation_panel()
+        evaluation = pd.DataFrame(
+            {
+                "date": ["2026-01-03", "2026-01-03"],
+                "code": ["A", "B"],
+                "forward_return_1d": [0.1, -0.1],
+                "is_st": [False, True],
+                "next_is_suspended": [False, False],
+            }
+        )
+        case = self._case()
+        recipe = {
+            "global_policy_ref": "china_a_share_ic_evaluation_v1",
+            "preprocessing_steps": [{"order": 1, "method_id": "factor_missing.drop"}],
+            "return_label": {
+                "method_id": "return.forward_close_to_close",
+                "horizon_exchange_days": 1,
+                "output_field": "forward_return_1d",
+            },
+            "ic_method": {"method_id": "ic.spearman_rank"},
+            "metric_methods": [{"method_id": "metric.rank_ic_mean"}],
+        }
+        case["resolved_protocol"]["evaluation_recipe"] = recipe
+        case["resolved_protocol"]["resolved_evaluation_recipe"] = recipe
+        case["resolved_protocol"]["required_data"] = {
+            "evaluation": ["forward_return_1d"],
+            "universe_filter": ["is_st", "next_is_suspended"],
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact = self._artifact(Path(tmp_dir), calculation)
+            bundle = execute_evaluation_plan(
+                self._plan(case),
+                artifact,
+                EvaluationDataContext(calculation_panel=calculation, evaluation_inputs=evaluation),
+            )
+
+        record = bundle.records[0]
+        self.assertEqual(record.lifecycle_state, "executed")
+        global_trace = record.evaluator_output["resolved_parameters"]["recipe_execution_trace"]["global_policy"]
+        self.assertEqual(global_trace["input_rows"], 2)
+        self.assertEqual(global_trace["eligible_rows"], 1)
+        self.assertEqual(record.alignment_diagnostics["factor_row_count"], 6)
+
     def test_skipped_neutralization_control_is_an_execution_limitation(self) -> None:
         calculation = self._calculation_panel()
         evaluation = pd.DataFrame(

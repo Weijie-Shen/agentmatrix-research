@@ -78,9 +78,11 @@ Stop implementation only for unavailable formula-required inputs, invalid panel 
 
 ## Profile evaluation support
 
-Use `build_data_profile(...)` and `assess_evaluation_case_support(...)` for every candidate truth source. Keep support assessment independent of computed metric closeness. Score formula support, label/calendar support, universe-mask support, every referenced semantic requirement, and every ordered-operation capability. An unresolved paper-evidence conflict has no eligible truth metrics even if its local fields are present.
+Use `build_data_profile(...)`, `assess_evaluation_case_support(...)`, and `resolve_recipe_value_states(...)` for the Stage-1 selected truth source. Stage 3 determines executability, comparability, semantic bindings, and transform execution modes; it never changes `factor_truth_selection`.
 
-Persist an assessment for every candidate. Stage 3 ranks semantic/data support but does not use paper-reported values or locally calculated IC values as a tie-breaker. Stage 6 consumes these assessments and chooses exactly one unconflicted IC truth source per factor; richer co-reported metric coverage may break an otherwise equal support tie, but metric values may not.
+Persist one authoritative assessment and resolved recipe for every selected factor/source pair. If the selected source is unsupported, report that limitation or blocker rather than switching to another result block.
+
+For every bound evaluation input record `physical_field`, `semantic_concept`, unit, price basis, `value_space`, `transform_chain`, temporal semantics, and lineage. Mark every recipe transform `apply`, `reuse_materialized`, `blocked_unknown_state`, or `incompatible`. Keep the requested paper operation even when a materialized value is reused. Never log a field whose state already contains `transform.natural_log`.
 
 Before building the profile used for evaluation planning, materialize runtime labels required by the candidate cases. For ordinary trading-observation horizons use `materialize_forward_return(...)`, then record the derived field and lineage in the profile. Prose such as “20-day forward return” or a raw `close` field is not an executable `return_col`.
 
@@ -88,7 +90,7 @@ When the paper defines `T+h` in market trading days, load the exchange calendar 
 
 When the paper defines the following whole natural month, use `materialize_natural_month_forward_return(...)` with the exchange calendar so the target is that month's last trading day. Do not replace a natural-month interval with 20 or 21 trading observations. Persist the target-date rule and any missing target prices in label lineage.
 
-Evaluation-only gaps include forward-return labels, controls, weights, industry, market cap, benchmark, historical index membership, index-weight convention, risk-free rate/tenor, execution price, ST/PT, suspension, and future-tradability masks. Record them as case-level limitations, replacements, or unsupported requirements.
+Evaluation-only gaps include forward-return labels, controls, weights, industry, market cap, benchmark, historical index membership, index-weight convention, risk-free rate/tenor, execution price, ST/PT, suspension, and future-tradability masks. Record them as selected-case limitations, replacements, or unsupported requirements.
 
 For point-in-time financial fields, enforce the paper evaluation date as the announcement cutoff before choosing a filing version. Record fields, cutoff, version policy, flow/stock semantics, and any standalone-quarter derivation. For valuations and dividends, preserve provider-versus-paper definitions and units.
 
@@ -96,7 +98,7 @@ Resolve exact benchmark/index identifiers. Keep monthly weights, reconstructed d
 
 Compute rolling factor values before joining capitalization or interval-resolving industry unless the paper explicitly makes them part of factor calculation or the calculation universe. Join capitalization on security/date and industry at the declared evaluation or formation date. A physically present `industry` or `market_cap` column is not semantic proof: attach explicit `FieldRelationship` records when the paper taxonomy or capitalization basis is matched or differs.
 
-Apply universe masks only at the stage declared by the paper. Keep the full calculation panel separate from filtered evaluation inputs. Materialize rolling factors on retained valid security history, then join the factor by unique date/security keys to the evaluation panel. Apply ST/PT and next-evaluation-day suspension masks at `factor_cross_section` or the explicitly extracted evaluation stage. Do not filter factor history before rolling calculations unless the factor definition requires it.
+Keep the full calculation panel separate from filtered evaluation inputs. Materialize rolling factors on retained valid security history, then join the factor by unique date/security keys to the evaluation panel. The mandatory global policy excludes ST/PT at signal date and next-exchange-day suspended securities after alignment and before recipe preprocessing. Do not filter factor history with these masks.
 
 ## Resource integrity
 

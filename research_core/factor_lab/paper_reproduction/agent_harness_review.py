@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from research_core.factor_lab.paper_reproduction.methodology import canonical_ic_type, canonical_transform_method
+from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
+    GLOBAL_EVALUATION_POLICY_ID,
+    IC_RECIPE_SCHEMA_VERSION,
+    validate_evaluation_recipe,
+)
 
 
 EXPECTED_STAGES = (
@@ -271,9 +276,17 @@ def _deep_completion_defects(
     if not extraction_path:
         defects.append("[extraction] no standalone paper-extraction JSON was found")
     else:
-        is_v2 = extraction.get("schema_version") == "paper_extraction.ic_analysis.v2"
-        factor_key = "factor_id" if is_v2 else "factor_name"
-        factor_collection = "factor_definitions" if is_v2 else "target_factors"
+        extraction_schema = str(extraction.get("schema_version", ""))
+        required_schema = str(harness_metadata.get("required_extraction_schema_version", "") or "")
+        if required_schema and extraction_schema != required_schema:
+            defects.append(
+                f"[extraction] fresh-run schema {extraction_schema or 'legacy'} does not match harness requirement {required_schema}"
+            )
+        is_v2 = extraction_schema == "paper_extraction.ic_analysis.v2"
+        is_v3 = extraction_schema == IC_RECIPE_SCHEMA_VERSION
+        is_registry_schema = is_v2 or is_v3
+        factor_key = "factor_id" if is_registry_schema else "factor_name"
+        factor_collection = "factor_definitions" if is_registry_schema else "target_factors"
         extraction_factors = {
             str(item.get(factor_key, "")): item
             for item in extraction.get(factor_collection, []) or []
@@ -281,6 +294,8 @@ def _deep_completion_defects(
         }
         if is_v2:
             defects.extend(_v2_extraction_contract_defects(extraction))
+        elif is_v3:
+            defects.extend(_v3_extraction_contract_defects(extraction))
         missing = [factor for factor in expected_factors if factor not in extraction_factors]
         if missing:
             defects.append(f"[extraction] extraction omits selected factors: {missing}")
@@ -288,7 +303,7 @@ def _deep_completion_defects(
             item = extraction_factors.get(factor, {})
             if not str(item.get("formula", "")).strip():
                 defects.append(f"[extraction] {factor} has no extracted formula")
-            if is_v2:
+            if is_registry_schema:
                 truth_sources = [
                     source
                     for source in extraction.get("truth_sources", []) or []
@@ -297,6 +312,14 @@ def _deep_completion_defects(
                 ]
                 if not truth_sources:
                     defects.append(f"[extraction] {factor} has no IC-analysis truth source")
+                if is_v3:
+                    selected_truth_id = str((extraction.get("factor_truth_selection", {}) or {}).get(factor, ""))
+                    truth_sources = [
+                        source for source in truth_sources
+                        if str(source.get("truth_source_id", "")) == selected_truth_id
+                    ]
+                    if not selected_truth_id or not truth_sources:
+                        defects.append(f"[extraction] {factor} has no valid Stage-1 selected truth source")
                 extracted_truth_ids_by_factor[factor] = {
                     str(source.get("truth_source_id", "")) for source in truth_sources
                 }
@@ -421,7 +444,7 @@ def _deep_completion_defects(
         if not selected:
             defects.append(f"[evaluation-lineage] {factor} has zero selected evaluation cases")
         extraction_schema = str(extraction.get("schema_version", ""))
-        if extraction_schema == "paper_extraction.ic_analysis.v2" and len(selected) > 1:
+        if extraction_schema in {"paper_extraction.ic_analysis.v2", IC_RECIPE_SCHEMA_VERSION} and len(selected) > 1:
             defects.append(f"[evaluation-lineage] {factor} selected more than one IC truth source")
         selected_ids[factor] = {
             str(case.get("source_truth_id") or case.get("truth_id") or case.get("truth_case_id") or "")
@@ -432,6 +455,27 @@ def _deep_completion_defects(
             defects.append(
                 f"[evaluation-lineage] {factor} selected truth not present in extraction: {sorted(unknown_selected)}"
             )
+        if extraction_schema == IC_RECIPE_SCHEMA_VERSION:
+            expected_truth_id = str((extraction.get("factor_truth_selection", {}) or {}).get(factor, ""))
+            if selected_ids[factor] != ({expected_truth_id} if expected_truth_id else set()):
+                defects.append(
+                    f"[evaluation-lineage] {factor} Stage-3/6 truth differs from Stage-1 selection: "
+                    f"{sorted(selected_ids[factor])} != {[expected_truth_id] if expected_truth_id else []}"
+                )
+            if len(assessed) != 1:
+                defects.append(
+                    f"[evaluation-lineage] {factor} v3 must assess only its Stage-1 selected truth source"
+                )
+            if len(selected) == 1:
+                truth_source = next(
+                    (
+                        source for source in extraction.get("truth_sources", []) or []
+                        if isinstance(source, dict)
+                        and str(source.get("truth_source_id", "")) == expected_truth_id
+                    ),
+                    {},
+                )
+                defects.extend(_v3_resolved_recipe_defects(factor, selected[0], truth_source))
 
     bundle_paths = sorted((runtime_root / "evaluation_bundles").glob("*.json"))
     canonical_execution_records: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -946,7 +990,7 @@ def _execution_protocol_defects(
         names = [str(item.get("filter_name", "")) for item in skipped_filters if isinstance(item, dict)]
         defects.append(f"[protocol] {factor} executed with required universe filters skipped: {names}")
     neutralization = output.get("neutralization_diagnostics", {}) or {}
-    skipped_controls = neutralization.get("skipped_controls", []) or []
+    skipped_controls = neutralization.get("skipped_controls", []) or [] if isinstance(neutralization, dict) else []
     if skipped_controls:
         names = [str(item.get("paper_field", "")) for item in skipped_controls if isinstance(item, dict)]
         defects.append(f"[protocol] {factor} executed with neutralization controls skipped: {names}")
@@ -960,9 +1004,18 @@ def _execution_protocol_defects(
         {},
     )
     selected_protocol = selected.get("resolved_protocol", {}) or selected
+    selected_recipe = (
+        selected_protocol.get("resolved_evaluation_recipe")
+        or selected_protocol.get("evaluation_recipe")
+        or selected.get("resolved_evaluation_recipe")
+        or selected.get("evaluation_recipe")
+        or {}
+    )
+    if isinstance(selected_recipe, dict) and selected_recipe:
+        defects.extend(_v3_recipe_execution_defects(factor, selected_recipe, output))
     selected_neutralization = selected_protocol.get("neutralization_spec", {}) or {}
     required_controls = selected_neutralization.get("controls", []) or []
-    used_controls = neutralization.get("used_controls", []) or []
+    used_controls = neutralization.get("used_controls", []) or [] if isinstance(neutralization, dict) else []
     if required_controls and len(used_controls) < len(required_controls):
         defects.append(
             f"[protocol] {factor} executed without all selected neutralization controls "
@@ -997,6 +1050,13 @@ def _immutable_ic_type(selected_case: dict[str, Any]) -> str:
     paper = selected_case.get("paper_protocol", {}) or {}
     if not isinstance(paper, dict):
         paper = {}
+    recipe = paper.get("evaluation_recipe", {}) or selected_case.get("evaluation_recipe", {}) or {}
+    if isinstance(recipe, dict):
+        method_id = str((recipe.get("ic_method", {}) or {}).get("method_id", ""))
+        if method_id == "ic.spearman_rank":
+            return "spearman_rank_ic"
+        if method_id == "ic.pearson":
+            return "pearson_ic"
     method = str(paper.get("evaluation_method", "") or "")
     if any(token in method.lower() for token in ("spearman", "rank", "pearson", "ordinary", "corr")):
         return canonical_ic_type(method)
@@ -1004,6 +1064,66 @@ def _immutable_ic_type(selected_case: dict[str, Any]) -> str:
     if isinstance(evaluation_spec, dict) and evaluation_spec.get("ic_type"):
         return canonical_ic_type(evaluation_spec["ic_type"])
     return ""
+
+
+def _v3_recipe_execution_defects(
+    factor: str,
+    selected_recipe: dict[str, Any],
+    output: dict[str, Any],
+) -> list[str]:
+    defects: list[str] = []
+    resolved_parameters = output.get("resolved_parameters", {}) or {}
+    executed_recipe = resolved_parameters.get("evaluation_recipe", {}) or {}
+    if executed_recipe != selected_recipe:
+        defects.append(f"[protocol] {factor} executed recipe differs from the selected resolved recipe")
+    execution_trace = resolved_parameters.get("recipe_execution_trace", {}) or {}
+    global_trace = execution_trace.get("global_policy", {}) or {}
+    if global_trace.get("policy_id") != GLOBAL_EVALUATION_POLICY_ID:
+        defects.append(f"[protocol] {factor} execution lacks mandatory global eligibility policy evidence")
+    for key in ("input_rows", "eligible_rows", "excluded_rows"):
+        if not isinstance(global_trace.get(key), int):
+            defects.append(f"[protocol] {factor} global policy trace lacks integer {key}")
+    status_bindings = global_trace.get("status_bindings", {}) or {}
+    for semantic in ("st_or_pt_status", "next_day_suspension_status"):
+        if not str(status_bindings.get(semantic, "")):
+            defects.append(f"[protocol] {factor} executed global policy lacks {semantic} binding")
+
+    expected_steps = [
+        {
+            "order": step.get("order"),
+            "method_id": str(step.get("method_id", "")),
+            "execution_mode": str(step.get("execution_mode", "apply")),
+        }
+        for step in selected_recipe.get("preprocessing_steps", []) or []
+        if isinstance(step, dict)
+    ]
+    executed_steps = [
+        {
+            "order": step.get("order"),
+            "method_id": str(step.get("method_id", "")),
+            "execution_mode": str(step.get("execution_mode", "")),
+        }
+        for step in execution_trace.get("preprocessing_trace", []) or []
+        if isinstance(step, dict)
+    ]
+    if expected_steps != executed_steps:
+        defects.append(f"[protocol] {factor} executed preprocessing trace differs from selected recipe order")
+    expected_neutralizations = sum(
+        1
+        for step in selected_recipe.get("preprocessing_steps", []) or []
+        if isinstance(step, dict)
+        and str(step.get("method_id", "")) == "neutralize.cross_sectional_regression_residual"
+        and str(step.get("execution_mode", "apply")) == "apply"
+    )
+    executed_neutralizations = execution_trace.get("neutralization_steps", []) or []
+    if len(executed_neutralizations) != expected_neutralizations:
+        defects.append(
+            f"[protocol] {factor} executed {len(executed_neutralizations)}/{expected_neutralizations} "
+            "ordered neutralization steps"
+        )
+    if selected_recipe.get("preprocessing_steps") and output.get("transform_applied") is not True:
+        defects.append(f"[protocol] {factor} executed without its selected evaluation recipe")
+    return defects
 
 
 def _immutable_operation_trace(selected_case: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1270,13 +1390,13 @@ def _repair_guidance(defects: list[str]) -> tuple[str, list[str]]:
         "extraction": "Correct extraction provenance/ambiguities, renormalize specs, and rerun every dependent gate.",
         "scope": "Reconcile selected-factor names across harness, extraction, specs, implementation, and reports.",
         "specs": "Regenerate normalized specs from the persisted extraction before continuing.",
-        "stage3": "Persist full requested-scenario Stage 3 profiles with semantic validations and exact sample boundaries.",
+        "stage3": "Persist full requested-scenario Stage 3 profiles, selected-recipe support assessment, semantic value states, and transform execution modes.",
         "implementation": "Rebuild and recertify the importable implementation artifact; verify its source hash.",
         "tests": "Add formula-focused expected-value tests for every selected factor and persist machine-readable test output.",
         "evaluation-plan": "Persist a resolved evaluation plan with assessed and selected lifecycle cases for every factor.",
-        "evaluation-lineage": "Rebuild assessed→selected→executed lineage and execute only selected cases.",
+        "evaluation-lineage": "Restore Stage-1 factor-to-truth selection, assess only that source in Stage 3, and execute it without reselection.",
         "evaluation": "Rerun every required scenario through the certified implementation and persist successful records.",
-        "protocol": "Resolve and apply every required transform, neutralization control, and universe filter before re-execution.",
+        "protocol": "Apply the mandatory global policy, then execute the resolved ordered recipe with all controls and value-state decisions.",
         "truth": "Rebuild truth matching from executed selected cases and exclude diagnostic-only metrics from denominators.",
         "pipeline": "Reconcile pipeline stage claims and artifact paths with files that actually exist.",
         "report": "Regenerate both final reports from reconciled persisted artifacts after upstream repairs.",
@@ -1390,6 +1510,126 @@ def _v2_extraction_contract_defects(extraction: dict[str, Any]) -> list[str]:
             defects.append(
                 f"[extraction] truth {source.get('truth_source_id', '-')} references unknown factors: {sorted(missing_factors)}"
             )
+    return defects
+
+
+def _v3_extraction_contract_defects(extraction: dict[str, Any]) -> list[str]:
+    defects: list[str] = []
+    forbidden = _find_forbidden_extraction_keys(extraction)
+    if forbidden:
+        defects.append(f"[extraction] v3 immutable evidence contains runtime bindings: {forbidden}")
+    factor_ids = {
+        str(item.get("factor_id", ""))
+        for item in extraction.get("factor_definitions", []) or []
+        if isinstance(item, dict)
+    }
+    semantic_ids = {
+        str(item.get("semantic_field_id", ""))
+        for item in extraction.get("semantic_requirements", []) or []
+        if isinstance(item, dict)
+    }
+    metric_ids = {
+        str(item.get("metric_id", ""))
+        for item in extraction.get("metric_definitions", []) or []
+        if isinstance(item, dict)
+    }
+    truth_by_id = {
+        str(item.get("truth_source_id", "")): item
+        for item in extraction.get("truth_sources", []) or []
+        if isinstance(item, dict)
+    }
+    selection = extraction.get("factor_truth_selection", {}) or {}
+    if set(selection) != factor_ids:
+        defects.append("[extraction] v3 factor_truth_selection must contain every and only extracted factor")
+    for factor in extraction.get("factor_definitions", []) or []:
+        missing = set(factor.get("required_semantic_fields", []) or []) - semantic_ids
+        if missing:
+            defects.append(f"[extraction] {factor.get('factor_id', '-')} references unknown semantics: {sorted(missing)}")
+    for truth_id, source in truth_by_id.items():
+        covered = set(source.get("covered_factor_ids", []) or [])
+        reported = set((source.get("reported_results", {}) or {}))
+        if covered != reported:
+            defects.append(f"[extraction] truth {truth_id} covered factors differ from reported result rows")
+        unknown_metrics = set(source.get("reported_metric_ids", []) or []) - metric_ids
+        if unknown_metrics:
+            defects.append(f"[extraction] truth {truth_id} references unknown metrics: {sorted(unknown_metrics)}")
+        recipe = source.get("evaluation_recipe", {}) or {}
+        if recipe.get("global_policy_ref") != GLOBAL_EVALUATION_POLICY_ID:
+            defects.append(f"[extraction] truth {truth_id} lacks the mandatory global policy reference")
+        for error in validate_evaluation_recipe(recipe, prefix=f"truth_sources[{truth_id}].evaluation_recipe"):
+            defects.append(f"[extraction] {error}")
+        recipe_metrics = {
+            str(item.get("method_id", "")).removeprefix("metric.")
+            for item in recipe.get("metric_methods", []) or []
+            if isinstance(item, dict) and str(item.get("method_id", "")).startswith("metric.")
+        }
+        if recipe_metrics and recipe_metrics != set(source.get("reported_metric_ids", []) or []):
+            defects.append(f"[extraction] truth {truth_id} recipe metrics differ from reported metric IDs")
+    for factor_id, truth_id in selection.items():
+        source = truth_by_id.get(str(truth_id))
+        if source is None or factor_id not in (source.get("reported_results", {}) or {}):
+            defects.append(f"[extraction] {factor_id} selects a truth source without its result row")
+    return defects
+
+
+def _v3_resolved_recipe_defects(
+    factor: str,
+    selected_case: dict[str, Any],
+    truth_source: dict[str, Any],
+) -> list[str]:
+    defects: list[str] = []
+    immutable = truth_source.get("evaluation_recipe", {}) if isinstance(truth_source, dict) else {}
+    selected_immutable = selected_case.get("evaluation_recipe", {}) or {}
+    paper_protocol = selected_case.get("paper_protocol", {}) or {}
+    if not selected_immutable and isinstance(paper_protocol, dict):
+        selected_immutable = paper_protocol.get("evaluation_recipe", {}) or {}
+    if immutable and selected_immutable != immutable:
+        defects.append(f"[evaluation-lineage] {factor} selected recipe differs from Stage-1 truth recipe")
+    resolved_protocol = selected_case.get("resolved_protocol", {}) or {}
+    resolved = (
+        resolved_protocol.get("resolved_evaluation_recipe")
+        or selected_case.get("resolved_evaluation_recipe")
+        or {}
+    )
+    if not isinstance(resolved, dict) or not resolved:
+        return [*defects, f"[stage3] {factor} selected truth has no resolved evaluation recipe"]
+    resolution = resolved.get("resolution", {}) or {}
+    if resolution.get("status") != "resolved":
+        defects.append(f"[stage3] {factor} recipe value-state resolution is not executable")
+    bindings = resolved.get("global_policy_bindings", {}) or {}
+    for semantic in ("st_or_pt_status", "next_day_suspension_status"):
+        if not str(bindings.get(semantic, "")):
+            defects.append(f"[stage3] {factor} global policy lacks resolved binding for {semantic}")
+    unresolved_modes: list[str] = []
+    for step in resolved.get("preprocessing_steps", []) or []:
+        if not isinstance(step, dict):
+            continue
+        mode = str(step.get("execution_mode", ""))
+        if mode not in {"apply", "reuse_materialized"}:
+            unresolved_modes.append(f"{step.get('method_id', '')}:{mode or 'missing'}")
+        for control in step.get("controls", []) or []:
+            if not isinstance(control, dict):
+                continue
+            if not str(control.get("resolved_field", "")):
+                defects.append(
+                    f"[stage3] {factor} recipe control {control.get('semantic_input', '-')} has no resolved field"
+                )
+            for transform in control.get("transforms", []) or []:
+                if not isinstance(transform, dict):
+                    continue
+                transform_mode = str(transform.get("execution_mode", ""))
+                if transform_mode not in {"apply", "reuse_materialized"}:
+                    unresolved_modes.append(
+                        f"{transform.get('method_id', '')}:{transform_mode or 'missing'}"
+                    )
+    if unresolved_modes:
+        defects.append(f"[stage3] {factor} recipe contains unresolved execution modes: {unresolved_modes}")
+    reason = str(selected_case.get("selection_reason", "")).lower()
+    if "stage 1" not in reason and "stage-1" not in reason:
+        defects.append(f"[evaluation-lineage] {factor} selection reason does not preserve Stage-1 authority")
+    assessment = selected_case.get("support_assessment", {}) or {}
+    if not str(assessment.get("assessment_id", "")):
+        defects.append(f"[stage3] {factor} selected recipe has no authoritative support assessment ID")
     return defects
 
 

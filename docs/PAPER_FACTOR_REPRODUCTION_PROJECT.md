@@ -29,7 +29,7 @@ See the latest validation run; do not copy a stale fixed count into workflow dec
 Implemented capabilities:
 
 - paper extraction dataclasses and validation
-- shared-registry `paper_extraction.ic_analysis.v2` truth-source schema, with legacy-load compatibility
+- truth-source-recipe `paper_extraction.ic_recipe.v3` schema, with v2 and legacy-load compatibility
 - extraction artifact export/load
 - normalization into `FactorResearchSpec`
 - specs/catalog export through existing Factor Lab registry
@@ -93,9 +93,9 @@ Do not use these in the current paper-truth workflow:
 
 External third-party truth data is a separate evidence type and is not the current paper-reproduction proof target.
 
-### 2. Shared IC Evidence Registries Are First-Class
+### 2. Truth-Source-Owned IC Recipes Are First-Class
 
-New artifacts use `schema_version = paper_extraction.ic_analysis.v2`. Raw factor definitions stay minimal. Reusable evaluation meaning lives in paper-level registries for semantic requirements, universe protocols, sample periods, ordered operation pipelines, metric definitions, and IC protocols. Truth sources refer to one protocol and store factor-keyed paper results.
+New artifacts use `schema_version = paper_extraction.ic_recipe.v3`. Raw factor definitions stay minimal. Each homogeneous truth source owns one declarative evaluation recipe and stores factor-keyed paper results. A single source/table block may cover many factors.
 
 Raw factor definition:
 
@@ -109,15 +109,15 @@ Raw factor definition:
 IC truth source:
 
 - `truth_source_id`
-- exactly one `protocol_id`
+- exactly one `evaluation_recipe`
 - one narrow table/figure/row-block source
 - all `reported_metric_ids` printed together in that block
 - factor-keyed `reported_results`
-- optional paper-conflict group
+- every covered factor row and optional notes/gaps
 
 Do not put preprocessing, neutralization, portfolio construction, return horizon, execution price, benchmark, or evaluation-required fields at raw-factor level when they vary by paper result.
 
-Stage 1 contains no local physical-field bindings and no selected truth IDs. Stage 3 owns local semantic resolution; Stage 6 owns selection.
+Stage 1 contains no local physical-field bindings. It selects exactly one truth source per factor in `factor_truth_selection`. Stage 3 owns local semantic and value-state resolution; Stage 6 executes without reselection.
 
 ### 3. Truth Granularity Must Be Tight
 
@@ -130,7 +130,7 @@ Split truth sources when the IC protocol differs in any of these ways:
 - sample window
 - return alignment or status-filter timing
 
-Do not split Rank-IC mean, IC standard deviation, ICIR, or positive-ratio metrics when they appear together under the same table protocol. They are metrics of one `ic_analysis` evaluator type. Raw and neutralized IC tables remain separate truth sources because their operation pipelines differ.
+Do not split Rank-IC mean, IC standard deviation, ICIR, or positive-ratio metrics when they appear together under the same recipe. They are metrics of one `ic_analysis` evaluator type. Split a table's row blocks when their preprocessing or neutralization recipes differ.
 
 ### 4. Known Limitations Are Not Automatically Blockers
 
@@ -216,10 +216,10 @@ Extraction should preserve shared registries for:
 - factor frequency
 - factor parameters
 - typed paper semantics, including industry source/version/level and capitalization basis
-- distinct calculation and evaluation universes plus staged filters
-- reusable samples, operation pipelines, IC protocols, and metric formulas/units
-- all paper-reported IC result blocks and every metric co-reported in each block
-- an explicit policy assigning support assessment to Stage 3 and final selection to Stage 6
+- truth-source-owned sampling, ordered preprocessing, return-label, IC, and metric methods
+- all selected paper-reported IC result blocks and every metric co-reported in each block
+- exactly one Stage-1 truth-source selection per factor
+- mandatory `china_a_share_ic_evaluation_v1` global-policy reference
 - classified ambiguity notes
 - known limitations
 
@@ -228,12 +228,12 @@ Validation checks:
 - paper id, title, authors, and family name exist
 - every target factor has ID, formula, and referenced semantic fields
 - frequency exists or its absence is explicitly recorded
-- every registry ID is unique and every reference resolves
+- every ID is unique and every reference resolves
 - the only evaluator type is `ic_analysis`
-- every truth source has one protocol and its metric IDs exactly match each factor result row
+- every truth source has one homogeneous recipe, covered-factor IDs match result rows, and metric IDs match each row
 - duplicate truth IDs fail
-- local data-binding keys and selected truth IDs fail
-- future status masks at rolling-factor calculation stage fail unless semantically valid
+- local data-binding keys fail
+- unknown method IDs, non-contiguous step order, and invalid factor/source selections fail
 - unresolved contradictory paper blocks are explicit conflict groups and require review
 - broad or missing source locations require human review
 - unrecognized metric names require human review
@@ -267,21 +267,20 @@ Validation targets:
 
 - `formula_match_ratio >= 1.0`
 - `field_mapping_match_ratio >= 1.0`
-- paper-evaluation matching remains inactive until Stage 3/6 chooses a truth source
+- paper-evaluation matching remains inactive until Stage 3 resolves and Stage 6 executes the selected source
 
 Preserve in spec metadata:
 
 - paper provenance
 - extraction validation status and warnings
-- all projected candidate truth sources and shared evidence references
-- empty selected truth sources
+- the one Stage-1 selected truth source and immutable recipe
 - truth source summary
 - evaluation cases
 - known limitations
 - classified ambiguities
-- Stage-3 support-assessment and Stage-6 truth-selection policy
+- Stage-3 recipe/value-state resolution and Stage-6 execution policy
 - factor semantic-field IDs and evaluation-case refs
-- compiled ordered operation pipelines, without added transform defaults
+- preserved ordered recipe, without added transform defaults
 - proof status ceiling
 - implementation stage
 
@@ -313,7 +312,7 @@ Formula-stage validation checks:
 
 Keep formula-required fields separate from evaluation-required fields.
 
-For v2, assess every candidate truth source against typed semantic requirements and operation capabilities. SWS and CITIC industry definitions, their levels/timing, and total/A-share/circulating/free-float capitalization bases are distinct relationships. Persist exact/constructed/proxy/missing status without using calculated-versus-paper IC closeness. An unresolved paper conflict has no eligible truth metrics.
+For v3, assess the selected truth source against typed semantic requirements and operation capabilities. SWS and CITIC industry definitions, their levels/timing, and total/A-share/circulating/free-float capitalization bases are distinct relationships. Bind semantic concept plus unit, price basis, value space, transform chain, and temporal semantics. Mark requested transforms `apply`, `reuse_materialized`, `blocked_unknown_state`, or `incompatible`; never double-transform a materialized field.
 
 Evaluation-data resolution must distinguish `exact_alias`, `derived_equivalent`,
 `proxy_substitute`, and `unsupported_substitute`. A proxy may keep an evaluation
@@ -439,6 +438,8 @@ Main APIs:
 build_paper_evaluation_plan(specs, data_profiles={...})
 apply_transform_spec(...)
 apply_neutralization_spec(...)
+apply_evaluation_recipe(...)
+apply_global_evaluation_policy(...)
 compute_ic_analysis(...)
 compute_cross_sectional_regression(...)
 execute_evaluation_plan(plan, implementation_artifact, data_context)
@@ -449,7 +450,7 @@ ResourceExecutionConfig(memory_budget_bytes=...)
 does not establish implementation identity and must not be used as canonical
 reproduction evidence by itself.
 
-Before selecting truth, profile the available data and assess every candidate evaluation case. A v2 case cannot be selected without a Stage-3 profile. The extracted truth source represents what the paper did and must not be mutated during execution. The planner selects exactly one highest-supported unconflicted IC truth source per factor, without looking at metric values, and creates a separate resolved runtime case containing:
+Before execution, profile the available data and assess the Stage-1 selected evaluation case. The extracted source and recipe represent what the paper did and must not be mutated. The planner carries that source forward and creates a separate resolved runtime case containing:
 
 - `source_truth_id`
 - `paper_protocol`
@@ -469,10 +470,9 @@ pipeline-blocking scope. Repeated declarations of the same semantic requirement
 are reconciled before support scoring so schema repetition cannot inflate or
 penalize a case.
 
-Evaluation execution must consume the single `selected_evaluation_case`, not loop over every extracted truth source. Superseded, conflicted, unsupported, budget-deferred, or insufficient-data cases remain visible in reports but do not enter metric truth matching.
+Evaluation execution consumes the single `selected_evaluation_case`. Unsupported, budget-deferred, or insufficient-data outcomes remain visible and do not enter metric truth matching; they never trigger source reselection.
 
-Evaluation must follow the selected resolved case. Before computing metrics, apply
-the evaluation-case factor transforms and structured neutralization in order,
+Evaluation must follow the selected resolved case. After alignment, apply the mandatory global ST/PT and next-exchange-day-suspension policy, then apply the truth-source recipe in order,
 including declared transformations of continuous/categorical controls. Capability
 checks and replacement provenance decide whether each transform/control is
 executable; skipped controls remain non-blocking limitations and must be reported.

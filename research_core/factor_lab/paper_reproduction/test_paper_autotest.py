@@ -115,6 +115,20 @@ class PaperAutotestTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "numeric paper truth"):
             validate_selection(invalid)
 
+        missing_recipe = self._factor("MissingRecipe")
+        object.__setattr__(missing_recipe, "paper_recipe_summary", {})
+        with self.assertRaisesRegex(ValueError, "paper recipe summary"):
+            validate_selection(
+                PaperSelectionArtifact(paper=paper, selected_factors=[missing_recipe])
+            )
+
+        missing_role = self._factor("MissingRole")
+        object.__setattr__(missing_role, "truth_source_role", "")
+        with self.assertRaisesRegex(ValueError, "truth source role"):
+            validate_selection(
+                PaperSelectionArtifact(paper=paper, selected_factors=[missing_role])
+            )
+
     def test_selection_uses_paper_conclusion_set_and_allows_up_to_ten_factors(self) -> None:
         paper = self._paper(Path("/tmp/demo.pdf"))
         conclusion_factors = [f"Factor{index}" for index in range(1, 8)]
@@ -167,10 +181,15 @@ class PaperAutotestTest(unittest.TestCase):
                 max_parallel_reproducers=2,
             )
             plan = manifest.runs[0]
+            self.assertEqual(manifest.schema_version, "paper_autotest_batch/v2")
+            self.assertEqual(plan.extraction_schema_version, "paper_extraction.ic_recipe.v3")
+            self.assertEqual(plan.global_evaluation_policy_id, "china_a_share_ic_evaluation_v1")
+            self.assertEqual(plan.truth_selection_stage, 1)
             worktree = prepare_test_worktree(plan)
             prompt_path = Path(prepare_run_harness(plan))
             self.assertTrue(prompt_path.is_file())
             self.assertIn("FactorA", prompt_path.read_text(encoding="utf-8"))
+            self.assertIn("paper_extraction.ic_recipe.v3", prompt_path.read_text(encoding="utf-8"))
             report = worktree / "runtime" / "factor_lab" / "reports" / "demo_paper_reproduction_report.json"
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(json.dumps({"paper_id": "demo"}), encoding="utf-8")
@@ -179,7 +198,17 @@ class PaperAutotestTest(unittest.TestCase):
 
             harvest_path = harvest_run_artifacts(plan)
             harvest = json.loads(harvest_path.read_text(encoding="utf-8"))
+            self.assertEqual(harvest["schema_version"], "paper_autotest_harvest/v3")
             harvested_paths = [item["path"] for item in harvest["files"]]
+            self.assertEqual(
+                harvest["required_extraction_schema_version"],
+                "paper_extraction.ic_recipe.v3",
+            )
+            self.assertEqual(
+                harvest["required_global_evaluation_policy_id"],
+                "china_a_share_ic_evaluation_v1",
+            )
+            self.assertEqual(harvest["truth_selection_stage"], 1)
             self.assertIn("runtime/factor_lab/reports/demo_paper_reproduction_report.json", harvested_paths)
             self.assertTrue(
                 (Path(plan.control_root) / "artifacts" / "runtime" / "factor_lab" / "reports" / report.name).is_file()
@@ -371,7 +400,20 @@ class PaperAutotestTest(unittest.TestCase):
                 record_reviewer_started(plan, reviewer_task_id="previous-terra-task")
             assignment_path = record_reviewer_started(plan, reviewer_task_id="sol-reviewer-1")
             assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                assignment["schema_version"],
+                "paper_autotest_reviewer_assignment/v2",
+            )
             self.assertEqual(assignment["actual_model_status"], "unverified")
+            self.assertEqual(
+                assignment["required_extraction_schema_version"],
+                "paper_extraction.ic_recipe.v3",
+            )
+            self.assertEqual(
+                assignment["required_global_evaluation_policy_id"],
+                "china_a_share_ic_evaluation_v1",
+            )
+            self.assertEqual(assignment["truth_selection_stage"], 1)
             self.assertTrue(assignment["independence_checks"]["different_from_worker"])
             self.assertTrue(assignment["review_inputs"])
 
@@ -469,11 +511,40 @@ class PaperAutotestTest(unittest.TestCase):
                 "---\nname: paper-factor-reproduction\n"
                 "description: Run paper factor reproduction tests.\n---\n# Reproduce\n"
             ),
+            ".agents/skills/paper-evidence-extraction/SKILL.md": (
+                "---\nname: paper-evidence-extraction\n"
+                "description: Extract v3 recipes.\n---\n# Extract\n"
+            ),
+            ".agents/skills/paper-factor-data-readiness/SKILL.md": "# Data readiness\n",
+            ".agents/skills/paper-factor-implementation/SKILL.md": "# Implementation\n",
+            ".agents/skills/paper-factor-evaluation/SKILL.md": "# Evaluation\n",
+            ".agents/skills/rqdata-fetch-reference/SKILL.md": "# RQData reference\n",
+            ".agents/skills/paper-evidence-extraction/references/evaluation-recipe-schema.md": (
+                "# paper_extraction.ic_recipe.v3\n"
+            ),
+            ".agents/skills/paper-evidence-extraction/references/global-evaluation-policy.md": (
+                "# china_a_share_ic_evaluation_v1\n"
+            ),
+            ".agents/skills/paper-evidence-extraction/references/extraction-examples.md": "# Examples\n",
+            ".agents/skills/paper-evidence-extraction/references/ic-and-metric-method-catalog.md": "# IC methods\n",
+            ".agents/skills/paper-evidence-extraction/references/neutralization-method-catalog.md": "# Neutralization methods\n",
+            ".agents/skills/paper-evidence-extraction/references/preprocessing-method-catalog.md": "# Preprocessing methods\n",
+            ".agents/skills/paper-evidence-extraction/references/return-label-method-catalog.md": "# Return labels\n",
+            ".agents/skills/paper-evidence-extraction/references/semantic-data-state.md": "# Data states\n",
+            ".agents/skills/paper-evidence-extraction/references/truth-source-selection.md": "# Truth selection\n",
+            ".agents/skills/paper-reproduction-autotest/SKILL.md": (
+                "---\nname: paper-reproduction-autotest\n"
+                "description: Run v3 autotests.\n---\n# Autotest\n"
+            ),
             ".agents/skills/paper-reproduction-review/SKILL.md": (
                 "---\nname: paper-reproduction-review\n"
                 "description: Review paper reproduction artifacts.\n---\n# Review\n"
             ),
             "research_core/factor_lab/paper_reproduction/agent_harness.py": "# tracked harness marker\n",
+            "research_core/factor_lab/paper_reproduction/evaluation_recipe.py": (
+                "IC_RECIPE_SCHEMA_VERSION = 'paper_extraction.ic_recipe.v3'\n"
+                "GLOBAL_EVALUATION_POLICY_ID = 'china_a_share_ic_evaluation_v1'\n"
+            ),
         }
         for relative, content in files.items():
             path = repo / relative
@@ -500,6 +571,12 @@ class PaperAutotestTest(unittest.TestCase):
             performance_strength=4,
             compute_feasibility=4,
             selection_reason="Clear formula, strong IC, and direct local inputs.",
+            truth_selection_reason="Principal factor-level IC table selected under the paper's default protocol.",
+            paper_recipe_summary={
+                "ic_method": "spearman_rank",
+                "return_label": "forward_return",
+                "preprocessing_order": ["winsorize", "standardize"],
+            },
         )
 
 

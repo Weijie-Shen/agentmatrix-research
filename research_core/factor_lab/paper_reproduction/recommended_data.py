@@ -553,7 +553,13 @@ def normalize_recommended_market_cap_frame(
     output.attrs["market_cap_lineage"] = {
         field: {
             "source_field": MARKET_CAP_FIELD_SOURCES[field],
+            "physical_field": field,
+            "semantic_concept": field,
+            "unit": "CNY",
             "price_basis": "unadjusted",
+            "value_space": "level",
+            "transform_chain": [],
+            "temporal_semantics": "point_in_time_daily_at_trade_date",
             "derived": field == "free_float_market_cap",
         }
         for field in selected_fields

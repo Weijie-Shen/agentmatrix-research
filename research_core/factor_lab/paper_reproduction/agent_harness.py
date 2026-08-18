@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig, now_iso
+from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
+    GLOBAL_EVALUATION_POLICY_ID,
+    IC_RECIPE_SCHEMA_VERSION,
+)
 
 
 DEFAULT_SKILL_NAME = "paper-factor-reproduction"
@@ -153,6 +157,11 @@ def _metadata_payload(
             "agent_platform": "codex",
             "required_agent_instruction": "Load and follow the bundled paper-factor-reproduction skill before doing reproduction work.",
             "truth_policy": "Use paper-reported evaluation_results only; do not use factor-value truth matching.",
+            "required_extraction_schema_version": IC_RECIPE_SCHEMA_VERSION,
+            "required_global_evaluation_policy_id": GLOBAL_EVALUATION_POLICY_ID,
+            "truth_selection_stage": 1,
+            "recipe_resolution_stage": 3,
+            "recipe_execution_stage": 6,
             "stage_policy": "Proceed through the gated paper reproduction workflow and stop at the correct gate when blocked.",
             "required_price_adjustment_views": ["qfq", "hfq"],
             "qfq_anchor_policy": "per-security cumulative factor at the paper testing-period end",
@@ -226,26 +235,28 @@ Paper ID:
 
 ## Instructions
 
-- Use paper-reported `evaluation_results` only as truth; for new jobs these are IC-analysis results. Create new Stage-1 artifacts as `paper_extraction.ic_analysis.v2`; legacy extraction is compatibility input only.
+- Use paper-reported `evaluation_results` only as truth. Create new Stage-1 artifacts as `{metadata["required_extraction_schema_version"]}`; v2 and legacy extraction are compatibility inputs only, not valid fresh-run output.
 - Do not use paper factor-value truth matching.
-- Build shared factor-definition, semantic-requirement, universe/sample/operation/metric/IC-protocol, and truth-source registries. Keep Stage 1 immutable: no local physical-field bindings and no selected truth IDs.
+- Build formula and semantic registries plus truth-source-owned declarative IC recipes. A homogeneous truth-source/table block may cover many factors. Split row blocks when their evaluation recipes differ.
+- Select exactly one truth source for every selected factor during Stage 1 using the bundled extraction selection standard. The selected source must contain that factor's reported row. Never defer truth selection to data readiness or evaluation, and never select by reproduced metric closeness or local data convenience.
 - Keep raw factor definitions separate from evaluation-case transforms, neutralization, return horizons, portfolio rules, and evaluation-required data. Treat Rank-IC mean, ICIR, IC standard deviation, and positive ratio as co-reported metrics of the single `ic_analysis` evaluator type.
 - Use `load_recommended_daily_panel(..., price_view="qfq", adjustment_end_date=test_end)` and `price_view="hfq"` sequentially with `/Users/mac/recommended_data_v2` before Quant API v2 or declaring `blocked_by_data`. Run the testing-end-anchored QFQ and initial-baseline HFQ views independently. Complete, persist, and release one scenario before loading the next; do not hand-pick physical files or keep both full views resident by default.
 - Read the recommended-data README before Stage 3. Resolve total/A-share/circulating-A/free-float capitalization from paper wording and request it with `market_cap_fields`. Resolve industry taxonomy source and level from paper evidence and pass `IndustryClassificationSelection`; interval history must use `start_date <= evaluation_or_formation_date < cancel_date`. Do not apply QFQ/HFQ multipliers to capitalization, treat industry codes as continuous, or silently choose a taxonomy.
 - Use repository loaders for PIT financial statements, valuations/dividends, benchmark levels, historical index constituents/weights, the China exchange calendar, and the government yield curve. Apply `ann_date <= T` before filing-version selection; specify monthly versus daily index weights and yield tenor explicitly; use exchange-calendar `T+h` labels when the paper defines trading-day horizons. Use `$rqdata-fetch-reference` only when the canonical local reference bundle cannot satisfy the exact request.
 - Use Quant API v2 only when the recommended local data folder cannot satisfy the paper's required fields/date window.
-- Preserve all extracted truth sources. Stage 2 must project shared references without selecting truth or inventing transform defaults. Stage 3 must assess every candidate from semantic/data support without inspecting metric closeness. Stage 6 requires that assessment and selects exactly one unconflicted IC truth source per factor before computing metrics; all alternatives remain lifecycle-visible.
+- Stage 2 must preserve the Stage-1 factor-to-truth selection and recipe without inventing transform defaults. Stage 3 assesses only the selected source, binds semantic concept plus data value state, and marks each transform `apply`, `reuse_materialized`, `blocked_unknown_state`, or `incompatible`. Stage 6 executes that resolved recipe without truth reselection.
 - Resolve semantic data fields through declared relationships. Exact aliases, constructed equivalents, accepted proxies, and rejected substitutes must remain distinct; proxies downgrade comparability and stay report-visible, while unmaterialized derivations and unsupported substitutes must not become runtime fields.
 - Certify the final factor module and callable as a `FactorImplementationArtifact` on a probe panel; an inline factor column or unimplemented scaffold is not implementation completion.
-- Run selected cases through `execute_evaluation_plan(...)`. Keep the full calculation panel separate from possibly filtered evaluation inputs, and align artifact factor output only by unique date/security keys.
+- Run selected cases through `execute_evaluation_plan(...)`. Keep the full calculation panel separate from evaluation inputs, align artifact factor output only by unique date/security keys, then apply `{metadata["required_global_evaluation_policy_id"]}` before the selected recipe.
 - Configure `EvaluationDataContext.resource_config` for full-period runs. Honor resource preflight, required-column projection, incremental hashing, and sequential cases; if projected execution still exceeds budget, require verified partitions instead of silently shortening dates, reducing the universe, or dropping controls.
-- Extract factor, control, weight, and output transformations in their stated order. Use structured neutralization specs so control transforms such as log, winsorization, and cross-sectional standardization are capability-checked and executed rather than flattened into raw column names.
-- Represent calculation and evaluation universes separately. Retain full otherwise-valid security history for rolling factor calculation. Apply ST/PT, suspension, and future-tradability masks only at their declared evaluation stage unless the paper explicitly requires them during factor calculation. Preserve the status date rule, including next-evaluation-day suspension semantics.
+- Extract factor-exposure missing policy, factor transforms, control transforms, neutralization, and standardization in one ordered recipe. Preserve sequential neutralizations as separate steps. Missing-exposure policy applies only to factor exposure; non-factor missing values use project defaults.
+- Retain full otherwise-valid security history for rolling factor calculation. The global policy always excludes ST/PT at signal date and next-exchange-trading-day suspended securities after alignment and before recipe preprocessing. Missing status excludes the row. Record paper disagreement as a project-policy deviation.
+- Record `physical_field`, semantic concept, unit, price basis, value space, transform chain, and temporal semantics for bound controls. Recommended capitalization is an unadjusted CNY level; do not apply log when `transform.natural_log` is already materialized.
 - Stop only for unresolved factor-definition ambiguity, unavailable formula-required data with no supported construction, or unrecoverable implementation failure. For evaluation-data or evaluator limitations, continue through documented degradation and report deviations.
 - Export extraction/spec/pipeline/report artifacts under the repo's Factor Lab runtime paths.
 - Use the repository-scoped Codex stage skills routed by `$paper-factor-reproduction`; keep one coordinator responsible for pipeline state and final integration.
 - After any interruption, reload and merge valid persisted evaluation bundles before declaring cases deferred. Never erase successful durable execution records because a later scenario, partition, or report step failed.
-- Do not finish with zero selected/executed cases while constructible labels, alternative truth, or accepted proxies can make a case executable. Resource deferral requires persisted preflight evidence or an actual caught resource-budget error, not an assumption from panel size.
+- Do not switch truth sources to obtain an executable case. Materialize constructible labels and accepted proxies for the Stage-1 selected source; otherwise persist its unsupported/deferred lifecycle. Resource deferral requires persisted preflight evidence or an actual caught resource-budget error, not an assumption from panel size.
 - Resource evidence must come from the actual requested panel and a genuine runtime budget. Never pair a probe or reduced frame with full-period metadata, and never set an artificially tiny budget to manufacture a deferral.
 - Do not retain full QFQ and HFQ frames together. Profile and release each view during data readiness; during evaluation reload, execute, persist, and release one view before loading the next.
 - Run long full-panel evaluations in a persistent command session. When a command yields a session or cell identifier, poll that same process with the continuation tool until exit; a tool-call yield deadline is not process termination and must not trigger a restart or deferral.

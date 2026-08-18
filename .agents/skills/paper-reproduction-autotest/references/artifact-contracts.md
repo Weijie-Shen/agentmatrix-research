@@ -36,13 +36,17 @@ planned -> worktree_ready -> ready_for_worker -> running -> worker_stopped
 
 Never mark `complete` from agent prose. The deterministic utilities refresh `run_state.json`, the matching run in `batch_manifest.json`, and append-only `state_history` after worktree preparation, harness creation, worker gate passes, worker start/stop, harvesting, reviewer assignment, each review record, the final verdict, and cleanup. A writer crash becomes `worker_stopped` and is harvested before retry decisions.
 
+Fresh v3 control artifacts use `paper_autotest_batch/v2`, `paper_autotest_selection/v2`, `paper_autotest_harvest/v3`, and `paper_autotest_reviewer_assignment/v2`. These versions carry the required extraction schema, global-policy ID, Stage 1 truth-selection ownership, and hidden selection recipe summary.
+
 ## Worker completion gate
 
 The fresh-agent harness gives the worker an exact `agent_harness_review` command and a durable output path. Before returning, the worker gets up to three correction passes in the same task/worktree. Each pass starts at `earliest_invalid_stage`; dependent artifacts and executions must then be rebuilt rather than relabeled.
 
 The control plane independently reruns the same assessment when `record_worker_stopped(..., outcome="completed")` is requested. Failed assessments are saved under `worker_gate_assessments/`, the plan remains `running`, and the same worker receives the defect list plus `repair_actions`. Only `complete=true` permits a completed stop. Hard blockers use a failed/interrupted stop and are still harvested and reviewed.
 
-The deterministic gate validates persisted artifact families, extraction/spec scope, Stage 3 profiles and sample bounds, certified source hashes, per-factor test coverage and durable test results, assessed→selected→executed lineage, QFQ/HFQ scenario evidence, skipped transforms/controls/filters, truth eligibility denominators, pipeline/report consistency, and—after harvest—durability. Standalone executions must be canonical `evaluation_bundle/v2` exports with stable execution IDs, certified source/specification identity, canonical executor mode, SHA-256 snapshot identity, resource preflight/telemetry, requested/executed samples, alignment and universe row counts, internally consistent IC summaries derived from persisted cross-sectional values, and scenario/execution/truth/metric report reconciliation. Hand-shaped execution JSON and calculated values copied from paper truth are incomplete. For `paper_extraction.ic_analysis.v2`, the gate also validates shared registry references, absence of runtime bindings in Stage 1, and exactly one selected extracted IC truth source per executable factor. It is intentionally stricter than checking stage labels or record counts.
+The deterministic gate validates persisted artifact families, extraction/spec scope, Stage 3 profiles and sample bounds, certified source hashes, per-factor test coverage and durable test results, Stage-1-selected → Stage-3-resolved → Stage-6-executed lineage, QFQ/HFQ scenario evidence, global-policy execution, ordered preprocessing, skipped transforms/controls/filters, truth eligibility denominators, pipeline/report consistency, and—after harvest—durability. Standalone executions must be canonical `evaluation_bundle/v2` exports with stable execution IDs, certified source/specification identity, canonical executor mode, SHA-256 snapshot identity, resource preflight/telemetry, requested/executed samples, alignment and universe row counts, internally consistent IC summaries derived from persisted cross-sectional values, and scenario/execution/truth/metric report reconciliation. Hand-shaped execution JSON and calculated values copied from paper truth are incomplete.
+
+Fresh autotest runs require `paper_extraction.ic_recipe.v3`: exactly one principal/default truth block per factor is selected in Stage 1, its recipe is resolved without reselection in Stage 3, and Stage 6 executes that resolved recipe unchanged after `china_a_share_ic_evaluation_v1`. The gate rejects unresolved data value states, double-applied transforms, missing reuse/apply lineage, reordered preprocessing, and collapsed sequential neutralizations. Legacy `paper_extraction.ic_analysis.v2` is accepted only when the harness metadata explicitly declares that older schema; a fresh v3 harness must not silently downgrade.
 
 ## Harvest contract
 
@@ -83,17 +87,19 @@ Use integer scores from zero through five:
 
 A selected factor needs formula clarity and within-paper performance strength of at least three. The paper's explicit final recommendation takes priority over cross-factor diversity or compute convenience. Use total score only to order candidates inside the same paper when the paper recommends more than ten or provides no final list.
 
+`PaperSelectionArtifact` uses `paper_autotest_selection/v2`. Each selected factor must record the principal truth block's narrow location, role, selection reason, and a `paper_recipe_summary` with `ic_method`, `return_label`, and `preprocessing_order`. This hidden evidence audits selection consistency; it is not sent to the reproduction worker.
+
 ## Review contract
 
 Persist `reviewer_assignment.json` before reviewer dispatch using the orchestrator-observed task ID. The reviewer task must differ from the writer and every task already used by another run in the batch. Requested model, actual-runtime-model evidence, and model-verification status are separate fields; never treat reviewer-authored JSON as identity or model proof. Persist `reviewer_completion.json` with hashes of the assignment and final review.
 
 The independent review must cite artifact paths and check:
 
-1. selected scope and formula provenance;
+1. selected scope, formula provenance, and whether the worker's Stage 1 truth choice agrees with the hidden selection evidence;
 2. all eight persisted stage outcomes;
-3. semantic data selections and scenario isolation;
+3. semantic data selections, explicit raw/already-transformed value states, and scenario isolation;
 4. certified factor implementation plus tests;
-5. durable executed cases for every selected factor;
+5. durable execution of every selected factor's Stage-1-selected and Stage-3-resolved recipe, including global-policy and ordered-preprocessing traces;
 6. paper-truth eligibility, denominators, and comparison metrics;
 7. JSON and Markdown report completeness;
 8. limitation/claim calibration;

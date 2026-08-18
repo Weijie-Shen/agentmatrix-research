@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from contracts.factor_research import FactorResearchSpec
-from research_core.factor_lab.paper_reproduction.extraction import ICAnalysisPaperExtraction, PaperExtraction
+from research_core.factor_lab.paper_reproduction.extraction import (
+    ICAnalysisPaperExtraction,
+    ICRecipePaperExtraction,
+    PaperExtraction,
+)
 from research_core.factor_lab.paper_reproduction.paper_evaluation import PaperEvaluationPlan
 from research_core.factor_lab.paper_reproduction.pipeline import (
     PaperReproductionPipelineState,
@@ -20,7 +24,7 @@ from research_core.factor_lab.runtime import FactorLabWorkspaceConfig, now_iso
 def build_paper_reproduction_report(
     *,
     job_id: str,
-    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction,
     specs: list[FactorResearchSpec],
     pipeline_state: PaperReproductionPipelineState | None = None,
     evaluation_plan: PaperEvaluationPlan | None = None,
@@ -838,7 +842,7 @@ def _is_executed_selected_truth_result(result: dict[str, Any], selected_ids: set
 
 
 def _extraction_factor_views(
-    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction,
     specs: list[FactorResearchSpec],
 ) -> list[dict[str, Any]]:
     """Return a report-facing view without mutating or denormalizing Stage-1 evidence."""
@@ -872,6 +876,8 @@ def _extraction_factor_views(
         universes = list(
             dict.fromkeys(str(source.get("universe", "")) for source in truth_sources if source.get("universe"))
         )
+        is_v3 = isinstance(extraction, ICRecipePaperExtraction)
+        selected_truth_id = extraction.factor_truth_selection.get(factor.factor_id, "") if is_v3 else ""
         views.append(
             {
                 "factor_name": factor.factor_id,
@@ -881,10 +887,12 @@ def _extraction_factor_views(
                 "sample_period": "; ".join(sample_periods),
                 "universe": "; ".join(universes),
                 "truth_sources": truth_sources,
-                # Selection is deliberately absent from immutable Stage 1 and is
-                # populated only from the Stage-6 evaluation plan above.
-                "selected_truth_source_ids": [],
-                "truth_selection_rule": str(extraction.truth_selection_policy.get("rule", "")),
+                "selected_truth_source_ids": [selected_truth_id] if selected_truth_id else [],
+                "truth_selection_rule": (
+                    "selected during Stage 1 extraction"
+                    if is_v3
+                    else str(extraction.truth_selection_policy.get("rule", ""))
+                ),
                 "known_limitations": list(metadata.get("known_limitations", []) or []),
             }
         )
@@ -892,7 +900,7 @@ def _extraction_factor_views(
 
 
 def _paper_report_metadata(
-    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction,
 ) -> dict[str, Any]:
     if isinstance(extraction, PaperExtraction):
         return {

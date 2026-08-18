@@ -14,6 +14,10 @@ from research_core.factor_lab.paper_reproduction.agent_harness import (
     prepare_agent_harness_bundle,
 )
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig, now_iso
+from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
+    GLOBAL_EVALUATION_POLICY_ID,
+    IC_RECIPE_SCHEMA_VERSION,
+)
 
 
 PAPER_EXTENSIONS = {".pdf"}
@@ -88,6 +92,9 @@ class FactorSelectionEvidence:
     performance_strength: int
     compute_feasibility: int
     selection_reason: str
+    truth_source_role: str = "principal_ic_result"
+    truth_selection_reason: str = ""
+    paper_recipe_summary: dict[str, Any] = field(default_factory=dict)
 
     @property
     def score(self) -> int:
@@ -109,7 +116,7 @@ class PaperSelectionArtifact:
     recommendation_source_location: str = ""
     selection_basis: str = "within_paper_performance"
     selection_notes: list[str] = field(default_factory=list)
-    schema_version: str = "paper_autotest_selection/v1"
+    schema_version: str = "paper_autotest_selection/v2"
     created_at: str = field(default_factory=now_iso)
 
 
@@ -128,6 +135,9 @@ class PaperTestRunPlan:
     control_root: str
     reproducer_model: str = DEFAULT_REPRODUCER_MODEL
     reviewer_model: str = DEFAULT_REVIEWER_MODEL
+    extraction_schema_version: str = IC_RECIPE_SCHEMA_VERSION
+    global_evaluation_policy_id: str = GLOBAL_EVALUATION_POLICY_ID
+    truth_selection_stage: int = 1
     status: str = "planned"
     attempt: int = 1
     harness_prompt_path: str = ""
@@ -160,7 +170,7 @@ class PaperAutotestBatchManifest:
     reviewer_model: str = DEFAULT_REVIEWER_MODEL
     reproducer_model: str = DEFAULT_REPRODUCER_MODEL
     status: str = "planned"
-    schema_version: str = "paper_autotest_batch/v1"
+    schema_version: str = "paper_autotest_batch/v2"
     created_at: str = field(default_factory=now_iso)
 
 
@@ -203,6 +213,22 @@ def validate_selection(
             raise ValueError(f"{item.factor_name}: formula source location is required")
         if not item.truth_source_location.strip() or not item.paper_metrics:
             raise ValueError(f"{item.factor_name}: numeric paper truth and its source location are required")
+        if not item.truth_source_role.strip():
+            raise ValueError(f"{item.factor_name}: truth source role is required")
+        if not item.truth_selection_reason.strip():
+            raise ValueError(f"{item.factor_name}: Stage-1 truth selection reason is required")
+        required_recipe_fields = {"ic_method", "return_label", "preprocessing_order"}
+        missing_recipe_fields = sorted(required_recipe_fields - set(item.paper_recipe_summary))
+        if missing_recipe_fields:
+            raise ValueError(
+                f"{item.factor_name}: paper recipe summary is missing {missing_recipe_fields}"
+            )
+        if not str(item.paper_recipe_summary.get("ic_method", "")).strip():
+            raise ValueError(f"{item.factor_name}: paper recipe IC method is required")
+        if not str(item.paper_recipe_summary.get("return_label", "")).strip():
+            raise ValueError(f"{item.factor_name}: paper recipe return label is required")
+        if not isinstance(item.paper_recipe_summary.get("preprocessing_order"), list):
+            raise ValueError(f"{item.factor_name}: paper recipe preprocessing order must be a list")
         scores = (
             item.formula_clarity,
             item.local_data_support,
@@ -348,6 +374,8 @@ def prepare_run_harness(plan: PaperTestRunPlan) -> str:
             notes=[
                 f"This is isolated batch {plan.batch_id}, run {plan.run_id}.",
                 "Do not inspect other test worktrees, selection rubrics, prior attempts, or reviewer artifacts.",
+                f"Fresh extraction must use {plan.extraction_schema_version}.",
+                f"Truth selection belongs to Stage {plan.truth_selection_stage}; evaluation must use {plan.global_evaluation_policy_id}.",
             ],
         ),
         config=workspace,
@@ -482,10 +510,13 @@ def harvest_run_artifacts(plan: PaperTestRunPlan, *, maximum_file_bytes: int = 2
         family for family in REQUIRED_HARVEST_FAMILIES if not artifact_inventory.get(family)
     ]
     payload = {
-        "schema_version": "paper_autotest_harvest/v2",
+        "schema_version": "paper_autotest_harvest/v3",
         "run_id": plan.run_id,
         "paper_id": plan.paper_id,
         "base_commit": plan.base_commit,
+        "required_extraction_schema_version": plan.extraction_schema_version,
+        "required_global_evaluation_policy_id": plan.global_evaluation_policy_id,
+        "truth_selection_stage": plan.truth_selection_stage,
         "branch": plan.branch,
         "worktree": str(worktree),
         "observed_git_head": _git(worktree, "rev-parse", "HEAD").strip(),
@@ -576,12 +607,15 @@ def record_reviewer_started(
         raise FileNotFoundError(f"reviewer assignment inputs are missing: {missing_inputs}")
     assigned_at = now_iso()
     payload = {
-        "schema_version": "paper_autotest_reviewer_assignment/v1",
+        "schema_version": "paper_autotest_reviewer_assignment/v2",
         "run_id": plan.run_id,
         "paper_id": plan.paper_id,
         "paper_path": plan.paper_path,
         "paper_sha256": _sha256_file(Path(plan.paper_path).expanduser().resolve()),
         "selected_factors": list(plan.selected_factors),
+        "required_extraction_schema_version": plan.extraction_schema_version,
+        "required_global_evaluation_policy_id": plan.global_evaluation_policy_id,
+        "truth_selection_stage": plan.truth_selection_stage,
         "base_commit": plan.base_commit,
         "branch": plan.branch,
         "worker_task_id": plan.worker_task_id,
@@ -932,8 +966,24 @@ def _sync_batch_manifest(plan: PaperTestRunPlan) -> None:
 def _require_framework_at_ref(repo: Path, ref: str) -> None:
     required = (
         ".agents/skills/paper-factor-reproduction/SKILL.md",
+        ".agents/skills/paper-evidence-extraction/SKILL.md",
+        ".agents/skills/paper-factor-data-readiness/SKILL.md",
+        ".agents/skills/paper-factor-implementation/SKILL.md",
+        ".agents/skills/paper-factor-evaluation/SKILL.md",
+        ".agents/skills/rqdata-fetch-reference/SKILL.md",
+        ".agents/skills/paper-evidence-extraction/references/evaluation-recipe-schema.md",
+        ".agents/skills/paper-evidence-extraction/references/extraction-examples.md",
+        ".agents/skills/paper-evidence-extraction/references/global-evaluation-policy.md",
+        ".agents/skills/paper-evidence-extraction/references/ic-and-metric-method-catalog.md",
+        ".agents/skills/paper-evidence-extraction/references/neutralization-method-catalog.md",
+        ".agents/skills/paper-evidence-extraction/references/preprocessing-method-catalog.md",
+        ".agents/skills/paper-evidence-extraction/references/return-label-method-catalog.md",
+        ".agents/skills/paper-evidence-extraction/references/semantic-data-state.md",
+        ".agents/skills/paper-evidence-extraction/references/truth-source-selection.md",
+        ".agents/skills/paper-reproduction-autotest/SKILL.md",
         ".agents/skills/paper-reproduction-review/SKILL.md",
         "research_core/factor_lab/paper_reproduction/agent_harness.py",
+        "research_core/factor_lab/paper_reproduction/evaluation_recipe.py",
     )
     tracked = set(_git(repo, "ls-tree", "-r", "--name-only", ref, "--", *required).splitlines())
     missing = [path for path in required if path not in tracked]

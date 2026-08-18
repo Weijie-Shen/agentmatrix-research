@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from research_core.factor_lab.paper_reproduction.extraction import ICAnalysisPaperExtraction, PaperExtraction
+from research_core.factor_lab.paper_reproduction.extraction import (
+    ICAnalysisPaperExtraction,
+    ICRecipePaperExtraction,
+    PaperExtraction,
+)
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig, now_iso
 
 
@@ -69,7 +73,7 @@ class PaperReproductionPipelineState:
     @classmethod
     def from_extraction(
         cls,
-        extraction: PaperExtraction | ICAnalysisPaperExtraction,
+        extraction: PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction,
         *,
         job_id: str | None = None,
     ) -> PaperReproductionPipelineState:

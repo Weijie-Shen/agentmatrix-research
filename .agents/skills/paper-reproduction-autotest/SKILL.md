@@ -43,9 +43,11 @@ If the paper has no explicit final recommendation, select a few leading factors 
 
 Score formula clarity, local-data support, evaluator support, within-paper performance strength, and compute feasibility from zero through five. Performance strength is relative only to factors evaluated in the same paper. Author inclusion in the paper's final recommended set is the strongest selection signal. Use the other dimensions to assess reproducibility and anticipated limitations, not to override the paper's final factor selection. Do not select composites, optimized portfolios, chart-only rankings, or factors whose attractive performance has no attributable numeric truth. Persist `PaperSelectionArtifact`; do not expose its truth values, scores, or reasoning to reproduction workers.
 
+For every selected factor, also choose its single principal/default IC result block using the Stage 1 truth-source standard. Persist the narrow truth location, `truth_source_role`, `truth_selection_reason`, and a `paper_recipe_summary` containing at least `ic_method`, `return_label`, and `preprocessing_order`. One block may cover several factors. Keep this selection evidence hidden from the worker; the independent reviewer uses it to audit the worker's Stage 1 choice without supplying a golden answer.
+
 ## 2. Plan isolated runs
 
-Use `create_batch_manifest(...)` with an explicit committed base ref. The base commit must already contain the repository-tracked reproduction and review skills. Never test an uncommitted framework snapshot.
+Use `create_batch_manifest(...)` with an explicit committed base ref. The base commit must already contain the repository-tracked reproduction, extraction, autotest, and review skills; the `paper_extraction.ic_recipe.v3` runtime; and every extraction reference (schema, selection standard, semantic data states, method catalogs, examples, and global policy). Never test an uncommitted framework snapshot.
 
 Prepare one unique `codex/paper-test-<run-id>` branch and one `/private/tmp/agentmatrix-paper-tests/...` worktree per paper with `prepare_test_worktree(...)`. Never share a worktree between paper writers. Never reuse a path or branch from an earlier attempt. The ownership record is mandatory.
 
@@ -59,6 +61,7 @@ Spawn up to two Terra workers. Use a bounded assignment containing:
 - selected factor names only;
 - generated harness prompt path;
 - `$paper-factor-reproduction` and bundled stage skills;
+- required `paper_extraction.ic_recipe.v3` contract: select one principal truth block in Stage 1, resolve its recipe and data value states in Stage 3, then execute it unchanged in Stage 6 after the global evaluation policy;
 - required outputs: pipeline state, extraction/specs, data profiles, implementation artifact and tests, evaluation bundles, paper-truth comparisons, and JSON/Markdown reports;
 - return contract: artifact paths, commands/tests, lifecycle outcomes, and limitations.
 
@@ -66,7 +69,7 @@ Do not give workers selection scores, extracted metric values, golden JSON, anot
 
 Immediately persist each dispatched task with `record_worker_started(...)`. When it finishes, fails, or is interrupted, call `record_worker_stopped(...)` with the lifecycle outcome before inspecting or harvesting its files.
 
-The generated harness contains a deterministic pre-return command. Require the worker to run it, repair from `earliest_invalid_stage`, and rerun dependent stages while the same task and worktree remain active. When the worker announces completion, `record_worker_stopped(..., outcome="completed")` independently reruns this gate. If it raises because `complete=false`, do not stop, harvest, or create a retry attempt: send the persisted defects and repair actions back to that same active worker. A genuine hard blocker may instead be recorded as `failed`; scientific metric drift must not be repaired by tuning formulas to paper answers.
+The generated harness contains a deterministic pre-return command. Require the worker to run it, repair from `earliest_invalid_stage`, and rerun dependent stages while the same task and worktree remain active. When the worker announces completion, `record_worker_stopped(..., outcome="completed")` independently reruns this gate. If it raises because `complete=false`, do not stop, harvest, or create a retry attempt: send the persisted defects and repair actions back to that same active worker. For fresh v3 runs, the gate rejects v2 extraction, Stage 3 or Stage 6 truth-source reselection, unresolved value states, a missing global-policy trace, reordered preprocessing, collapsed sequential neutralizations, and transformed controls that lack reuse/apply lineage. A genuine hard blocker may instead be recorded as `failed`; scientific metric drift must not be repaired by tuning formulas to paper answers.
 
 ## 4. Harvest and review
 
@@ -85,7 +88,7 @@ Run `assess_agent_harness_run(...)` against the isolated worktree and pass the h
 
 Before dispatch, call `record_reviewer_started(...)` with the fresh reviewer task ID and requested model. This writes control-plane-owned assignment provenance and rejects reuse of the writer or another batch task. Requested-model provenance must remain distinct from actual-runtime-model evidence; when the platform cannot attest the latter, record it as unverified rather than copying a reviewer self-claim.
 
-Require the reviewer to inspect persisted artifacts and return `complete`, `complete_with_limitations`, or `incomplete`, with blocking defects separated from limitations and cited artifact paths. Persist it with `record_independent_review(...)`; that API validates the assignment and writes a hashed completion record. The orchestrator reconciles that verdict with the deterministic assessment. Neither reviewer nor orchestrator may call a run successful unless all eight stages are evidenced, every selected factor has a certified implementation and passing test, every selected factor has a durable executed evaluation, and both report formats contain paper-versus-calculated comparisons.
+Require the reviewer to inspect persisted artifacts, compare each worker-selected Stage 1 truth source with the hidden selection evidence, and return `complete`, `complete_with_limitations`, or `incomplete`, with blocking defects separated from limitations and cited artifact paths. Persist it with `record_independent_review(...)`; that API validates the assignment and writes a hashed completion record. The orchestrator reconciles that verdict with the deterministic assessment. Neither reviewer nor orchestrator may call a run successful unless all eight stages are evidenced, every selected factor has a certified implementation and passing test, every selected factor has a durable execution of its selected v3 recipe, and both report formats contain paper-versus-calculated comparisons.
 
 ## 5. Summarize and clean up
 

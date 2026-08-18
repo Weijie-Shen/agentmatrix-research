@@ -8,6 +8,7 @@ from typing import Any
 from contracts.factor_research import FactorResearchSpec
 from research_core.factor_lab.paper_reproduction.data_validation import assess_evaluation_case_support
 from research_core.factor_lab.paper_reproduction.evaluators import evaluator_capabilities_for_case
+from research_core.factor_lab.paper_reproduction.evaluation_recipe import resolve_recipe_value_states
 
 GENERIC_EVALUATION_FAMILIES = {"ic_analysis", "ic_regression"}
 EVALUATION_METHOD_PRIORITY = {
@@ -104,6 +105,7 @@ def _build_factor_evaluation_plan(
     truth_ids: list[str] = []
     methods: list[str] = []
     cases = [_evaluation_case_from_truth_source(source) for source in evaluation_truth_sources]
+    fixed_stage_1_selection = str(spec.metadata.get("extraction_schema_version", "")).endswith("ic_recipe.v3")
     for source in evaluation_truth_sources:
         truth_ids.append(str(source.get("truth_id", "")))
         source_metrics = source.get("metrics", {})
@@ -124,6 +126,12 @@ def _build_factor_evaluation_plan(
         blocked_reasons.append("paper evaluation metrics are missing")
 
     profile = data_profiles.get(spec.factor_name) or data_profiles.get("*")
+    if fixed_stage_1_selection and profile is not None:
+        for case in cases:
+            recipe = case.get("evaluation_recipe", {})
+            if isinstance(recipe, dict) and recipe:
+                case["resolved_evaluation_recipe"] = resolve_recipe_value_states(recipe, profile)
+                case["selection_stage"] = 1
     (
         assessed_cases,
         selected_cases,
@@ -163,6 +171,11 @@ def _build_factor_evaluation_plan(
         requires_paper_local_evaluator=requires_paper_local_evaluator,
         evaluator_implementation_targets=implementation_targets,
         blocked_reasons=blocked_reasons,
+        notes=(
+            ["Truth source fixed by Stage 1; Stage 3 resolved support and value states without reselection."]
+            if fixed_stage_1_selection
+            else []
+        ),
     )
 
 
@@ -189,6 +202,9 @@ def _evaluation_case_from_truth_source(source: dict[str, Any]) -> dict[str, Any]
         "evaluation_family": family,
         "raw_evaluation_family": raw_family,
         "evaluation_method": str(source.get("evaluation_method", "")),
+        "evaluation_recipe": copy.deepcopy(source.get("evaluation_recipe", {}) or {}),
+        "resolved_evaluation_recipe": copy.deepcopy(source.get("resolved_evaluation_recipe", {}) or {}),
+        "selection_stage": source.get("selection_stage"),
         "sample_period": str(source.get("sample_period", "")),
         "universe": str(source.get("universe", "")),
         "frequency": str(source.get("frequency", "")),
@@ -486,6 +502,9 @@ def _select_evaluation_cases_by_support(
         for case in ordered
     )
     selection_limit = 1 if canonical_ic_only else MAX_EVALUATION_METHODS_PER_RUN
+    fixed_stage_1_selection = bool(ordered) and all(case.get("selection_stage") == 1 for case in ordered)
+    if fixed_stage_1_selection:
+        selection_limit = 1
     for case in ordered:
         if case.get("paper_truth_conflict"):
             conflict_case = _case_with_lifecycle(
@@ -517,6 +536,9 @@ def _select_evaluation_cases_by_support(
                 _resolved_case(
                     case,
                     selection_reason=(
+                        "truth source fixed during Stage 1 extraction; Stage 3 only resolved data support"
+                        if fixed_stage_1_selection
+                        else
                         "highest semantic comparability and data-support score among assessed IC truth sources; "
                         "reported metric values were not used"
                         if canonical_ic_only
@@ -605,6 +627,8 @@ def _resolved_case(case: dict[str, Any], *, selection_reason: str) -> dict[str, 
         "transform_spec": resolved_transform_spec,
         "neutralization_spec": resolved_neutralization_spec,
         "universe_protocol": resolved_universe_protocol,
+        "evaluation_recipe": copy.deepcopy(payload.get("evaluation_recipe", {}) or {}),
+        "resolved_evaluation_recipe": copy.deepcopy(payload.get("resolved_evaluation_recipe", {}) or {}),
         "paper_protocol_refs": dict(payload.get("paper_protocol_refs", {}) or {}),
         "operation_pipeline_id": payload.get("operation_pipeline_id", ""),
         "timing": {

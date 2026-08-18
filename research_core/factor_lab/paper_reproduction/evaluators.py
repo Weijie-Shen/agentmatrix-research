@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from research_core.factor_lab.paper_reproduction.methodology import canonical_transform_method
+from research_core.factor_lab.paper_reproduction.evaluation_recipe import GLOBAL_EVALUATION_POLICY_ID
 
 
 DEFAULT_DATE_COL = "date"
@@ -34,6 +35,7 @@ GENERIC_EVALUATOR_CAPABILITIES: dict[str, dict[str, Any]] = {
                 "fill_zero",
                 "do_not_fill",
                 "none",
+                "use_previous_exchange_day",
             ],
             "neutralization_methods": ["cross_sectional_regression_residual", "none"],
             "input_transform_methods": ["median_mad", "log", "cross_section_zscore", "fill_zero", "do_not_fill", "none"],
@@ -44,6 +46,7 @@ GENERIC_EVALUATOR_CAPABILITIES: dict[str, dict[str, Any]] = {
                 "ic_mean",
                 "ic_std",
                 "ic_ir",
+                "rank_ic_ir",
                 "ic_positive_ratio",
                 "ic_abs_gt_002_ratio",
                 "rank_ic_positive_ratio",
@@ -252,7 +255,160 @@ def compute_ic_analysis(
     }
     if method in {"spearman", "rank_ic", "spearman_rank_ic"}:
         result["rank_ic_positive_ratio"] = positive_ratio
+        result["rank_ic_ir"] = result["ic_ir"]
     return result
+
+
+def apply_global_evaluation_policy(
+    frame: pd.DataFrame,
+    *,
+    status_bindings: dict[str, str] | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Apply mandatory project eligibility before any paper-owned preprocessing."""
+
+    bindings = {
+        "st_or_pt_status": "is_st" if "is_st" in frame.columns else "st_or_pt_status",
+        "next_day_suspension_status": (
+            "next_is_suspended" if "next_is_suspended" in frame.columns else "next_day_suspension_status"
+        ),
+        **(status_bindings or {}),
+    }
+    required = [bindings["st_or_pt_status"], bindings["next_day_suspension_status"]]
+    _require_columns(frame, required)
+    eligible = pd.Series(True, index=frame.index)
+    excluded_by: dict[str, int] = {}
+    for semantic, physical in bindings.items():
+        status = _status_as_boolean(frame[physical])
+        keep = status.notna() & ~status
+        excluded_by[semantic] = int((eligible & ~keep).sum())
+        eligible &= keep
+    result = frame.loc[eligible].copy()
+    return result, {
+        "policy_id": GLOBAL_EVALUATION_POLICY_ID,
+        "input_rows": int(len(frame)),
+        "eligible_rows": int(len(result)),
+        "excluded_rows": int(len(frame) - len(result)),
+        "excluded_by_filter": excluded_by,
+        "status_bindings": bindings,
+        "missing_status_policy": "exclude",
+    }
+
+
+def apply_evaluation_recipe(
+    frame: pd.DataFrame,
+    *,
+    value_col: str,
+    recipe: dict[str, Any],
+    date_col: str = DEFAULT_DATE_COL,
+    code_col: str = DEFAULT_CODE_COL,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Execute a resolved truth-source recipe in its declared order."""
+
+    if str(recipe.get("global_policy_ref", "")) != GLOBAL_EVALUATION_POLICY_ID:
+        raise ValueError(f"evaluation recipe must reference {GLOBAL_EVALUATION_POLICY_ID!r}")
+    resolution = recipe.get("resolution", {}) or {}
+    if resolution.get("status") == "blocked":
+        raise ValueError(f"evaluation recipe resolution is blocked: {resolution.get('blocked_reasons', [])}")
+    _require_columns(frame, [date_col, code_col, value_col])
+    if frame[date_col].isna().any() or frame[code_col].isna().any():
+        raise ValueError("global evaluation policy blocks missing date/security keys")
+    if frame.duplicated([date_col, code_col]).any():
+        raise ValueError("global evaluation policy blocks duplicate date/security keys")
+    result, global_diagnostics = apply_global_evaluation_policy(
+        frame,
+        status_bindings=recipe.get("global_policy_bindings", {}) or {},
+    )
+    result[PROCESSED_FACTOR_COL] = pd.to_numeric(result[value_col], errors="coerce")
+    trace: list[dict[str, Any]] = []
+    neutralization_diagnostics: list[dict[str, Any]] = []
+    for step in sorted(recipe.get("preprocessing_steps", []) or [], key=lambda item: int(item.get("order", 0))):
+        method_id = str(step.get("method_id", ""))
+        mode = str(step.get("execution_mode", "apply"))
+        if mode == "reuse_materialized":
+            source_field = str(step.get("resolved_field", ""))
+            if source_field and source_field in result.columns and step.get("semantic_input") == "factor_exposure":
+                result[PROCESSED_FACTOR_COL] = pd.to_numeric(result[source_field], errors="coerce")
+            trace.append({"order": step.get("order"), "method_id": method_id, "execution_mode": mode})
+            continue
+        if mode in {"blocked_unknown_state", "incompatible"}:
+            raise ValueError(f"cannot execute {method_id}: {mode}")
+        if method_id == "factor_missing.drop":
+            result = result.loc[result[PROCESSED_FACTOR_COL].notna()].copy()
+        elif method_id == "factor_missing.fill_zero":
+            result[PROCESSED_FACTOR_COL] = result[PROCESSED_FACTOR_COL].fillna(0.0)
+        elif method_id == "factor_missing.use_previous_exchange_day":
+            maximum_age = int((step.get("parameters", {}) or {}).get("maximum_age_exchange_days", 1))
+            if maximum_age != 1:
+                raise ValueError("factor_missing.use_previous_exchange_day currently requires maximum_age_exchange_days=1")
+            result[PROCESSED_FACTOR_COL] = _fill_from_previous_exchange_day(
+                result,
+                value_col=PROCESSED_FACTOR_COL,
+                date_col=date_col,
+                code_col=code_col,
+            )
+        elif method_id == "factor_missing.none":
+            pass
+        elif method_id == "winsorize.median_mad":
+            threshold = float((step.get("parameters", {}) or {}).get("threshold", step.get("threshold", 5.0)))
+            result[PROCESSED_FACTOR_COL] = result[PROCESSED_FACTOR_COL].groupby(
+                result[date_col], group_keys=False
+            ).apply(lambda values: _median_mad_winsorize(values, threshold=threshold))
+        elif method_id == "transform.natural_log":
+            numeric = pd.to_numeric(result[PROCESSED_FACTOR_COL], errors="coerce")
+            result[PROCESSED_FACTOR_COL] = np.log(numeric.where(numeric > 0))
+        elif method_id == "standardize.cross_sectional_zscore":
+            result[PROCESSED_FACTOR_COL] = result[PROCESSED_FACTOR_COL].groupby(
+                result[date_col], group_keys=False
+            ).apply(_zscore)
+        elif method_id == "neutralize.cross_sectional_regression_residual":
+            controls: list[str] = []
+            control_trace: list[dict[str, Any]] = []
+            for index, control in enumerate(step.get("controls", []) or []):
+                if not isinstance(control, dict):
+                    control = {"resolved_field": str(control)}
+                source_field = str(control.get("resolved_field") or control.get("semantic_input") or "")
+                _require_columns(result, [source_field])
+                internal = f"__recipe_control_{step.get('order')}_{index}"
+                encoding = str(control.get("encoding", "continuous"))
+                if encoding in {"categorical", "dummy"}:
+                    result[internal] = result[source_field].astype("string")
+                else:
+                    values = pd.to_numeric(result[source_field], errors="coerce")
+                    for transform in control.get("transforms", []) or []:
+                        transform_id = str(transform.get("method_id", ""))
+                        transform_mode = str(transform.get("execution_mode", "apply"))
+                        if transform_mode == "reuse_materialized":
+                            transformed_field = str(transform.get("resolved_field") or source_field)
+                            _require_columns(result, [transformed_field])
+                            values = pd.to_numeric(result[transformed_field], errors="coerce")
+                        elif transform_id == "transform.natural_log":
+                            values = np.log(values.where(values > 0))
+                        elif transform_id == "standardize.cross_sectional_zscore":
+                            values = values.groupby(result[date_col], group_keys=False).apply(_zscore)
+                        elif transform_id:
+                            raise ValueError(f"Unsupported control transform method: {transform_id}")
+                    result[internal] = values
+                controls.append(internal)
+                control_trace.append({"semantic_input": control.get("semantic_input"), "resolved_field": source_field})
+            result[PROCESSED_FACTOR_COL] = _neutralize_by_date(
+                result, date_col=date_col, value_col=PROCESSED_FACTOR_COL, controls=controls
+            )
+            neutralization_diagnostics.append({
+                "order": step.get("order"),
+                "method_id": method_id,
+                "controls": control_trace,
+                "missing_control_policy": "complete_case_regression_and_missing_residual",
+            })
+        elif method_id == "custom.paper_defined":
+            raise NotImplementedError("custom.paper_defined requires a paper-local evaluator")
+        else:
+            raise ValueError(f"Unsupported evaluation recipe method: {method_id}")
+        trace.append({"order": step.get("order"), "method_id": method_id, "execution_mode": "apply"})
+    return result, {
+        "global_policy": global_diagnostics,
+        "preprocessing_trace": trace,
+        "neutralization_steps": neutralization_diagnostics,
+    }
 
 
 def compute_cross_sectional_regression(
@@ -320,9 +476,22 @@ def evaluate_paper_case(
     if family not in {"ic_analysis", "ic_regression"}:
         raise NotImplementedError(f"Generic evaluator not implemented for evaluation_family={family!r}")
     evaluator_descriptor = evaluator_capabilities_for_case(runtime_case) or get_generic_evaluator_capabilities()
-    transform_spec = runtime_case.get("transform_spec") or {}
-    neutralization_spec = runtime_case.get("neutralization_spec") or {}
-    if neutralization_spec:
+    recipe = runtime_case.get("resolved_evaluation_recipe") or runtime_case.get("evaluation_recipe")
+    recipe_diagnostics: dict[str, Any] = {}
+    if isinstance(recipe, dict) and recipe:
+        transformed, recipe_diagnostics = apply_evaluation_recipe(
+            frame,
+            value_col=factor_col,
+            recipe=recipe,
+            date_col=date_col,
+        )
+        transform_spec: dict[str, Any] = {}
+        neutralization_spec: dict[str, Any] = {}
+        neutralization_diagnostics = recipe_diagnostics.get("neutralization_steps", [])
+    else:
+        transform_spec = runtime_case.get("transform_spec") or {}
+        neutralization_spec = runtime_case.get("neutralization_spec") or {}
+    if not recipe and neutralization_spec:
         legacy_factor_spec = dict(transform_spec)
         legacy_factor_spec["steps"] = [
             step
@@ -337,7 +506,7 @@ def evaluate_paper_case(
             date_col=date_col,
             output_col=PROCESSED_FACTOR_COL,
         )
-    else:
+    elif not recipe:
         transformed = apply_transform_spec(frame, value_col=factor_col, transform_spec=transform_spec, date_col=date_col)
         neutralization_diagnostics = {}
     evaluation_spec = runtime_case.get("evaluation_spec") or {}
@@ -384,8 +553,10 @@ def evaluate_paper_case(
             ),
             "return_col": return_col,
             "date_col": date_col,
+            "evaluation_recipe": recipe or {},
+            "recipe_execution_trace": recipe_diagnostics,
         },
-        "transform_applied": bool(transform_spec.get("steps") or neutralization_spec),
+        "transform_applied": bool(recipe or transform_spec.get("steps") or neutralization_spec),
         "neutralization_diagnostics": neutralization_diagnostics,
         "factor_col": factor_col,
         "processed_factor_col": PROCESSED_FACTOR_COL,
@@ -406,10 +577,48 @@ def _runtime_case(evaluation_case: dict[str, Any]) -> dict[str, Any]:
         "transform_spec",
         "neutralization_spec",
         "universe_protocol",
+        "evaluation_recipe",
+        "resolved_evaluation_recipe",
     ):
         if key in resolved_protocol:
             runtime[key] = resolved_protocol[key]
     return runtime
+
+
+def _fill_from_previous_exchange_day(
+    frame: pd.DataFrame,
+    *,
+    value_col: str,
+    date_col: str,
+    code_col: str,
+) -> pd.Series:
+    dates = pd.Index(sorted(pd.to_datetime(frame[date_col].dropna().unique())))
+    date_position = {pd.Timestamp(value): index for index, value in enumerate(dates)}
+    ordered = frame[[date_col, code_col, value_col]].copy()
+    ordered[date_col] = pd.to_datetime(ordered[date_col])
+    ordered["__original_index"] = ordered.index
+    ordered = ordered.sort_values([code_col, date_col])
+    previous_value = ordered.groupby(code_col, sort=False)[value_col].shift(1)
+    previous_date = ordered.groupby(code_col, sort=False)[date_col].shift(1)
+    adjacent = [
+        pd.notna(prior) and date_position.get(pd.Timestamp(current), -2) - date_position.get(pd.Timestamp(prior), -4) == 1
+        for current, prior in zip(ordered[date_col], previous_date, strict=True)
+    ]
+    fill_mask = ordered[value_col].isna() & pd.Series(adjacent, index=ordered.index)
+    ordered.loc[fill_mask, value_col] = previous_value.loc[fill_mask]
+    return ordered.set_index("__original_index")[value_col].reindex(frame.index)
+
+
+def _status_as_boolean(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(series) or pd.api.types.is_numeric_dtype(series):
+        numeric = pd.to_numeric(series, errors="coerce")
+        return numeric.map(lambda value: pd.NA if pd.isna(value) else bool(value)).astype("boolean")
+    lowered = series.astype("string").str.strip().str.lower()
+    mapping = {
+        "true": True, "1": True, "yes": True, "y": True, "st": True, "pt": True,
+        "false": False, "0": False, "no": False, "n": False, "normal": False,
+    }
+    return lowered.map(mapping).astype("boolean")
 
 
 def _executed_operation_pipeline_trace(

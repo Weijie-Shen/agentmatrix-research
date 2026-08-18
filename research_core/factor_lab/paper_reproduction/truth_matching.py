@@ -7,6 +7,7 @@ import pandas as pd
 
 from research_core.factor_lab.paper_reproduction.extraction import (
     ICAnalysisPaperExtraction,
+    ICRecipePaperExtraction,
     ExtractedTruthSource,
 )
 from research_core.factor_lab.paper_reproduction.evaluation_execution import EvaluationBundle
@@ -146,7 +147,7 @@ def interpret_truth_match_quality(
 
 def compare_evaluation_bundle_to_paper_truth(
     bundle: EvaluationBundle,
-    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction,
 ) -> dict[str, list[PaperTruthMatchResult]]:
     """Truth-match every executed durable record using its preserved case policy."""
 
@@ -172,7 +173,7 @@ def compare_evaluation_bundle_to_paper_truth(
 
 
 def _truth_sources_by_factor(
-    extraction: PaperExtraction | ICAnalysisPaperExtraction,
+    extraction: PaperExtraction | ICAnalysisPaperExtraction | ICRecipePaperExtraction,
 ) -> dict[str, dict[str, ExtractedTruthSource]]:
     if isinstance(extraction, PaperExtraction):
         return {
