@@ -37,7 +37,6 @@ class PaperReproductionAgentHarnessRequest:
     selected_factors: list[str]
     paper_path: str = ""
     paper_id: str = ""
-    golden_json_path: str = ""
     skill_path: str = ""
     notes: list[str] = field(default_factory=list)
 
@@ -180,7 +179,6 @@ def _render_prompt(metadata: dict[str, Any]) -> str:
     notes = metadata.get("notes", [])
     notes_text = "\n".join(f"- {note}" for note in notes) if notes else "- None"
     paper_line = metadata.get("paper_path") or "<attach or provide paper path>"
-    golden_line = metadata.get("golden_json_path") or "<optional golden JSON path>"
     return f"""# Fresh Agent Paper Reproduction Harness
 
 Use this packet to run a fresh AI-agent test for paper factor reproduction.
@@ -226,12 +224,6 @@ Paper ID:
 ## Selected Factors
 
 {factors_text}
-
-## Golden JSON
-
-```text
-{golden_line}
-```
 
 ## Instructions
 

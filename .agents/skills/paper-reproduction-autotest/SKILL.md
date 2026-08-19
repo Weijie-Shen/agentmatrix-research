@@ -1,6 +1,6 @@
 ---
 name: paper-reproduction-autotest
-description: Orchestrate auditable multi-paper forward tests of the AgentMatrix paper-reproduction pipeline. Use when Codex must inventory a paper test-case folder, select strong and reproducible factors from each paper, prepare isolated repository-tracked test branches/worktrees, dispatch fresh low-cost reproduction agents, harvest their artifacts, assign independent reviewers, and summarize cross-paper defects without contaminating workers with golden answers or prior attempts.
+description: Orchestrate auditable multi-paper forward tests of the AgentMatrix paper-reproduction pipeline. Use when Codex must inventory a paper test-case folder, select strong and reproducible factors from each paper, prepare isolated repository-tracked test branches/worktrees, dispatch fresh low-cost reproduction agents, harvest their artifacts, assign independent reviewers, and summarize cross-paper defects without contaminating workers with precomputed answers or prior attempts.
 ---
 
 # Paper Reproduction Autotest
@@ -43,7 +43,7 @@ If the paper has no explicit final recommendation, select a few leading factors 
 
 Score formula clarity, local-data support, evaluator support, within-paper performance strength, and compute feasibility from zero through five. Performance strength is relative only to factors evaluated in the same paper. Author inclusion in the paper's final recommended set is the strongest selection signal. Use the other dimensions to assess reproducibility and anticipated limitations, not to override the paper's final factor selection. Do not select composites, optimized portfolios, chart-only rankings, or factors whose attractive performance has no attributable numeric truth. Persist `PaperSelectionArtifact`; do not expose its truth values, scores, or reasoning to reproduction workers.
 
-For every selected factor, also choose its single principal/default IC result block using the Stage 1 truth-source standard. Persist the narrow truth location, `truth_source_role`, `truth_selection_reason`, and a `paper_recipe_summary` containing at least `ic_method`, `return_label`, and `preprocessing_order`. One block may cover several factors. Keep this selection evidence hidden from the worker; the independent reviewer uses it to audit the worker's Stage 1 choice without supplying a golden answer.
+For every selected factor, also choose its single principal/default IC result block using the Stage 1 truth-source standard. Persist the narrow truth location, `truth_source_role`, `truth_selection_reason`, and a `paper_recipe_summary` containing at least `ic_method`, `return_label`, and `preprocessing_order`. One block may cover several factors. Keep this selection evidence hidden from the worker; the independent reviewer uses it to audit the worker's Stage 1 choice without supplying a precomputed answer.
 
 ## 2. Plan isolated runs
 
@@ -65,7 +65,7 @@ Spawn up to two Terra workers. Use a bounded assignment containing:
 - required outputs: pipeline state, extraction/specs, data profiles, implementation artifact and tests, evaluation bundles, paper-truth comparisons, and JSON/Markdown reports;
 - return contract: artifact paths, commands/tests, lifecycle outcomes, and limitations.
 
-Do not give workers selection scores, extracted metric values, golden JSON, another worker's results, suspected pipeline defects, or retry conclusions. A worker must not edit the orchestrator checkout or another worktree. Wait for persistent evaluation processes to exit; a yielded tool call is not completion.
+Do not give workers selection scores, extracted metric values, answer-key artifacts, another worker's results, suspected pipeline defects, or retry conclusions. A worker must not edit the orchestrator checkout or another worktree. Wait for persistent evaluation processes to exit; a yielded tool call is not completion.
 
 The control plane must verify worktree quiescence before accepting a completed stop and again before harvesting any outcome. Every worker-authored evaluation runner must use `scientific_process_lease(...)`; a running or unreadable receipt blocks stop/harvest, while an abrupt process death deliberately leaves a blocking receipt. OS process inspection is supplementary because some sandboxes cannot enumerate processes. Treat an observed active process, a missing terminal receipt for a runner/bundle, or artifacts changing during the completion gate as a process-lifecycle defect. Keep polling or terminate the owned failed process explicitly; never harvest a live worktree.
 

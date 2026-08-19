@@ -36,7 +36,6 @@ class PaperReproductionAgentHarnessTest(unittest.TestCase):
                     working_directory="/tmp/agentmatrix-paper-test",
                     paper_id="huatai_mass_technical_factors_20190521",
                     paper_path="docs/huatai.pdf",
-                    golden_json_path="research_core/factor_lab/paper_reproduction/golden/huatai_alpha3_13_15.json",
                     selected_factors=["Alpha3", "Alpha13", "Alpha15"],
                     skill_path=str(skill_path),
                     notes=["Fresh agent must use the bundled skill."],

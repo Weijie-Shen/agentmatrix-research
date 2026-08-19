@@ -59,7 +59,7 @@ Real-data proof should include:
 - factor output schema,
 - IC / rank IC computation,
 - point-in-time or no-lookahead checks,
-- comparison against an external reference or accepted golden output,
+- comparison against an external reference or accepted reference output,
 - explicit boundary notes for any secondary validation that remains incomplete.
 
 Current boundary: local full-market reproduction evidence is available for the first 10 WQ101 and GTJA191 factors; external full-market JoinQuant IC remains a secondary follow-up because of platform resource limits. Therefore this PR should be reviewed as factor_lab mainline integration plus validation plumbing with attached local real-data evidence, not as a final claim that every external platform result is fully proven.

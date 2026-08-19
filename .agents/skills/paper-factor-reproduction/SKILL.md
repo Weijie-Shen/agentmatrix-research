@@ -53,7 +53,7 @@ Only a genuine hard failure may stop dependent work. Missing evaluation-only fie
 When subagents are available, act as coordinator and keep final integration responsibility:
 
 - Give each worker a bounded artifact contract, its stage skill path, the paper path, selected factors, and working directory.
-- Do not provide a golden answer, suspected defect, or prior attempt's conclusions to a fresh validation worker.
+- Do not provide a precomputed answer, suspected defect, or prior attempt's conclusions to a fresh validation worker.
 - Parallelize only independent factor groups or an implementation task and a read-only review task. Do not let multiple workers edit the same files.
 - Require workers to return paths, commands run, test outcomes, and unresolved limitations.
 - Inspect every worker artifact before advancing pipeline state. A worker's claim is not gate evidence.

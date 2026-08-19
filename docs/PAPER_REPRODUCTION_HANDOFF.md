@@ -23,14 +23,14 @@ python -m pytest \
   -q
 ```
 
-At handoff it reports **275 passed**. Warnings are limited to the existing UTC
-deprecation and a NumPy zero-variance correlation warning in a test fixture.
+Use the command's current result as the source of truth; do not preserve a fixed
+test count in project documentation. Known warnings are limited to the existing
+UTC deprecation and a NumPy zero-variance correlation warning in a test fixture.
 
 The framework is operational, but "completed" does not imply exact scientific
-agreement. Existing Huatai runs recover the expected signal direction and are
-highly stable, while exact paper metrics remain limited by data and protocol
-fidelity. See [`PROJECT_PROGRESS_REPORT.md`](../PROJECT_PROGRESS_REPORT.md) for
-the measured benchmark results and their limitations.
+agreement. Each reproduction report must derive its claims from that job's
+persisted artifacts; the repository deliberately does not keep an early example
+as a project-wide progress proxy.
 
 ## System map
 
@@ -68,7 +68,7 @@ records their hashes so a run is tied to the exact workflow revision.
 | `paper-factor-implementation` | Stages 4-5: implementation manifest, paper-family code, certified artifact, and formula-focused tests. |
 | `paper-factor-evaluation` | Stages 6-7: selected-case planning, canonical execution, IC metrics, and paper-truth matching. |
 | `paper-reproduction-review` | Stage 8: independent completeness, artifact reconciliation, denominator checks, and claim calibration. |
-| `paper-reproduction-autotest` | Runs isolated multi-paper forward tests, harvests worker artifacts, and compares process quality without exposing golden answers to workers. |
+| `paper-reproduction-autotest` | Runs isolated multi-paper forward tests, harvests worker artifacts, and compares process quality without exposing precomputed answers to workers. |
 | `rqdata-fetch-reference` | Streams missing benchmark/reference data from an authenticated RQData environment without creating a repository cache. |
 
 Start an ordinary job with `paper-factor-reproduction`; it routes each gate to

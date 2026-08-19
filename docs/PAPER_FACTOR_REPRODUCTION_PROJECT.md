@@ -52,14 +52,6 @@ Implemented capabilities:
 - Quant API daily kline normalization helper
 - fresh-agent harness packet generation with bundled skill copy and skill hash
 
-Current serious benchmark:
-
-```text
-research_core/factor_lab/paper_reproduction/golden/huatai_alpha3_13_15.json
-```
-
-This legacy golden artifact covers Huatai Alpha3, Alpha13, and Alpha15. New extraction artifacts use the IC-analysis v2 schema; legacy artifacts remain loadable for regression compatibility.
-
 ## Core Design Decisions
 
 ### 1. Paper Truth Means Evaluation Results
@@ -171,7 +163,7 @@ The canonical v2 evaluator family is deliberately limited to:
 - Rank/Pearson IC analysis
 - `ic_analysis`
 
-The legacy runtime still loads older regression/portfolio cases, but new v2 extraction does not create them. Unsupported paper evidence remains outside the selected IC truth workflow:
+The legacy runtime still loads older regression/portfolio cases, but new v3 extraction does not create them. Unsupported paper evidence remains outside the selected IC truth workflow:
 
 - `layered_portfolio_backtest`
 - `ic_decay`
@@ -685,113 +677,12 @@ Can a new AI agent, given the repo and bundled skill, extract and operationalize
 the paper reproduction method correctly?
 ```
 
-The first comparison target is the golden JSON, not final numeric paper reproduction.
-
-Current missing automation:
-
-```text
-fresh agent artifacts -> golden JSON comparison report
-```
-
-At present, comparison against golden JSON is still mostly manual/semantic.
-
-## Golden JSON Artifacts
-
-Golden JSON is a manually curated benchmark for whether an AI agent extracted the reproduction method correctly.
-
-It is not proof that computed factor values or evaluation metrics match the paper.
-
-Current schema version:
-
-```text
-paper_reproduction_golden_v0.2
-```
-
-Current benchmark:
-
-```text
-research_core/factor_lab/paper_reproduction/golden/huatai_alpha3_13_15.json
-```
-
-Golden artifacts should capture:
-
-- selected factor scope
-- formula definitions
-- formula-required fields
-- parameters
-- frequency
-- transform definitions
-- evaluation method definitions
-- per-factor evaluation cases
-- required data by stage
-- paper metrics
-- source locations
-- known limitations
-- comparison policy
-
-## Representative Papers
-
-### Huatai Technical Factors
-
-Paper:
-
-```text
-Huatai Securities, 2019-05-21, mass technical factors
-```
-
-Current selected benchmark:
-
-```text
-Alpha3, Alpha13, Alpha15
-```
-
-Canonical formulas:
-
-```text
-Alpha3  = (-1 * correlation(rank(OPEN), rank(VOLUME), 10))
-Alpha13 = (-1 * rank(covariance(rank(CLOSE), rank(VOLUME), 5)))
-Alpha15 = (-1 * sum(rank(correlation(rank(HIGH), rank(VOLUME), 3)), 3))
-```
-
-Important paper method:
-
-- all A-shares
-- exclude ST/PT and next-day suspended stocks
-- sample period `2010/1/4-2019/4/30`
-- daily frequency
-- T=5/10/20 forward returns
-- selected truth generally uses T=20
-- median-MAD winsorization
-- neutralization variant
-- z-score standardization
-- no missing-value fill
-- portfolio tests use 20 equal-count layers and default one-way fee 0.15%
-
-Important extraction pitfalls:
-
-- VWAP is evaluation/backtest data, not a formula field for Alpha3/13/15
-- Table 52, Table 14, and portfolio tables are separate evaluation cases
-- missing daily factor values are known limitations, not blockers
-- Quant API v2 does not cover the original 2010-2019 sample
-
-### GTJA191
-
-Paper:
-
-```text
-Guotai Junan 191 short-cycle price-volume factors
-```
-
-Use case:
-
-- large-scale formula extraction from PDF text
-- state-machine parsing of formulas
-- required-field extraction with derived-indicator fallback
-- aggregate-only evaluation truth
-
-Important distinction:
-
-The paper does not provide per-factor evaluation tables. Aggregate evaluation metrics can be attached, but factors may remain `needs_human_review` because per-factor paper truth is unavailable.
+Fresh-agent validation is artifact-driven. The deterministic harness gate checks
+all required stage families, schema versions, implementation certification,
+formula-test evidence, evaluation bundles, truth matches, and final reports. An
+independent reviewer then checks the harvested artifacts against the paper and
+the orchestrator's hidden selection evidence. Curated answer-key files are not
+part of the repository or the worker prompt.
 
 ## Recommended Local Data Notes
 
@@ -916,10 +807,8 @@ Do not parse Quant API parquet `trade_date` with plain `pd.to_datetime(raw["trad
 
 High-priority gaps:
 
-- automated golden JSON comparator for fresh-agent outputs
 - clearer command/script for creating harness packets from CLI
-- documentation cleanup across the remaining `docs/PAPER_FACTOR_REPRODUCTION_*.md` files
-- richer current-state examples for Huatai and GTJA191
+- richer current-state examples generated from completed, artifact-backed jobs
 
 Evaluation gaps:
 
@@ -949,11 +838,11 @@ integrity contracts incrementally:
 1. Generate a harness packet with the bundled skill.
 2. Run a fresh AI agent in an isolated worktree.
 3. Collect extraction/spec/report artifacts.
-4. Compare those artifacts to golden JSON.
-5. Classify failures as skill, schema, validation, normalization, data, evaluator, or reporting gaps.
-6. Update the general workflow, not paper-specific hacks.
-7. Retest the same paper.
-8. Test a different paper to reduce overfitting.
+4. Run the deterministic completeness assessment.
+5. Have an independent reviewer compare the harvested artifacts with the paper.
+6. Classify failures as skill, schema, validation, normalization, data, evaluator, or reporting gaps.
+7. Update the general workflow, not paper-specific hacks.
+8. Retest across unrelated papers to reduce overfitting.
 
 The main deferred architecture work is typed evidence-derived stage completion,
 calendar-based return labels, canonical metric lifecycle/reconciliation, and
@@ -961,4 +850,5 @@ immutable finalization snapshots. Industry-history and capitalization-basis
 selection are now loader-supported; unresolved paper taxonomy/version semantics
 and provider quality caveats must remain visible in support assessment and reports.
 
-The most important missing tool is an automated or semi-automated golden comparator. It should report strict mismatches for formulas, fields, metrics, and source locations, and semantic review items for universe, sample period, transform specs, evaluation specs, and known limitations.
+The next improvements should strengthen artifact-backed comparison and reviewer
+diagnostics without introducing paper-specific expected-answer files.

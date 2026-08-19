@@ -73,7 +73,7 @@ Each reproducer receives one writable worktree. Required assignment fields:
 - no-contamination restrictions;
 - required output and return contracts.
 
-Workers do not receive `PaperSelectionArtifact`, golden files, cross-paper summaries, reviewer output, or prior-attempt artifacts.
+Workers do not receive `PaperSelectionArtifact`, answer-key artifacts, cross-paper summaries, reviewer output, or prior-attempt artifacts.
 
 ## Selection rubric
 

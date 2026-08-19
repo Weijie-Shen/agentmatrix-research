@@ -1,6 +1,6 @@
 ---
 name: paper-evidence-extraction
-description: Extract selected quantitative factor definitions and paper-reported IC evidence into AgentMatrix shared-registry PaperExtraction artifacts, then normalize them into FactorResearchSpec records. Use for paper-reproduction Stages 1-2, extraction review, golden-benchmark comparison, or correction of formula, provenance, truth-source, transform, and evaluation-case schemas.
+description: Extract selected quantitative factor definitions and paper-reported IC evidence into AgentMatrix shared-registry PaperExtraction artifacts, then normalize them into FactorResearchSpec records. Use for paper-reproduction Stages 1-2, extraction review, or correction of formula, provenance, truth-source, transform, and evaluation-case schemas.
 ---
 
 # Paper Evidence Extraction
@@ -13,7 +13,7 @@ Produce faithful `paper_extraction.ic_recipe.v3` evidence artifacts for selected
 - `research_core/factor_lab/paper_reproduction/extraction.py`
 - `research_core/factor_lab/paper_reproduction/normalization.py`
 - every file in `references/`, especially `evaluation-recipe-schema.md`, `factor-calculation-contract.md`, the method catalogs, and `truth-source-selection.md`
-- the relevant golden JSON schema tests, without reading a paper-specific golden answer during a fresh forward test
+- the relevant extraction and normalization schema tests, without reading prior paper-specific attempts during a fresh forward test
 
 ## Build formula registries and truth-source recipes
 
