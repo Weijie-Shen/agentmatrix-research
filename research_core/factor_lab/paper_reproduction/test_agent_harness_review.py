@@ -514,6 +514,31 @@ class AgentHarnessRunAssessmentTest(unittest.TestCase):
             self.assertFalse(assessment.complete)
             self.assertTrue(any("not an evaluation_bundle/v2" in item for item in assessment.defects))
 
+    def test_bundle_with_calculation_contract_requires_history_certification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            self._write_complete_fixture(root, ["Alpha3"])
+            runtime = root / "runtime" / "factor_lab"
+            artifact_path = runtime / "implementation_artifacts" / "implementation.json"
+            bundle_path = runtime / "evaluation_bundles" / "default.json"
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            artifact["schema_version"] = "factor_implementation_artifact/v2"
+            artifact["calculation_contracts_by_id"] = {"Alpha3": {"history": {"mode": "full_history_before_scoring"}}}
+            artifact["calculation_contract_hash"] = hashlib.sha256(b"contract").hexdigest()
+            artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+            bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+            bundle["implementation_artifact"]["calculation_contract_hash"] = artifact[
+                "calculation_contract_hash"
+            ]
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+
+            assessment = assess_agent_harness_run(root, expected_factors=["Alpha3"])
+
+            self.assertFalse(assessment.complete)
+            self.assertTrue(
+                any("lacks certified pre-sample calculation history" in item for item in assessment.defects)
+            )
+
     def test_canonical_ic_summary_must_recompute_from_persisted_cross_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

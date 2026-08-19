@@ -141,6 +141,58 @@ class CanonicalEvaluationExecutionTest(unittest.TestCase):
         self.assertEqual(len(merged.records), 1)
         self.assertEqual(merged.scenario_id, "combined_scenarios")
 
+    def test_canonical_execution_blocks_missing_pre_sample_calculation_history(self) -> None:
+        calculation = self._calculation_panel()
+        evaluation = calculation[["date", "code"]].copy()
+        evaluation["forward_return_1d"] = 0.01
+        spec = self._spec()
+        spec.parameters["W"] = {
+            "value": 2,
+            "unit": "security_observation",
+        }
+        spec.metadata["calculation_contract"] = {
+            "schema_version": "factor_calculation_contract/v1",
+            "source_parameters": {
+                "W": {"value": 2, "unit": "security_observation", "role": "rolling mean lookback"}
+            },
+            "window": {
+                "method_id": "window.trailing_security_observations",
+                "length": 2,
+                "source_parameter": "W",
+            },
+            "history": {
+                "mode": "full_history_before_scoring",
+                "required_pre_sample_periods": 2,
+                "unit": "security_observation",
+            },
+            "required_semantic_test_ids": ["first_scoring_date_has_full_history"],
+        }
+        case = self._case()
+        case["sample_period"] = "2026-01-01 to 2026-01-03"
+        case["paper_protocol"] = {"sample_period": "2026-01-01 to 2026-01-03"}
+        case["resolved_protocol"]["sample_period"] = "2026-01-01 to 2026-01-03"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            module_path = root / "factor.py"
+            module_path.write_text(self._module_source(), encoding="utf-8")
+            artifact = build_factor_implementation_artifact(
+                [spec],
+                module_path=module_path,
+                callable_import_path="compute_factors",
+                probe_panel=calculation,
+            )
+            with self.assertRaisesRegex(ValueError, "invalid calculation history"):
+                execute_evaluation_plan(
+                    self._plan(case),
+                    artifact,
+                    EvaluationDataContext(
+                        scenario_id="qfq",
+                        calculation_panel=calculation,
+                        evaluation_inputs=evaluation,
+                    ),
+                )
+
     def test_executor_scores_only_declared_sample_while_retaining_context_rows(self) -> None:
         calculation = pd.DataFrame(
             {

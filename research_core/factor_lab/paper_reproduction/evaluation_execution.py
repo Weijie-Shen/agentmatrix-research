@@ -18,6 +18,9 @@ from research_core.factor_lab.paper_reproduction.implementation import (
     FactorImplementationArtifact,
     execute_factor_callable,
 )
+from research_core.factor_lab.paper_reproduction.calculation_contract import (
+    calculation_history_errors,
+)
 from research_core.factor_lab.paper_reproduction.methodology import apply_universe_protocol
 from research_core.factor_lab.paper_reproduction.paper_evaluation import PaperEvaluationPlan
 from research_core.factor_lab.paper_reproduction.resource_execution import (
@@ -116,6 +119,11 @@ def execute_evaluation_plan(
     ]
     if missing_inputs:
         raise ValueError(f"calculation panel is missing implementation inputs: {missing_inputs}")
+    calculation_history_certification = _certify_plan_calculation_history(
+        plan,
+        implementation_artifact,
+        data_context.calculation_panel,
+    )
 
     shared_panel = data_context.evaluation_inputs is None
     evaluation_source = data_context.calculation_panel if shared_panel else data_context.evaluation_inputs
@@ -370,6 +378,7 @@ def execute_evaluation_plan(
         requested_execution={
             "sample": data_context.requested_sample or _frame_sample(evaluation_source),
             "samples_by_case": scored_samples,
+            "calculation_history_certification": calculation_history_certification,
             "universe": data_context.requested_universe or "as_declared_by_selected_evaluation_cases",
             "scenario_id": data_context.scenario_id,
         },
@@ -690,6 +699,72 @@ def _clip_to_scoring_sample(
     return clipped, diagnostics
 
 
+def _certify_plan_calculation_history(
+    plan: PaperEvaluationPlan,
+    artifact: FactorImplementationArtifact,
+    calculation_panel: pd.DataFrame,
+) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    date_column = next(
+        (
+            column
+            for column in artifact.output_key_columns
+            if column.lower() in {"date", "datetime", "trade_date"}
+        ),
+        artifact.output_key_columns[0],
+    )
+    code_column = next(
+        (
+            column
+            for column in artifact.output_key_columns
+            if column.lower() in {"code", "symbol", "security", "order_book_id"}
+        ),
+        artifact.output_key_columns[-1],
+    )
+    for factor_plan in plan.factor_plans:
+        factor_id, _ = _resolve_factor_identity(artifact, factor_plan.factor_name)
+        contract = (
+            artifact.calculation_contracts_by_id.get(factor_plan.factor_name, {})
+            or artifact.calculation_contracts_by_id.get(factor_id, {})
+        )
+        if not contract:
+            continue
+        for case in factor_plan.selected_evaluation_cases:
+            declared = _declared_scoring_sample(case)
+            scoring_start = declared.get("resolved_start_date")
+            truth_id = str(case.get("truth_id") or case.get("source_truth_id") or "")
+            if not scoring_start:
+                raise ValueError(
+                    f"{factor_plan.factor_name}/{truth_id}: scoring start is required to certify "
+                    "pre-sample calculation history"
+                )
+            errors = calculation_history_errors(
+                calculation_panel,
+                contract,
+                scoring_start=scoring_start,
+                date_column=date_column,
+                code_column=code_column,
+            )
+            if errors:
+                raise ValueError(
+                    f"{factor_plan.factor_name}/{truth_id}: invalid calculation history: "
+                    + "; ".join(errors)
+                )
+            records.append(
+                {
+                    "factor_id": factor_id,
+                    "factor_name": factor_plan.factor_name,
+                    "truth_id": truth_id,
+                    "scoring_start": scoring_start,
+                    "status": "certified",
+                }
+            )
+    return {
+        "status": "certified" if records else "not_required",
+        "records": records,
+    }
+
+
 def _declared_scoring_sample(case: dict[str, Any]) -> dict[str, Any]:
     runtime = dict(case.get("resolved_protocol", {}) or {})
     evaluation_spec = dict(runtime.get("evaluation_spec", {}) or {})
@@ -819,6 +894,8 @@ def _artifact_identity(artifact: FactorImplementationArtifact) -> dict[str, Any]
         "callable_import_path": artifact.callable_import_path,
         "implemented_factor_ids": list(artifact.implemented_factor_ids),
         "factor_columns_by_id": dict(artifact.factor_columns_by_id),
+        "calculation_contracts_by_id": dict(artifact.calculation_contracts_by_id),
+        "calculation_contract_hash": artifact.calculation_contract_hash,
         "source_hash": artifact.source_hash,
         "factor_specification_hash": artifact.factor_specification_hash,
         "validation_status": artifact.validation_status,

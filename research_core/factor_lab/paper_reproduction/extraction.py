@@ -16,6 +16,9 @@ from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
     IC_RECIPE_SCHEMA_VERSION,
     validate_evaluation_recipe,
 )
+from research_core.factor_lab.paper_reproduction.calculation_contract import (
+    validate_factor_calculation_contract,
+)
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig
 
 TruthSourceType = Literal["evaluation_results"]
@@ -106,6 +109,7 @@ class ExtractedFactorDefinition:
     description: str = ""
     evidence: dict[str, Any] = field(default_factory=dict)
     formula_gap_ids: list[str] = field(default_factory=list)
+    calculation_contract: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -809,6 +813,7 @@ def _validate_ic_recipe_extraction(extraction: ICRecipePaperExtraction) -> Extra
         unknown = sorted(set(factor.required_semantic_fields) - semantic_ids)
         if unknown:
             errors.append(f"{prefix}.required_semantic_fields contains unknown ids: {unknown}")
+        errors.extend(validate_factor_calculation_contract(factor, prefix=prefix))
 
     factor_occurrences: dict[str, list[str]] = {factor_id: [] for factor_id in factor_ids}
     for index, truth in enumerate(extraction.truth_sources):

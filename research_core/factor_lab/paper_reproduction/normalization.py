@@ -252,7 +252,9 @@ def _normalize_ic_recipe_extraction_to_specs(
                     "data_requirements": {
                         "formula_required_fields": canonical_fields,
                         "formula_semantic_field_ids": list(factor.required_semantic_fields),
+                        "calculation_contract": dict(factor.calculation_contract),
                     },
+                    "calculation_contract": dict(factor.calculation_contract),
                     "evaluation_cases": [projected],
                     "truth_sources": [projected],
                     "selected_truth_sources": [projected],

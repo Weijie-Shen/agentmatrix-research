@@ -73,6 +73,8 @@ An executed case exists only when it is present in the unmodified `evaluation_bu
 - Keep raw factor definitions separate from transforms, universes, return horizons, controls, weights, portfolio rules, and evaluation data.
 - Preserve narrow source locations and provenance for formulas, transforms, methods, and metrics.
 - Preserve formula parameter symbols, values, units, and domains literally. Record observation-count or calendar conversions separately; never replace a source month/year/day parameter with a rolling-window row count without explicit source-backed conversion semantics.
+- Preserve one validated `factor_calculation_contract/v1` for every temporal, weighted, decay, or unit-sensitive formula. It must declare the literal source parameters, typed window, weighted-mean normalization, distance semantics, required pre-sample history, and mandatory semantic test IDs; Stage 2 and the implementation artifact preserve it unchanged.
+- Build Stage-3 formula-input validation from the normalized spec so the selected score-sample start is available. Insufficient pre-sample calculation history is blocking, and canonical evaluation must record successful history certification before factor computation.
 - For exchange-trading-day distances, use the exchange calendar rather than counting only observed security rows; suspended or missing observations must not collapse elapsed trading sessions.
 - Distinguish ordinary/Pearson IC from Spearman/rank IC, preserve explicit zero-fill versus drop-missing behavior in order, and preserve signed versus absolute metric conventions.
 - When formula evidence comes from a cited companion paper, use it only when that document is inside the authorized source set and persist its path/hash separately from the selected paper's evaluation truth.
@@ -102,6 +104,7 @@ The run is complete only when:
 - the extraction validates as `paper_extraction.ic_recipe.v3`, has no dangling references or runtime bindings, every result block has one homogeneous recipe, and every factor selects exactly one source containing its row;
 - formula-required data passed validation or has an explicit hard blocker;
 - implemented factors are backed by importable `FactorImplementationArtifact` records and passing implementation tests;
+- every required calculation-contract semantic assertion ID appears in a bound test source and its durable assertion-coverage record;
 - formula-focused tests cover every selected factor and their machine-readable results are persisted under `runtime/factor_lab/test_results`;
 - the resolved evaluation plan is persisted under `runtime/factor_lab/evaluation_plans`, with non-empty assessed cases and exactly one selected unconflicted IC case for every executable selected factor;
 - every selected evaluation case has a lifecycle outcome and selected executable cases ran through the framework executor;

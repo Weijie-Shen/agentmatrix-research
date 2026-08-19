@@ -297,7 +297,7 @@ research_core/factor_lab/paper_reproduction/data_validation.py
 Main API:
 
 ```python
-DataFrameValidationRequest.from_factor(factor)
+DataFrameValidationRequest.from_spec(spec)
 validate_input_frame(panel, request)
 ```
 
@@ -309,6 +309,12 @@ Formula-stage validation checks:
 - no duplicate `date` x `code` rows
 - frame is sorted by `code,date`, or the status records review
 - enough per-code history exists for window parameters
+- the calculation panel begins early enough to satisfy the factor's typed pre-sample-history contract before the first scored signal
+
+`from_factor(...)` remains a compatibility constructor, but it cannot certify
+pre-sample history because it does not own the selected truth recipe's scoring
+start. Fresh v3 runs use `from_spec(...)`; insufficient history is a blocking
+error rather than a warm-up warning.
 
 Keep formula-required fields separate from evaluation-required fields.
 
@@ -366,6 +372,14 @@ Per-factor statuses:
 
 Unknown formula identifiers should be recorded as AI-designed helper candidates, not silently promoted into shared Factor Lab operators.
 
+Temporal, weighted, decay, and unit-sensitive formulas must carry
+`factor_calculation_contract/v1`. The contract preserves literal source
+parameters separately from runtime conversions, distinguishes natural-month,
+exchange-session, and retained-security-observation windows, declares weighted
+mean normalization as the weighted-value sum divided by the same complete
+weight sum, and specifies mandatory semantic tests and pre-sample history. The
+manifest blocks code generation when this contract is missing or inconsistent.
+
 ### Stage 4B: Paper-Specific Factor Implementation
 
 This stage is not generic code generation. It is paper-specific engineering guided by the extraction/spec/manifest.
@@ -383,7 +397,7 @@ Implementation rules:
 After the paper-family implementation passes its direct tests, create and validate
 a canonical `FactorImplementationArtifact`. It records the module/callable,
 implemented factor IDs, declared inputs/outputs, source hash, implementation-relevant
-spec hash, and probe evidence. Downstream canonical evaluation must call this
+spec hash, calculation-contract map/hash, and probe evidence. Downstream canonical evaluation must call this
 artifact; it must not substitute an unrelated prepared factor column.
 
 For WorldQuant/Huatai-style formulas that mix cross-sectional rank and rolling operations, wide-format implementation may be appropriate:
@@ -409,6 +423,7 @@ Tests should cover:
 - numeric-or-null factor columns
 - no infinite outputs
 - hand-computable toy panels for formula semantics
+- every semantic assertion ID required by the factor calculation contract, including asymmetric-weight denominator checks, literal source-parameter units, natural-month boundaries, exchange-session distance, and first-score prehistory where applicable
 - transform order when applicable
 - evaluation alignment when applicable
 

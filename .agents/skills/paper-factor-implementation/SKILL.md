@@ -11,6 +11,8 @@ Implement paper-specific formulas inside the existing factor-family library. Do 
 
 Require validated extraction/spec artifacts and Stage 3 formula-input readiness. Run `build_implementation_manifest(...)` before coding. Preserve per-factor statuses and unresolved operators.
 
+The manifest validates every `factor_calculation_contract/v1` and lists mandatory semantic assertion IDs. Do not code around a missing or invalid contract; return it to extraction. The certified implementation artifact must preserve the exact contract map and hash.
+
 Use scaffolding only before hand-written implementation. `write_factor_family_scaffold(...)` can overwrite `factors.py`; never run it after implementation exists.
 
 Keep unknown or paper-specific operators local to `research_core/factor_lab/libraries/<family>/`. Promote an operator to shared Factor Lab code only after paper-independent reuse and standalone tests.
@@ -59,6 +61,8 @@ Test:
 - rank direction and rolling window boundaries;
 - adjusted-price view consistency for price-derived inputs;
 - no accidental evaluation filtering during calculation.
+
+For weighted formulas, use asymmetric weights and assert `weighted_mean_denominator_is_sum_of_weights`. For unit-sensitive formulas, assert `literal_source_parameter_units` against the source equation, not an implementation-derived constant. For natural-month windows, assert `natural_month_window_boundaries` with unequal month lengths. For rolling factors, assert `first_scoring_date_has_full_history`. Use the exact assertion IDs in test names or constants and in durable assertion coverage.
 
 Do not tune formula code to make paper metrics closer. Formula correctness comes from evidence and semantic tests.
 Do not build a test oracle by repeating the implementation's unsupported parameter conversion. For hand-computable tests, calculate expected values from the literal source equation and source-level parameter values so a wrong unit, scale, normalization, or index direction fails.

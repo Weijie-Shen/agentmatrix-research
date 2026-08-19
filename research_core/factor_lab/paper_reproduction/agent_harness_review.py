@@ -16,6 +16,11 @@ from research_core.factor_lab.paper_reproduction.evaluation_recipe import (
     IC_RECIPE_SCHEMA_VERSION,
     validate_evaluation_recipe,
 )
+from research_core.factor_lab.paper_reproduction.calculation_contract import (
+    calculation_contract_required_test_ids,
+    calculation_contracts_hash,
+    validate_factor_calculation_contract,
+)
 
 
 EXPECTED_STAGES = (
@@ -335,6 +340,8 @@ def _deep_completion_defects(
 ) -> list[str]:
     defects: list[str] = []
     extracted_truth_ids_by_factor: dict[str, set[str]] = {}
+    required_semantic_tests_by_factor: dict[str, set[str]] = {}
+    extracted_calculation_contracts: dict[str, dict[str, Any]] = {}
     extraction_path, extraction = _latest_json_with_any_key(
         runtime_root / "paper_specs", ("factor_definitions", "target_factors")
     )
@@ -375,6 +382,12 @@ def _deep_completion_defects(
             defects.append(f"[extraction] extraction omits selected factors: {missing}")
         for factor in expected_factors:
             item = extraction_factors.get(factor, {})
+            contract = item.get("calculation_contract", {}) if isinstance(item, dict) else {}
+            if isinstance(contract, dict) and contract:
+                extracted_calculation_contracts[factor] = contract
+            required_semantic_tests_by_factor[factor] = set(
+                calculation_contract_required_test_ids(item)
+            )
             if not str(item.get("formula", "")).strip():
                 defects.append(f"[extraction] {factor} has no extracted formula")
             if is_registry_schema:
@@ -598,6 +611,15 @@ def _deep_completion_defects(
             defects.append("[implementation] implementation artifact source hash does not match its module")
         if not str(implementation_payload.get("callable_import_path", "")).strip():
             defects.append("[implementation] implementation artifact has no callable import path")
+        if extracted_calculation_contracts:
+            artifact_contracts = implementation_payload.get("calculation_contracts_by_id", {}) or {}
+            if artifact_contracts != extracted_calculation_contracts:
+                defects.append(
+                    "[implementation] certified calculation contracts differ from Stage-1 extraction"
+                )
+            expected_contract_hash = calculation_contracts_hash(extracted_calculation_contracts)
+            if str(implementation_payload.get("calculation_contract_hash", "")) != expected_contract_hash:
+                defects.append("[implementation] calculation-contract hash is missing or stale")
     else:
         module_path = None
 
@@ -625,6 +647,16 @@ def _deep_completion_defects(
         if isinstance(test, dict)
     ):
         defects.append("[tests] recorded test commands do not identify a test bound to the certified module")
+    bound_test_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore") for path in bound_test_sources
+    )
+    for factor, required_ids in required_semantic_tests_by_factor.items():
+        missing_source_ids = sorted(test_id for test_id in required_ids if test_id not in bound_test_text)
+        if missing_source_ids:
+            defects.append(
+                f"[tests] bound test source for {factor} does not contain required semantic assertions: "
+                f"{missing_source_ids}"
+            )
 
     test_result_payloads = [
         payload
@@ -658,6 +690,14 @@ def _deep_completion_defects(
                 "[tests] formula-test evidence lacks assertion coverage IDs for: "
                 f"{missing_claimed_assertions}"
             )
+        for factor, required_ids in required_semantic_tests_by_factor.items():
+            claimed = {str(item) for item in coverage.get(factor, []) or []}
+            missing_required_ids = sorted(required_ids - claimed)
+            if missing_required_ids:
+                defects.append(
+                    f"[tests] {factor} lacks required calculation-contract assertions: "
+                    f"{missing_required_ids}"
+                )
         durable_match = any(
             payload.get("command") == test.get("command")
             and payload.get("exit_code") == 0
@@ -842,10 +882,13 @@ def _canonical_evaluation_bundle_defects(
     artifact_identity = bundle.get("implementation_artifact", {}) or {}
     source_hash = str(implementation_payload.get("source_hash", ""))
     specification_hash = str(implementation_payload.get("factor_specification_hash", ""))
+    calculation_contract_hash = str(implementation_payload.get("calculation_contract_hash", ""))
     if source_hash and artifact_identity.get("source_hash") != source_hash:
         defects.append(f"[evaluation] {label} implementation identity does not match certification")
     if not specification_hash or artifact_identity.get("factor_specification_hash") != specification_hash:
         defects.append(f"[evaluation] {label} has no matching certified factor-specification hash")
+    if calculation_contract_hash and artifact_identity.get("calculation_contract_hash") != calculation_contract_hash:
+        defects.append(f"[evaluation] {label} has no matching calculation-contract hash")
 
     preflight = bundle.get("resource_preflight", {}) or {}
     telemetry = bundle.get("resource_telemetry", {}) or {}
@@ -870,6 +913,29 @@ def _canonical_evaluation_bundle_defects(
         defects.append(f"[evaluation] {label} has no executed sample row count")
     if bundle.get("raw_factor_before_evaluation_filters") is not True:
         defects.append(f"[evaluation] {label} did not preserve raw factor history before evaluation filters")
+
+    artifact_contracts = implementation_payload.get("calculation_contracts_by_id", {}) or {}
+    if artifact_contracts:
+        certification = requested.get("calculation_history_certification", {}) or {}
+        if certification.get("status") != "certified":
+            defects.append(f"[evaluation] {label} lacks certified pre-sample calculation history")
+        certified_factors = {
+            str(item.get("factor_name", ""))
+            for item in certification.get("records", []) or []
+            if isinstance(item, dict) and item.get("status") == "certified"
+        }
+        executed_factors = {
+            str(record.get("factor_name", ""))
+            for record in records
+            if record.get("lifecycle_state") == "executed"
+        }
+        contracted_executions = executed_factors & set(artifact_contracts)
+        missing_certifications = sorted(contracted_executions - certified_factors)
+        if missing_certifications:
+            defects.append(
+                f"[evaluation] {label} lacks calculation-history certification for: "
+                f"{missing_certifications}"
+            )
 
     if len(records) != len(raw_records) or not records:
         defects.append(f"[evaluation] {label} contains no structured execution records")
@@ -1623,6 +1689,11 @@ def _v3_extraction_contract_defects(extraction: dict[str, Any]) -> list[str]:
         missing = set(factor.get("required_semantic_fields", []) or []) - semantic_ids
         if missing:
             defects.append(f"[extraction] {factor.get('factor_id', '-')} references unknown semantics: {sorted(missing)}")
+        for error in validate_factor_calculation_contract(
+            factor,
+            prefix=f"factor_definitions[{factor.get('factor_id', '-')}]",
+        ):
+            defects.append(f"[extraction] {error}")
     for truth_id, source in truth_by_id.items():
         covered = set(source.get("covered_factor_ids", []) or [])
         reported = set((source.get("reported_results", {}) or {}))
@@ -1806,7 +1877,10 @@ def _find_implementation_artifact(runtime_root: Path) -> tuple[Path | None, dict
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if isinstance(payload, dict) and payload.get("schema_version") == "factor_implementation_artifact/v1":
+        if isinstance(payload, dict) and payload.get("schema_version") in {
+            "factor_implementation_artifact/v1",
+            "factor_implementation_artifact/v2",
+        }:
             candidates.append((path, payload))
     if not candidates:
         return None, {}

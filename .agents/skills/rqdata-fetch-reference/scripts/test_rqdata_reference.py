@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -158,6 +160,15 @@ class QueryTests(unittest.TestCase):
             restored.attrs["rqdata_provenance"]["persistence"],
             "none_process_scoped",
         )
+
+    def test_environment_flag_is_strict(self):
+        with patch.dict(os.environ, {"RQDATA_REMOTE_SHELL_INIT": "yes"}):
+            self.assertTrue(
+                MODULE._environment_flag("RQDATA_REMOTE_SHELL_INIT")
+            )
+        with patch.dict(os.environ, {"RQDATA_REMOTE_SHELL_INIT": "maybe"}):
+            with self.assertRaisesRegex(ValueError, "must be one of"):
+                MODULE._environment_flag("RQDATA_REMOTE_SHELL_INIT")
 
 
 if __name__ == "__main__":

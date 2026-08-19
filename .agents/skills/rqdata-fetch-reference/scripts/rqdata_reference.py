@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -431,7 +432,11 @@ def _local_fetch(request: QueryRequest) -> Any:
 
 
 def _ssh_fetch(
-    request: QueryRequest, ssh_target: str, remote_python: str
+    request: QueryRequest,
+    ssh_target: str,
+    remote_python: str,
+    *,
+    remote_shell_init: bool = False,
 ) -> Any:
     if not SSH_TARGET_RE.fullmatch(ssh_target) or ssh_target.startswith("-"):
         raise ValueError(
@@ -444,15 +449,19 @@ def _ssh_fetch(
     encoded = base64.urlsafe_b64encode(
         json.dumps(request.to_dict(), sort_keys=True).encode()
     ).decode()
-    command = [
-        "ssh",
-        "-T",
-        ssh_target,
-        remote_python,
-        "-",
-        "--remote-worker",
-        encoded,
-    ]
+    remote_argv = [remote_python, "-", "--remote-worker", encoded]
+    if remote_shell_init:
+        remote_command = "exec " + " ".join(
+            shlex.quote(value) for value in remote_argv
+        )
+        command = [
+            "ssh",
+            "-T",
+            ssh_target,
+            f"bash -ic {shlex.quote(remote_command)}",
+        ]
+    else:
+        command = ["ssh", "-T", ssh_target, *remote_argv]
     result = subprocess.run(
         command,
         input=Path(__file__).read_bytes(),
@@ -468,7 +477,11 @@ def _ssh_fetch(
         )
     frame = _frame_from_arrow(result.stdout)
     provenance = dict(frame.attrs.get("rqdata_provenance", {}))
-    provenance["transport"] = "ssh_arrow_stream"
+    provenance["transport"] = (
+        "ssh_arrow_stream_interactive_shell"
+        if remote_shell_init
+        else "ssh_arrow_stream"
+    )
     frame.attrs["rqdata_provenance"] = provenance
     return frame
 
@@ -479,6 +492,7 @@ def fetch_reference(
     transport: str = "auto",
     ssh_target: str | None = None,
     remote_python: str | None = None,
+    remote_shell_init: bool | None = None,
     max_rows: int = 2_000_000,
 ) -> Any:
     """Return an in-memory DataFrame; never write a local file."""
@@ -501,6 +515,11 @@ def fetch_reference(
             target,
             remote_python
             or os.environ.get("RQDATA_REMOTE_PYTHON", DEFAULT_REMOTE_PYTHON),
+            remote_shell_init=(
+                _environment_flag("RQDATA_REMOTE_SHELL_INIT")
+                if remote_shell_init is None
+                else remote_shell_init
+            ),
         )
     else:
         frame = _local_fetch(request)
@@ -512,6 +531,19 @@ def fetch_reference(
             f"max_rows={max_rows:,}; narrow the request"
         )
     return frame
+
+
+def _environment_flag(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    if not value:
+        return False
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{name} must be one of 1/0, true/false, yes/no, or on/off"
+    )
 
 
 def _request_from_args(args: argparse.Namespace) -> QueryRequest:
@@ -541,6 +573,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--remote-python",
         help=f"Remote Python path (default: {DEFAULT_REMOTE_PYTHON})",
+    )
+    parser.add_argument(
+        "--remote-shell-init",
+        action="store_true",
+        default=None,
+        help=(
+            "Run remote Python through bash -ic so a preconfigured shell may "
+            "initialize RQData; never places credentials on the command line"
+        ),
     )
     parser.add_argument(
         "--format", choices=("summary", "jsonl", "arrow"), default="summary"
@@ -625,6 +666,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         transport=args.transport,
         ssh_target=args.ssh_target,
         remote_python=args.remote_python,
+        remote_shell_init=args.remote_shell_init,
         max_rows=args.max_rows,
     )
     _emit(frame, args.format)

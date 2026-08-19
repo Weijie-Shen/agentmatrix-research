@@ -14,6 +14,11 @@ from typing import Any
 import pandas as pd
 
 from contracts.factor_research import FactorResearchSpec
+from research_core.factor_lab.paper_reproduction.calculation_contract import (
+    calculation_contract_required_test_ids,
+    calculation_contracts_hash,
+    validate_factor_calculation_contract,
+)
 from research_core.factor_lab.paper_reproduction.data_validation import DataFrameValidationResult
 from research_core.factor_lab.runtime import FactorLabWorkspaceConfig
 
@@ -55,9 +60,11 @@ class FactorImplementationArtifact:
     output_key_columns: list[str]
     output_factor_columns: list[str]
     factor_columns_by_id: dict[str, str] = field(default_factory=dict)
+    calculation_contracts_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
+    calculation_contract_hash: str = ""
     validation_status: str = "not_assessed"
     validation_evidence: dict[str, Any] = field(default_factory=dict)
-    schema_version: str = "factor_implementation_artifact/v1"
+    schema_version: str = "factor_implementation_artifact/v2"
 
 
 @dataclass(slots=True)
@@ -158,6 +165,7 @@ def build_factor_implementation_artifact(
     if not columns_by_id:
         columns_by_id = {_spec_factor_id(spec): spec.factor_name for spec in specs}
     factor_columns = list(output_factor_columns or [columns_by_id[factor_id] for factor_id in factor_ids])
+    calculation_contracts = _calculation_contracts_by_id(specs)
     artifact = FactorImplementationArtifact(
         module_path=str(path),
         callable_import_path=callable_import_path,
@@ -168,6 +176,8 @@ def build_factor_implementation_artifact(
         output_key_columns=key_columns,
         output_factor_columns=factor_columns,
         factor_columns_by_id=columns_by_id,
+        calculation_contracts_by_id=calculation_contracts,
+        calculation_contract_hash=calculation_contracts_hash(calculation_contracts),
     )
     validation = validate_factor_implementation_artifact(artifact, probe_panel=probe_panel, specs=specs)
     if not validation.valid:
@@ -209,6 +219,20 @@ def validate_factor_implementation_artifact(
         diagnostics["actual_factor_specification_hash"] = actual_spec_hash
         if actual_spec_hash != artifact.factor_specification_hash:
             errors.append("factor specification hash does not match the declared artifact")
+        expected_contracts = _calculation_contracts_by_id(specs)
+        diagnostics["actual_calculation_contract_hash"] = calculation_contracts_hash(expected_contracts)
+        if artifact.calculation_contracts_by_id != expected_contracts:
+            errors.append("factor calculation contracts do not match the declared specifications")
+        if artifact.calculation_contract_hash != calculation_contracts_hash(expected_contracts):
+            errors.append("factor calculation contract hash does not match the declared specifications")
+        for spec in specs:
+            if _spec_requires_calculation_contract(spec):
+                errors.extend(
+                    validate_factor_calculation_contract(
+                        _spec_calculation_payload(spec),
+                        prefix=f"specs[{spec.factor_name}]",
+                    )
+                )
 
     duplicated_factor_ids = _duplicates(artifact.implemented_factor_ids)
     duplicated_output_columns = _duplicates(artifact.output_factor_columns)
@@ -340,6 +364,7 @@ def factor_specification_hash(specs: list[FactorResearchSpec]) -> str:
             "formula": spec.formula,
             "required_fields": list(spec.required_fields),
             "parameters": spec.parameters,
+            "calculation_contract": spec.metadata.get("calculation_contract", {}),
             "frequency": spec.frequency,
         }
         for spec in sorted(specs, key=_spec_factor_id)
@@ -389,7 +414,24 @@ def _build_factor_plan(
         elif data_validation.status == "needs_human_review" and status == "ready_for_code":
             status = "ready_for_code_with_limitations"
 
+    calculation_contract_errors = (
+        validate_factor_calculation_contract(
+            _spec_calculation_payload(spec),
+            prefix=f"factor[{spec.factor_name}]",
+        )
+        if _spec_requires_calculation_contract(spec)
+        else []
+    )
+    if calculation_contract_errors:
+        status = "needs_human_review"
+        blocked_reasons.extend(calculation_contract_errors)
+
     required_operator_hints, ai_designed_functions = _operator_and_ai_function_hints(spec)
+    semantic_test_ids = (
+        calculation_contract_required_test_ids(_spec_calculation_payload(spec))
+        if _spec_requires_calculation_contract(spec)
+        else []
+    )
     return FactorImplementationPlan(
         factor_name=spec.factor_name,
         status=status,
@@ -405,6 +447,7 @@ def _build_factor_plan(
             "preserve input row count",
             "factor columns are numeric or null",
             "replace infinite outputs with nulls",
+            *(f"semantic assertion: {test_id}" for test_id in semantic_test_ids),
             "check paper-reported truth sources after implementation",
         ],
         metadata={
@@ -414,9 +457,36 @@ def _build_factor_plan(
             "known_limitations": spec.metadata.get("known_limitations", []),
             "data_validation_status": data_validation.status if data_validation else "not_provided",
             "data_validation_warnings": data_validation.warnings if data_validation else [],
+            "calculation_contract": spec.metadata.get("calculation_contract", {}),
+            "required_semantic_test_ids": semantic_test_ids,
             "evaluation_support_summary": spec.metadata.get("evaluation_support_summary", {}),
             "evaluator_implementation_targets": spec.metadata.get("evaluator_implementation_targets", []),
         },
+    )
+
+
+def _spec_calculation_payload(spec: FactorResearchSpec) -> dict[str, Any]:
+    return {
+        "factor_id": _spec_factor_id(spec),
+        "factor_name": spec.factor_name,
+        "formula": spec.formula,
+        "description": spec.description,
+        "parameters": spec.parameters,
+        "calculation_contract": spec.metadata.get("calculation_contract", {}),
+    }
+
+
+def _calculation_contracts_by_id(specs: list[FactorResearchSpec]) -> dict[str, dict[str, Any]]:
+    return {
+        spec.factor_name: dict(spec.metadata.get("calculation_contract", {}) or {})
+        for spec in sorted(specs, key=lambda item: item.factor_name)
+        if spec.metadata.get("calculation_contract")
+    }
+
+
+def _spec_requires_calculation_contract(spec: FactorResearchSpec) -> bool:
+    return bool(spec.metadata.get("calculation_contract")) or (
+        spec.metadata.get("extraction_schema_version") == "paper_extraction.ic_recipe.v3"
     )
 
 

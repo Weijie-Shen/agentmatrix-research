@@ -8,6 +8,10 @@ from typing import Any
 
 import pandas as pd
 
+from contracts.factor_research import FactorResearchSpec
+from research_core.factor_lab.paper_reproduction.calculation_contract import (
+    calculation_history_errors,
+)
 from research_core.factor_lab.paper_reproduction.extraction import ExtractedFactor, ExtractedFactorDefinition
 from research_core.factor_lab.paper_reproduction.evaluation_recipe import authoritative_semantic_bindings
 from research_core.factor_lab.paper_reproduction.methodology import canonical_transform_method, transformed_input_methods
@@ -164,6 +168,8 @@ class DataFrameValidationRequest:
     required_lookback: int = 0
     date_column: str = "date"
     code_column: str = "code"
+    calculation_contract: dict[str, Any] = field(default_factory=dict)
+    scoring_start: str = ""
 
     @classmethod
     def from_factor(cls, factor: ExtractedFactor | ExtractedFactorDefinition) -> DataFrameValidationRequest:
@@ -173,12 +179,29 @@ class DataFrameValidationRequest:
                 required_columns=["date", "code", *[_canonical_formula_field_id(item) for item in factor.required_semantic_fields]],
                 frequency=factor.native_frequency,
                 required_lookback=_infer_required_lookback(factor.parameters),
+                calculation_contract=dict(factor.calculation_contract),
             )
         return cls(
             factor_name=factor.factor_name,
             required_columns=["date", "code", *factor.required_fields],
             frequency=factor.frequency,
             required_lookback=_infer_required_lookback(factor.parameters),
+        )
+
+    @classmethod
+    def from_spec(cls, spec: FactorResearchSpec) -> DataFrameValidationRequest:
+        """Build the Stage-3 request with the selected recipe's score start and factor history contract."""
+
+        contract = spec.metadata.get("calculation_contract", {})
+        if not isinstance(contract, dict):
+            contract = {}
+        return cls(
+            factor_name=spec.factor_name,
+            required_columns=["date", "code", *spec.required_fields],
+            frequency=spec.frequency,
+            required_lookback=_infer_required_lookback(spec.parameters),
+            calculation_contract=dict(contract),
+            scoring_start=_spec_scoring_start(spec),
         )
 
 
@@ -302,6 +325,25 @@ def validate_input_frame(frame: pd.DataFrame, request: DataFrameValidationReques
         diagnostics["required_lookback"] = request.required_lookback
         if max_history < request.required_lookback:
             warnings.append(f"max history per code {max_history} is shorter than required lookback {request.required_lookback}")
+
+    if request.calculation_contract:
+        diagnostics["calculation_contract"] = dict(request.calculation_contract)
+        diagnostics["scoring_start"] = request.scoring_start
+        if not request.scoring_start:
+            errors.append(
+                "scoring_start is required to certify a factor calculation history contract; "
+                "build the request with DataFrameValidationRequest.from_spec(...)"
+            )
+        elif request.date_column in frame.columns:
+            history_errors = calculation_history_errors(
+                frame,
+                request.calculation_contract,
+                scoring_start=request.scoring_start,
+                date_column=request.date_column,
+                code_column=request.code_column,
+            )
+            diagnostics["calculation_history_errors"] = history_errors
+            errors.extend(history_errors)
 
     if errors:
         status = "failed"
@@ -866,6 +908,24 @@ def _infer_required_lookback(parameters: dict[str, Any]) -> int:
         except (TypeError, ValueError):
             continue
     return max(candidates, default=0)
+
+
+def _spec_scoring_start(spec: FactorResearchSpec) -> str:
+    cases = spec.metadata.get("selected_truth_sources", [])
+    if not isinstance(cases, list):
+        cases = []
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        recipe = case.get("evaluation_recipe", {})
+        if isinstance(recipe, dict):
+            sampling = recipe.get("sampling", {})
+            if isinstance(sampling, dict) and str(sampling.get("start", "")).strip():
+                return str(sampling["start"])
+        for key in ("sample_start", "start_date"):
+            if str(case.get(key, "")).strip():
+                return str(case[key])
+    return ""
 
 
 def _field_availability(field: str, profile: dict[str, Any]) -> str:

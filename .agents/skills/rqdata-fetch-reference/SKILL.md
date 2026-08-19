@@ -46,6 +46,11 @@ export RQDATA_SSH_TARGET=rqdata-host
 export RQDATA_REMOTE_PYTHON=/home/data/conda-envs/rqsdk/bin/python
 ```
 
+If the remote account intentionally loads its RQData configuration from an
+interactive shell startup file, also set `RQDATA_REMOTE_SHELL_INIT=1`. This
+runs the validated remote Python command through `bash -ic` without reading,
+printing, transferring, or placing the RQData credential on the command line.
+
 The SSH destination must resolve through the user's SSH configuration, agent, keychain, or another secure system facility. Do not add password automation or disable host-key checking.
 
 ## Fetch and consume

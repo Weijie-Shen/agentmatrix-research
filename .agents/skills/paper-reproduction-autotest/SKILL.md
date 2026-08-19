@@ -75,6 +75,8 @@ The generated harness contains a deterministic pre-return command. Require the w
 
 The gate must also reject untyped return labels, schedule/return-interval contradictions, missing or blocked Stage-3 executable contracts, and any disagreement between a recipe control's `resolved_field` and the contract's authoritative semantic binding. Attribute these to extraction or Stage 3 before accepting Stage-6 execution artifacts.
 
+For risky factor formulas, the gate must additionally reject a missing or invalid `factor_calculation_contract/v1`, a stale/missing implementation contract hash, a calculation panel without certified pre-sample history, and durable formula-test evidence that omits any required semantic assertion ID. Treat these as extraction, Stage 3, implementation, or test defects according to the earliest failed gate.
+
 ## 4. Harvest and review
 
 After a worker stops, call `harvest_run_artifacts(...)` before cleanup. It copies changed reproduction artifacts to the batch control root, records hashes and omissions, and preserves Git status and a source patch.

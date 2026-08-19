@@ -18,3 +18,12 @@ runtime/factor_lab/
 runtime/gtja191/
 tmp/rqdata_financial_*/
 .DS_Store
+
+# Local agent inputs, generated research outputs, and scratch work.
+.hermes/
+outputs/
+presentations/
+research_core/temp_data/
+runtime/*.csv
+runtime/strategy_engine/
+tmp/

@@ -64,7 +64,7 @@ Assess each requirement as `exactly_available`, `constructible`, `available_with
 
 ## Validate formula inputs
 
-Build `DataFrameValidationRequest.from_factor(factor)` and run `validate_input_frame(...)` on the normalized calculation panel.
+Build `DataFrameValidationRequest.from_spec(spec)` and run `validate_input_frame(...)` on the normalized calculation panel. `from_spec` binds the selected truth recipe's scoring start to the factor calculation contract; `from_factor` is compatibility-only and cannot certify pre-sample history by itself.
 
 Check:
 
@@ -77,6 +77,8 @@ Check:
 - derived fields materialized before certification.
 
 Stop implementation only for unavailable formula-required inputs, invalid panel keys/history that cannot be repaired safely, or unresolved field semantics that change the formula.
+
+For `factor_calculation_contract/v1`, load formula history before the first scoring date and require Stage-3 history certification. A calculation panel that begins at the scoring sample is blocking. Natural-month history must contain the required prior calendar-month endpoint period; fixed retained-row counts are not substitutes.
 
 ## Profile evaluation support
 

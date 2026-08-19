@@ -25,6 +25,20 @@ from research_core.factor_lab.paper_reproduction.data_validation import (
     structured_deviation,
     validate_input_frame,
 )
+from research_core.factor_lab.paper_reproduction.calculation_contract import (
+    CALCULATION_CONTRACT_SCHEMA_VERSION,
+    TEST_EXCHANGE_SESSION_DISTANCE,
+    TEST_LITERAL_PARAMETER_UNITS,
+    TEST_NATURAL_MONTH_BOUNDARY,
+    TEST_PRE_SAMPLE_HISTORY,
+    TEST_WEIGHTED_DENOMINATOR,
+    calculation_contract_features,
+    calculation_contract_required_test_ids,
+    calculation_contracts_hash,
+    calculation_history_errors,
+    required_calculation_start,
+    validate_factor_calculation_contract,
+)
 from research_core.factor_lab.paper_reproduction.extraction import (
     IC_EXTRACTION_SCHEMA_VERSION,
     ICAnalysisPaperExtraction,
@@ -231,6 +245,12 @@ from research_core.factor_lab.paper_reproduction.truth_matching import (
 )
 
 __all__ = [
+    "CALCULATION_CONTRACT_SCHEMA_VERSION",
+    "TEST_EXCHANGE_SESSION_DISTANCE",
+    "TEST_LITERAL_PARAMETER_UNITS",
+    "TEST_NATURAL_MONTH_BOUNDARY",
+    "TEST_PRE_SAMPLE_HISTORY",
+    "TEST_WEIGHTED_DENOMINATOR",
     "DataFrameValidationRequest",
     "DataFrameValidationResult",
     "DataProfile",
@@ -321,6 +341,10 @@ __all__ = [
     "assess_evaluation_case_support",
     "assess_worker_completion_gate",
     "build_data_profile",
+    "calculation_contract_features",
+    "calculation_contract_required_test_ids",
+    "calculation_contracts_hash",
+    "calculation_history_errors",
     "materialize_forward_return",
     "build_factor_implementation_artifact",
     "build_recommended_price_view",
@@ -401,6 +425,7 @@ __all__ = [
     "recipe_required_semantic_inputs",
     "project_recipe_truth_source_for_factor",
     "render_paper_reproduction_report_markdown",
+    "required_calculation_start",
     "selected_truth_sources",
     "structured_deviation",
     "summarize_factor_truth_sources",
@@ -413,6 +438,7 @@ __all__ = [
     "validate_input_frame",
     "validate_factor_frame",
     "validate_factor_implementation_artifact",
+    "validate_factor_calculation_contract",
     "validate_neutralization_spec",
     "validate_universe_protocol",
     "validate_selection",

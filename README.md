@@ -78,6 +78,7 @@ See [QLIB_FACTOR_WORKFLOW.md](docs/QLIB_FACTOR_WORKFLOW.md) for the full intern 
 See [ALPHA158_STARTER.md](docs/ALPHA158_STARTER.md) for the baseline model workflow.
 See [FACTOR_LAB_BACKEND_BOUNDARY.md](docs/FACTOR_LAB_BACKEND_BOUNDARY.md) for the back-end vs front-end ownership split.
 See [FACTOR_LAB_ALPHA101_WORKFLOW.md](docs/FACTOR_LAB_ALPHA101_WORKFLOW.md) for the unified Alpha101 back-end research workflow.
+See [PAPER_REPRODUCTION_HANDOFF.md](docs/PAPER_REPRODUCTION_HANDOFF.md) for the paper-reproduction architecture, skills, current status, data access, and maintainer handoff.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for PR, factor proposal, and experiment report conventions.
 
 ### Factor Lab Bootstrap

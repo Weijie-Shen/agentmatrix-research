@@ -12,7 +12,7 @@ Produce faithful `paper_extraction.ic_recipe.v3` evidence artifacts for selected
 - `contracts/factor_research.py`
 - `research_core/factor_lab/paper_reproduction/extraction.py`
 - `research_core/factor_lab/paper_reproduction/normalization.py`
-- every file in `references/`, especially `evaluation-recipe-schema.md`, the method catalogs, and `truth-source-selection.md`
+- every file in `references/`, especially `evaluation-recipe-schema.md`, `factor-calculation-contract.md`, the method catalogs, and `truth-source-selection.md`
 - the relevant golden JSON schema tests, without reading a paper-specific golden answer during a fresh forward test
 
 ## Build formula registries and truth-source recipes
@@ -36,6 +36,8 @@ Do not invent missing formula semantics. Classify material ambiguity and retain 
 Record every formula source locator literally: page plus the visible table or figure title/number. When a paper-level known gap affects a formula, give it `scope: formula` and an `affects` list, then include the same `gap_id` in every affected factor's `formula_gap_ids`. Do not leave formula ambiguity only in paper-level notes where normalization and review cannot bind it to factors.
 
 Preserve every formula parameter as a source-level symbol with its literal value, unit, and domain. Keep derived runtime quantities—such as an estimated number of trading observations in a month—in separate fields with explicit conversion provenance. Never substitute a derived observation count for a parameter stated in months, years, calendar days, or another unit merely because the rolling window is implemented with observations. If a formula combines variables whose units or indexing conventions are unclear, record a formula gap instead of silently making the expression dimensionally convenient.
+
+Attach `factor_calculation_contract/v1` to every temporal, weighted, decay, or unit-sensitive formula. The extraction validator blocks risky formulas without it. Declare window method, literal parameters, weighted-mean normalization, distance semantics, required pre-sample history, and semantic test IDs as specified in `references/factor-calculation-contract.md`.
 
 If the selected paper reports a factor only as a comparison row and cites a companion paper for its formula, do not treat the row as formula evidence. Locate the cited source only within the user's authorized paper set, record its path and SHA-256 identity as formula provenance, and keep the selected paper as the evaluation-truth source. If the cited source is unavailable, leave formula fidelity unverified.
 

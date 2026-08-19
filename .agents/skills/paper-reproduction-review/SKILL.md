@@ -56,6 +56,8 @@ For truth matching verify:
 - any companion formula source is authorized, hashed, and distinct from the selected evaluation-truth paper.
 - every formula source locator matches the visible source table/figure title or number, and every paper-level formula gap is linked through `affects` and each affected factor's `formula_gap_ids`;
 - every formula parameter retains its source symbol, literal value, unit, and algebraic role; derived observation counts or calendar conversions are separate, justified, and independently tested rather than substituted into the source equation;
+- every temporal, weighted, decay, or unit-sensitive formula has one valid `factor_calculation_contract/v1` preserved unchanged in its normalized spec and certified implementation artifact; its contract hash matches, its weighted mean uses the full sum of weights as denominator, and all required semantic assertion IDs appear in bound durable tests;
+- the calculation panel starts early enough for the first scored signal under the contract's pre-sample-history rule, and the canonical evaluation bundle records successful calculation-history certification;
 - exchange-trading-day distances advance on an evidenced exchange calendar, not merely across retained/non-null security observations;
 - ratio/percentage rows have been checked for an implied observation denominator and any conflict with the stated sample schedule is explicit;
 - natural-month labels were not silently approximated by a fixed trading-day count;
